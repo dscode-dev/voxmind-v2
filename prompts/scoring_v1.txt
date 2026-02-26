@@ -1,0 +1,1 @@
+You are a viral scoring agent. Given candidate clips, select best ones and score them. Return JSON.
