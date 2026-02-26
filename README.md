@@ -1,53 +1,44 @@
-# VoxMind V2 (MVP skeleton)
+# VoxMind V2 (Kubernetes-native)
 
-This is an **MVP V1 of the V2** architecture: routing `/new <url> --v2` through a new orchestrator with
-LLM routing + cache hooks, ready to run locally **or** in Kubernetes.
+Production-oriented, Kubernetes-native architecture for VoxMind V2.
 
-## What is implemented (MVP)
-- Telegram bot command: `/new <url> --v2`
-- V2 orchestrator skeleton with:
-  - transcript chunking stub
-  - LLM Router (OpenAI-compatible Chat Completions)
-  - Cost tracking (approx, placeholder)
-  - Cache interface (Redis-backed; safe no-op if disabled)
-- Production-friendly config via environment variables
-- Dockerfile + K8s manifests (basic)
+## Components
+- **control-plane**: FastAPI service that receives requests (Telegram bot or HTTP), creates Kubernetes Jobs, tracks status, and can notify Telegram.
+- **worker**: Stateless container executed as a Kubernetes Job (1 video = 1 pod). Performs download → audio extraction → ASR → (next phases: chunking/LLM/cutting/rendering).
 
-> NOTE: Download/ASR/render steps are **stubs** in this MVP. We’ll iteratively wire your real pipeline.
+## Quick Start (cluster already running)
 
-## Quickstart (local)
-
-### 1) Install deps
+1) Create namespace + RBAC
 ```bash
-poetry install
+kubectl apply -f k8s/namespace.yaml
+kubectl apply -f k8s/rbac-control-plane.yaml
 ```
 
-### 2) Create `.env`
+2) Create Secrets (edit values first)
 ```bash
-cp .env.example .env
-# Fill TELEGRAM_BOT_TOKEN and OPENAI_API_KEY (optional if using MOCK_LLM=1)
+kubectl apply -f k8s/secrets.yaml
 ```
 
-### 3) Run
+3) Deploy control-plane
 ```bash
-poetry run python -m voxmind.main
+kubectl apply -f k8s/control-plane-deployment.yaml
 ```
 
-## Telegram usage
-- `/new https://youtube.com/watch?v=... --v2` runs V2 MVP flow
+4) Build/push images and update manifests
+- Build `control-plane` and `worker` images
+- Push to your registry
+- Update `image:` fields in `k8s/control-plane-deployment.yaml`
 
-## Kubernetes
-See `k8s/` for sample deployment + secret + redis (optional).
-You should provide:
-- TELEGRAM_BOT_TOKEN
-- OPENAI_API_KEY (or set MOCK_LLM=1)
+5) Trigger a job (example)
+```bash
+kubectl -n voxmind-v2 port-forward svc/voxmind-control-plane 8080:80
+curl -X POST http://localhost:8080/v1/jobs \
+  -H 'Content-Type: application/json' \
+  -H 'X-Api-Key: <CONTROL_PLANE_API_KEY>' \
+  -d '{"video_url":"https://www.youtube.com/watch?v=VIDEO_ID","mode":"v2"}'
+```
 
-## Environment variables
-See `.env.example`.
+## MVP Scope
+This MVP focuses on **production-grade scaffolding**: RBAC, structured logs, settings, timeouts/retries, resource limits, secure defaults, and a real **download+ASR** step in the worker (CPU, faster-whisper).
 
----
-Next steps (we’ll do together):
-1) Wire real downloader + ASR step (whisper/faster-whisper)
-2) Candidate builder + scoring agent + hook agent
-3) Render (9:16 framing + subtitles)
-4) Add persistent job storage + metrics
+Next iterations will plug in: chunking, LLM routing, scoring, rendering, subtitles, artifact storage (MinIO/S3), and Telegram ingestion.
