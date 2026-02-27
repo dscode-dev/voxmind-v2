@@ -1,28 +1,56 @@
-import asyncio
+import os
+import sys
+import uuid
 import logging
 
-from .logging_setup import setup_logging
-from .settings import settings
-from .pipeline import run_pipeline
-from .telegram_notify import send_message
+from worker.app.pipeline.pipeline import Pipeline
+from worker.app.storage.minio_client import MinioStorage
 
-setup_logging(settings.log_level)
-log = logging.getLogger("voxmind.worker")
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-async def _notify(text: str) -> None:
-    if settings.telegram_bot_token and settings.telegram_chat_id:
-        await send_message(token=settings.telegram_bot_token, chat_id=settings.telegram_chat_id, text=text)
 
-def main() -> None:
-    log.info("worker.start", extra={"video_url": settings.video_url, "mode": settings.pipeline_mode})
+def main():
+    video_url = os.getenv("VIDEO_URL")
+    job_id = os.getenv("JOB_ID", str(uuid.uuid4()))
+
+    if not video_url:
+        logger.error("VIDEO_URL not provided")
+        sys.exit(1)
+
+    pipeline = Pipeline(video_url=video_url, job_id=job_id)
+
     try:
-        result = run_pipeline()
-        log.info("worker.done", extra=result)
-        asyncio.run(_notify(f"✅ VoxMind worker done. Segments: {result['segments']}"))
+        result = pipeline.run()
+
+        storage = MinioStorage()
+
+        # Upload transcript
+        storage.upload_with_retry(
+            result["transcript_path"],
+            f"{job_id}/transcript.json"
+        )
+
+        # Upload cuts metadata
+        storage.upload_with_retry(
+            result["cuts_path"],
+            f"{job_id}/cuts.json"
+        )
+
+        # Upload video cuts
+        for file_path in result["cut_files"]:
+            filename = file_path.split("/")[-1]
+            storage.upload_with_retry(
+                file_path,
+                f"{job_id}/cuts/{filename}"
+            )
+
+        logger.info("Job completed successfully")
+
     except Exception as e:
-        log.exception("worker.failed", extra={"error": str(e)})
-        asyncio.run(_notify(f"❌ VoxMind worker failed: {e}"))
-        raise
+        logger.exception(f"Job failed: {e}")
+        sys.exit(1)
+
 
 if __name__ == "__main__":
     main()
