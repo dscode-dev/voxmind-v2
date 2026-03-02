@@ -1,10 +1,7 @@
-# =========================
-# Base Image
-# =========================
-FROM python:3.11-slim AS base
+FROM python:3.11-slim
 
 # =========================
-# System dependencies
+# System deps
 # =========================
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
@@ -15,19 +12,16 @@ RUN apt-get update && \
     && rm -rf /var/lib/apt/lists/*
 
 # =========================
-# Create non-root user
+# Non-root user
 # =========================
 RUN useradd -m appuser
 
 # =========================
-# Install Poetry
+# Install Poetry 2.x
 # =========================
-ENV POETRY_VERSION=1.7.1
+ENV POETRY_VERSION=2.0.1
 RUN pip install "poetry==$POETRY_VERSION"
 
-# =========================
-# Workdir
-# =========================
 WORKDIR /app
 
 # =========================
@@ -36,29 +30,20 @@ WORKDIR /app
 COPY pyproject.toml poetry.lock* /app/
 
 # =========================
-# Configure Poetry
+# Poetry config
 # =========================
 RUN poetry config virtualenvs.create false \
-    && poetry install --no-interaction --no-ansi --only main
+    && poetry install --no-interaction --no-ansi --only main --no-root
 
 # =========================
-# Copy application code
+# Copy source
 # =========================
 COPY app /app/app
 
-# =========================
-# Set permissions
-# =========================
 RUN chown -R appuser:appuser /app
 
 USER appuser
 
-# =========================
-# Environment defaults
-# =========================
 ENV PYTHONUNBUFFERED=1
 
-# =========================
-# Entry point
-# =========================
 CMD ["python", "-m", "app.main"]

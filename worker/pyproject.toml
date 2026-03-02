@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "voxmind-worker"
-version = "0.1.0"
+version = "0.2.0"
 description = "VoxMind V2 worker executed as Kubernetes Job."
 authors = ["VoxMind"]
 package-mode = false
