@@ -13,70 +13,20 @@ spec:
       labels:
         app: voxmind-control-plane
     spec:
-      serviceAccountName: voxmind-control-plane
       containers:
-        - name: api
-          image: CHANGE_ME/control-plane:0.1.0
-          imagePullPolicy: IfNotPresent
+        - name: control-plane
+          image: konohalabs/voxmind-control-plane:latest
+          imagePullPolicy: Always
           ports:
-            - containerPort: 8080
-          env:
-            - name: VOXMIND_NAMESPACE
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.namespace
-            - name: WORKER_JOB_IMAGE
-              value: "CHANGE_ME/worker:0.1.0"
-            - name: WORKER_JOB_TTL
-              value: "3600"
-            - name: WORKER_JOB_DEADLINE
-              value: "21600"
-            - name: WORKER_CPU_REQUEST
-              value: "1000m"
-            - name: WORKER_CPU_LIMIT
-              value: "2000m"
-            - name: WORKER_MEM_REQUEST
-              value: "2Gi"
-            - name: WORKER_MEM_LIMIT
-              value: "4Gi"
-            - name: CONTROL_PLANE_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: voxmind-secrets
-                  key: CONTROL_PLANE_API_KEY
-            - name: TELEGRAM_BOT_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: voxmind-secrets
-                  key: TELEGRAM_BOT_TOKEN
-            - name: TELEGRAM_CHAT_ID
-              valueFrom:
-                secretKeyRef:
-                  name: voxmind-secrets
-                  key: TELEGRAM_CHAT_ID
-          readinessProbe:
-            httpGet:
-              path: /healthz
-              port: 8080
-            initialDelaySeconds: 3
-            periodSeconds: 10
-          livenessProbe:
-            httpGet:
-              path: /healthz
-              port: 8080
-            initialDelaySeconds: 10
-            periodSeconds: 20
-          resources:
-            requests:
-              cpu: "200m"
-              memory: "256Mi"
-            limits:
-              cpu: "500m"
-              memory: "512Mi"
+            - containerPort: 8000
+          envFrom:
+            - secretRef:
+                name: voxmind-control-plane-secrets
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             runAsNonRoot: true
+      restartPolicy: Always
 ---
 apiVersion: v1
 kind: Service
@@ -84,9 +34,9 @@ metadata:
   name: voxmind-control-plane
   namespace: voxmind-v2
 spec:
+  type: ClusterIP
   selector:
     app: voxmind-control-plane
   ports:
-    - name: http
-      port: 80
-      targetPort: 8080
+    - port: 8000
+      targetPort: 8000
