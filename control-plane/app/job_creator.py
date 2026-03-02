@@ -1,4 +1,5 @@
 import hashlib
+import json
 from datetime import datetime, timezone
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
@@ -20,58 +21,69 @@ def _load_k8s() -> None:
 
 class JobCreator:
 
-    def create(self, *, video_url: str, job_id: str) -> str:
+    def create(
+        self,
+        *,
+        video_url: str,
+        job_id: str,
+        pipeline_stage: str,
+        manual_response: dict | None = None
+    ) -> str:
 
         _load_k8s()
         batch = client.BatchV1Api()
 
         job_name = _safe_job_name("voxmind", job_id)
 
-        env = [
+        env_vars = [
             client.V1EnvVar(name="VIDEO_URL", value=video_url),
-            client.V1EnvVar(name="JOB_ID", value=job_id),
+            client.V1EnvVar(name="PIPELINE_STAGE", value=pipeline_stage),
             client.V1EnvVar(name="PIPELINE_MODE", value="v2"),
             client.V1EnvVar(name="LOG_LEVEL", value=settings.log_level),
-
-            # MinIO configs
-            client.V1EnvVar(name="MINIO_ENDPOINT", value=settings.minio_endpoint),
-            client.V1EnvVar(name="MINIO_BUCKET", value=settings.minio_bucket),
-            client.V1EnvVar(name="MINIO_ROOT_USER", value=settings.minio_root_user),
-            client.V1EnvVar(name="MINIO_ROOT_PASSWORD", value=settings.minio_root_password),
         ]
 
-        resources = client.V1ResourceRequirements(
-            requests={
-                "cpu": settings.worker_cpu_request,
-                "memory": settings.worker_mem_request,
-            },
-            limits={
-                "cpu": settings.worker_cpu_limit,
-                "memory": settings.worker_mem_limit,
-            },
-        )
+        if manual_response:
+            env_vars.append(
+                client.V1EnvVar(
+                    name="MANUAL_RESPONSE",
+                    value=json.dumps(manual_response)
+                )
+            )
 
         container = client.V1Container(
             name="worker",
             image=settings.worker_job_image,
-            image_pull_policy="IfNotPresent",
-            env=env,
-            resources=resources,
+            image_pull_policy="Always",
+            env=env_vars,
+            resources=client.V1ResourceRequirements(
+                requests={
+                    "cpu": settings.worker_cpu_request,
+                    "memory": settings.worker_mem_request,
+                },
+                limits={
+                    "cpu": settings.worker_cpu_limit,
+                    "memory": settings.worker_mem_limit,
+                },
+            ),
             security_context=client.V1SecurityContext(
                 allow_privilege_escalation=False,
                 read_only_root_filesystem=True,
                 run_as_non_root=True,
             ),
             volume_mounts=[
-                client.V1VolumeMount(name="workdir", mount_path="/tmp")
+                client.V1VolumeMount(
+                    name="workdir",
+                    mount_path="/tmp"
+                )
             ],
         )
 
         pod_spec = client.V1PodSpec(
             restart_policy="Never",
             containers=[container],
-            security_context=client.V1PodSecurityContext(run_as_non_root=True),
-            automount_service_account_token=True,
+            security_context=client.V1PodSecurityContext(
+                run_as_non_root=True
+            ),
             volumes=[
                 client.V1Volume(
                     name="workdir",

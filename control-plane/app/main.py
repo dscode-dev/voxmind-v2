@@ -1,6 +1,11 @@
-from .logging_setup import setup_logging
-from .settings import settings
+import logging
+from .bot import VoxmindBot
 
-setup_logging(settings.log_level)
+logging.basicConfig(level=logging.INFO)
 
-from .api import app  # noqa: E402
+def main():
+    bot = VoxmindBot()
+    bot.run()
+
+if __name__ == "__main__":
+    main()
