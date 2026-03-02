@@ -6,6 +6,7 @@ import logging
 
 from worker.app.pipeline.pipeline import Pipeline
 from worker.app.settings import settings
+from worker.app.storage.minio_client import MinioStorage
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -21,17 +22,7 @@ def main():
     manual_response = None
 
     if manual_response_raw:
-        try:
-            manual_response = json.loads(manual_response_raw)
-        except json.JSONDecodeError:
-            logger.error("Invalid MANUAL_RESPONSE JSON")
-            sys.exit(1)
-
-    if not video_url:
-        logger.error("VIDEO_URL not provided")
-        sys.exit(1)
-
-    logger.info(f"Starting job {job_id} - stage={pipeline_stage}")
+        manual_response = json.loads(manual_response_raw)
 
     pipeline = Pipeline(
         video_url=video_url,
@@ -39,26 +30,33 @@ def main():
         manual_response=manual_response
     )
 
+    storage = MinioStorage()
+
     try:
         result = pipeline.run()
 
-        if result.get("status") == "error":
-            logger.error(f"Pipeline error: {result.get('error')}")
-            sys.exit(1)
+        if result["status"] == "awaiting_manual_llm":
 
-        if result.get("status") == "awaiting_manual_llm":
-            logger.info("Stage prepare completed. Awaiting manual LLM response.")
+            storage.upload(result["transcript_path"], f"{job_id}/transcript.json")
+            storage.upload(result["candidates_path"], f"{job_id}/candidates.json")
+            storage.upload(result["prompt_path"], f"{job_id}/prompt.txt")
+
+            logger.info("Stage prepare uploaded to MinIO.")
             sys.exit(0)
 
-        if result.get("status") == "success":
-            logger.info("Stage finalize completed successfully.")
-            sys.exit(0)
+        if result["status"] == "success":
 
-        logger.warning("Pipeline returned unknown status.")
-        sys.exit(1)
+            storage.upload(result["cuts_path"], f"{job_id}/cuts.json")
+
+            for file_path in result["cut_files"]:
+                filename = Path(file_path).name
+                storage.upload(file_path, f"{job_id}/cuts/{filename}")
+
+            logger.info("Stage finalize uploaded to MinIO.")
+            sys.exit(0)
 
     except Exception as e:
-        logger.exception(f"Job failed unexpectedly: {e}")
+        logger.exception(f"Job failed: {e}")
         sys.exit(1)
 
 
