@@ -6,9 +6,9 @@ import logging
 
 from pathlib import Path
 
-from worker.app.pipeline.pipeline import Pipeline
-from worker.app.settings import settings
-from worker.app.storage.minio_client import MinioStorage
+from app.pipeline.pipeline import Pipeline
+from app.settings import settings
+from app.storage.minio_client import MinioStorage
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

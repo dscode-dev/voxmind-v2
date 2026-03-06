@@ -7,14 +7,14 @@ from app.media.audio_extractor import AudioExtractor
 from app.media.transcriber import Transcriber
 from app.video.cutter import VideoCutter
 
-from worker.app.pipeline.chunker import Chunker
-from worker.app.pipeline.candidate_builder import CandidateBuilder
-from worker.app.pipeline.scorer import Scorer
-from worker.app.pipeline.manual_prompt_builder import ManualPromptBuilder
-from worker.app.pipeline.hook_detector import HookDetector
+from app.pipeline.chunker import Chunker
+from app.pipeline.candidate_builder import CandidateBuilder
+from app.pipeline.scorer import Scorer
+from app.pipeline.manual_prompt_builder import ManualPromptBuilder
+from app.pipeline.hook_detector import HookDetector
 
-from worker.app.integrations.telegram_sender import TelegramSender
-from worker.app.settings import settings
+from app.integrations.telegram_sender import TelegramSender
+from app.settings import settings
 
 class Pipeline:
 

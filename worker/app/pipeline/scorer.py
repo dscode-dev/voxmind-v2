@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import List, Dict
 
 from openai import OpenAI
-from worker.app.settings import settings
+from app.settings import settings
 
 
 class Scorer:
