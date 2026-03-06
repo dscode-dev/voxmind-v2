@@ -1,21 +1,34 @@
+import subprocess
 from pathlib import Path
-import yt_dlp
+
 
 class VideoDownloader:
-    def __init__(self, output_dir: Path):
-        self.output_dir = output_dir
-        self.output_dir.mkdir(parents=True, exist_ok=True)
 
-    def download(self, url: str) -> Path:
-        ydl_opts = {
-            "outtmpl": str(self.output_dir / "%(id)s.%(ext)s"),
-            "format": "mp4/best",
-            "quiet": True,
-            "noplaylist": True,
-            "retries": 3,
-            "fragment_retries": 3,
-        }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            filename = ydl.prepare_filename(info)
-        return Path(filename)
+    def __init__(self, work_dir: Path):
+        self.work_dir = work_dir
+
+    def download(self, youtube_url: str) -> Path:
+
+        output_tpl = str(self.work_dir / "audio.%(ext)s")
+
+        cmd = [
+            "yt-dlp",
+            "--no-playlist",
+            "--geo-bypass",
+            "--no-check-certificate",
+            "-f", "bestaudio",
+            "-x",
+            "--audio-format", "wav",
+            "-o", output_tpl,
+            youtube_url,
+        ]
+
+        subprocess.run(cmd, check=True)
+
+        # yt-dlp vai gerar audio.wav
+        audio_file = self.work_dir / "audio.wav"
+
+        if not audio_file.exists():
+            raise RuntimeError("Audio extraction failed")
+
+        return audio_file
