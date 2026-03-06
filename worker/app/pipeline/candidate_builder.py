@@ -4,22 +4,16 @@ from typing import List, Dict
 
 EMOTIONAL_WORDS = [
     "nunca",
-    "jamais",
+    "ninguém",
     "erro",
     "segredo",
-    "ninguém",
     "verdade",
-    "problema",
-    "chocante",
-    "incrível",
     "absurdo",
     "ridículo",
-    "muda tudo",
+    "chocante",
+    "incrível",
     "cuidado",
-    "impossível",
-    "revelação",
     "alerta",
-    "urgente",
 ]
 
 
@@ -30,9 +24,34 @@ class CandidateBuilder:
         candidates = []
 
         for chunk in chunks:
-            score = self._score_chunk(chunk["text"], chunk.get("hook_score", 0))
+
+            text = chunk["text"].lower()
+            score = 0
+
+            # emotional triggers
+            for word in EMOTIONAL_WORDS:
+                if word in text:
+                    score += 2
+
+            # question
+            if "?" in text:
+                score += 2
+
+            # contrast
+            if re.search(r"\bmas\b|\bporém\b|\bso que\b", text):
+                score += 2
+
+            # numbers
+            if re.search(r"\b\d+\b", text):
+                score += 1
+
+            # strong start
+            first_words = " ".join(text.split()[:6])
+            if any(word in first_words for word in EMOTIONAL_WORDS):
+                score += 2
 
             if score >= 3:
+
                 candidates.append(
                     {
                         "start": chunk["start"],
@@ -43,35 +62,3 @@ class CandidateBuilder:
                 )
 
         return candidates
-
-    def _score_chunk(self, text: str, hook_score: int = 0) -> int:
-
-        text_lower = text.lower()
-        score = 0
-
-        for word in EMOTIONAL_WORDS:
-            if word in text_lower:
-                score += 2
-
-        if "?" in text:
-            score += 2
-
-        if re.search(r"\bmas\b|\bporém\b|\bso que\b", text_lower):
-            score += 2
-
-        if re.search(r"\b\d+\b", text):
-            score += 1
-
-        first_words = " ".join(text_lower.split()[:8])
-        if any(word in first_words for word in EMOTIONAL_WORDS):
-            score += 2
-
-        length = len(text.split())
-        if length > 0:
-            density = score / length
-            if density > 0.08:
-                score += 2
-
-        score += hook_score
-
-        return score
