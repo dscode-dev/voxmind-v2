@@ -5,12 +5,15 @@ from pathlib import Path
 from app.media.downloader import VideoDownloader
 from app.media.audio_extractor import AudioExtractor
 from app.media.transcriber import Transcriber
+from app.video.cutter import VideoCutter
+
 from worker.app.pipeline.chunker import Chunker
 from worker.app.pipeline.candidate_builder import CandidateBuilder
 from worker.app.pipeline.scorer import Scorer
 from worker.app.pipeline.manual_prompt_builder import ManualPromptBuilder
+from worker.app.pipeline.hook_detector import HookDetector
+
 from worker.app.integrations.telegram_sender import TelegramSender
-from app.video.cutter import VideoCutter
 from worker.app.settings import settings
 
 class Pipeline:
@@ -26,9 +29,13 @@ class Pipeline:
         self.downloader = VideoDownloader(self.work_dir)
         self.extractor = AudioExtractor(self.work_dir)
         self.transcriber = Transcriber()
+
         self.chunker = Chunker()
         self.builder = CandidateBuilder()
         self.scorer = Scorer()
+
+        self.hook_detector = HookDetector()
+
         self.cutter = VideoCutter(self.work_dir)
         self.telegram = TelegramSender()
         self.prompt_builder = ManualPromptBuilder()
@@ -65,10 +72,38 @@ class Pipeline:
         audio_path = self.extractor.extract(video_path)
 
         segments = self.transcriber.transcribe(audio_path)
-        chunks = self.chunker.chunk(segments)
-        candidates = self.builder.build(chunks)
 
-        prompt = self.prompt_builder.build(segments, candidates, self.job_id)
+        # =========================
+        # Chunk generation
+        # =========================
+
+        chunks = self.chunker.chunk(segments)
+
+        # =========================
+        # Optional Hook Detection
+        # =========================
+
+        if settings.enable_hook_detector:
+            chunks = self.hook_detector.detect(chunks)
+
+        # =========================
+        # Candidate generation
+        # =========================
+
+        if settings.enable_candidate_scoring:
+            candidates = self.builder.build(chunks)
+        else:
+            candidates = chunks
+
+        # =========================
+        # Build LLM prompt
+        # =========================
+
+        prompt = self.prompt_builder.build(
+            segments,
+            candidates,
+            self.job_id
+        )
 
         transcript_path = self.work_dir / "transcript.json"
         candidates_path = self.work_dir / "candidates.json"
@@ -83,14 +118,31 @@ class Pipeline:
         with open(prompt_path, "w", encoding="utf-8") as f:
             f.write(prompt)
 
-        # Envia arquivos para Telegram
-        self.telegram.send_video(str(transcript_path), caption="📄 Transcrição")
-        self.telegram.send_video(str(candidates_path), caption="📄 Candidatos")
-        self.telegram.send_video(str(prompt_path), caption="📌 Prompt para IA")
+        # =========================
+        # Send artifacts to Telegram
+        # =========================
+
+        self.telegram.send_video(
+            str(transcript_path),
+            caption="📄 Transcrição"
+        )
+
+        self.telegram.send_video(
+            str(candidates_path),
+            caption="📄 Candidatos"
+        )
+
+        self.telegram.send_video(
+            str(prompt_path),
+            caption="📌 Prompt para IA"
+        )
 
         return {
             "status": "awaiting_manual_llm",
-            "job_id": self.job_id
+            "job_id": self.job_id,
+            "transcript_path": str(transcript_path),
+            "candidates_path": str(candidates_path),
+            "prompt_path": str(prompt_path)
         }
 
     # =========================
@@ -116,7 +168,14 @@ class Pipeline:
         for path in cut_files:
             self.telegram.send_video(path, caption=caption)
 
+        cuts_path = self.work_dir / "cuts.json"
+
+        with open(cuts_path, "w", encoding="utf-8") as f:
+            json.dump(cuts, f, ensure_ascii=False, indent=2)
+
         return {
             "status": "success",
-            "job_id": self.job_id
+            "job_id": self.job_id,
+            "cuts_path": str(cuts_path),
+            "cut_files": [str(p) for p in cut_files]
         }

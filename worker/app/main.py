@@ -4,6 +4,8 @@ import uuid
 import json
 import logging
 
+from pathlib import Path
+
 from worker.app.pipeline.pipeline import Pipeline
 from worker.app.settings import settings
 from worker.app.storage.minio_client import MinioStorage
@@ -25,9 +27,7 @@ def main():
         manual_response = json.loads(manual_response_raw)
 
     pipeline = Pipeline(
-        video_url=video_url,
-        job_id=job_id,
-        manual_response=manual_response
+        video_url=video_url, job_id=job_id, manual_response=manual_response
     )
 
     storage = MinioStorage()

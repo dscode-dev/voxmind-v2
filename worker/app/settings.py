@@ -18,6 +18,19 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
     # ======================================
+    # Heuristic Pipeline Features
+    # ======================================
+    enable_candidate_scoring: bool = Field(
+        default=False,
+        alias="ENABLE_CANDIDATE_SCORING"
+    )
+
+    enable_hook_detector: bool = Field(
+        default=False,
+        alias="ENABLE_HOOK_DETECTOR"
+    )
+
+    # ======================================
     # LLM Configuration (Optional / Future)
     # ======================================
     llm_mode: str = Field(default="mock", alias="LLM_MODE")  # mock | real | manual

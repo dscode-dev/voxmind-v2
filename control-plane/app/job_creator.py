@@ -1,4 +1,3 @@
-import hashlib
 import json
 from datetime import datetime, timezone
 from kubernetes import client, config
@@ -39,6 +38,7 @@ class JobCreator:
             client.V1EnvVar(name="VIDEO_URL", value=video_url),
             client.V1EnvVar(name="PIPELINE_STAGE", value=pipeline_stage),
             client.V1EnvVar(name="PIPELINE_MODE", value="v2"),
+            client.V1EnvVar(name="JOB_ID", value=job_id),
             client.V1EnvVar(name="LOG_LEVEL", value=settings.log_level),
         ]
 
@@ -55,6 +55,13 @@ class JobCreator:
             image=settings.worker_job_image,
             image_pull_policy="Always",
             env=env_vars,
+            env_from=[
+                client.V1EnvFromSource(
+                    secret_ref=client.V1SecretEnvSource(
+                        name="voxmind-worker-secrets"
+                    )
+                )
+            ],
             resources=client.V1ResourceRequirements(
                 requests={
                     "cpu": settings.worker_cpu_request,
@@ -65,15 +72,10 @@ class JobCreator:
                     "memory": settings.worker_mem_limit,
                 },
             ),
-            security_context=client.V1SecurityContext(
-                allow_privilege_escalation=False,
-                read_only_root_filesystem=True,
-                run_as_non_root=True,
-            ),
             volume_mounts=[
                 client.V1VolumeMount(
                     name="workdir",
-                    mount_path="/tmp"
+                    mount_path="/work"
                 )
             ],
         )
@@ -81,9 +83,6 @@ class JobCreator:
         pod_spec = client.V1PodSpec(
             restart_policy="Never",
             containers=[container],
-            security_context=client.V1PodSecurityContext(
-                run_as_non_root=True
-            ),
             volumes=[
                 client.V1Volume(
                     name="workdir",
