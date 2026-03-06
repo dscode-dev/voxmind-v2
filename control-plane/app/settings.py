@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     # Kubernetes
     # =========================
     namespace: str = Field(default="voxmind-v2", alias="VOXMIND_NAMESPACE")
-    WORKER_JOB_IMAGE: str = "192.168.122.50:30500/voxmind-worker:local"
+    worker_job_image: str = "192.168.122.50:30500/voxmind-worker:local"
 
     worker_job_ttl_seconds_after_finished: int = Field(
         default=3600,
