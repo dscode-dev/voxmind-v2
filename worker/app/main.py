@@ -17,6 +17,11 @@ logger = logging.getLogger(__name__)
 def main():
 
     video_url = settings.video_url
+
+    if not video_url or not video_url.strip():
+        logger.error("VIDEO_URL not provided. Worker will not start.")
+        sys.exit(1)
+
     job_id = os.getenv("JOB_ID", str(uuid.uuid4()))
     pipeline_stage = settings.pipeline_stage
 
@@ -24,15 +29,22 @@ def main():
     manual_response = None
 
     if manual_response_raw:
-        manual_response = json.loads(manual_response_raw)
+        try:
+            manual_response = json.loads(manual_response_raw)
+        except json.JSONDecodeError:
+            logger.exception("Invalid MANUAL_RESPONSE JSON")
+            sys.exit(1)
 
     pipeline = Pipeline(
-        video_url=video_url, job_id=job_id, manual_response=manual_response
+        video_url=video_url.strip(),
+        job_id=job_id,
+        manual_response=manual_response
     )
 
     storage = MinioStorage()
 
     try:
+
         result = pipeline.run()
 
         if result["status"] == "awaiting_manual_llm":
@@ -54,6 +66,9 @@ def main():
 
             logger.info("Stage finalize uploaded to MinIO.")
             sys.exit(0)
+
+        logger.error(f"Unexpected pipeline result: {result}")
+        sys.exit(1)
 
     except Exception as e:
         logger.exception(f"Job failed: {e}")

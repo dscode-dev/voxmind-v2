@@ -1,5 +1,6 @@
 import json
 from datetime import datetime, timezone
+
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
 
@@ -29,6 +30,11 @@ class JobCreator:
         manual_response: dict | None = None
     ) -> str:
 
+        if not video_url or not video_url.strip():
+            raise RuntimeError("video_url is required to create worker job")
+
+        video_url = video_url.strip()
+
         _load_k8s()
         batch = client.BatchV1Api()
 
@@ -40,6 +46,10 @@ class JobCreator:
             client.V1EnvVar(name="PIPELINE_MODE", value="v2"),
             client.V1EnvVar(name="JOB_ID", value=job_id),
             client.V1EnvVar(name="LOG_LEVEL", value=settings.log_level),
+
+            # Whisper cache
+            client.V1EnvVar(name="HF_HOME", value="/tmp/huggingface"),
+            client.V1EnvVar(name="TRANSFORMERS_CACHE", value="/tmp/huggingface"),
         ]
 
         if manual_response:
