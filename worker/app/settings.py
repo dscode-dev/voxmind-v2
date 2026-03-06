@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     pipeline_stage: str = Field(default="prepare", alias="PIPELINE_STAGE")  # prepare | finalize
     work_dir: str = Field(default="/work", alias="WORK_DIR")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
+    WORKER_JOB_IMAGE: str | None = None
 
     # ======================================
     # Heuristic Pipeline Features
