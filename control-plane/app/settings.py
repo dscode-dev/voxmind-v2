@@ -14,11 +14,6 @@ class Settings(BaseSettings):
     env: str = Field(default="prod", description="Environment name")
 
     # =========================
-    # Auth
-    # =========================
-    api_key: str = Field(..., alias="CONTROL_PLANE_API_KEY")
-
-    # =========================
     # Kubernetes
     # =========================
     namespace: str = Field(default="voxmind-v2", alias="VOXMIND_NAMESPACE")
