@@ -18,7 +18,9 @@ from app.settings import settings
 
 class Pipeline:
 
-    def __init__(self, video_url: str, job_id: str, manual_response: dict | None = None):
+    def __init__(
+        self, video_url: str, job_id: str, manual_response: dict | None = None
+    ):
 
         self.video_url = video_url
         self.job_id = job_id
@@ -29,7 +31,13 @@ class Pipeline:
 
         self.downloader = VideoDownloader(self.work_dir)
         self.extractor = AudioExtractor(self.work_dir)
-        self.transcriber = Transcriber()
+        self.transcriber = Transcriber(
+            model_size=settings.asr_model_size,
+            compute_type=settings.asr_compute_type,
+            language=settings.asr_language,
+            beam_size=settings.asr_beam_size,
+            vad_filter=settings.asr_vad_filter,
+        )
 
         self.chunker = Chunker()
         self.builder = CandidateBuilder()
@@ -85,11 +93,7 @@ ERROR:
 """
             )
 
-            return {
-                "status": "error",
-                "job_id": self.job_id,
-                "error": str(e)
-            }
+            return {"status": "error", "job_id": self.job_id, "error": str(e)}
 
         finally:
 
@@ -165,11 +169,7 @@ VIDEO: {self.video_url}
 
         self._log("🧠 Preparing AI prompt...")
 
-        prompt = self.prompt_builder.build(
-            segments,
-            ranked_candidates,
-            self.job_id
-        )
+        prompt = self.prompt_builder.build(segments, ranked_candidates, self.job_id)
 
         transcript_path = self.work_dir / "transcript.json"
         candidates_path = self.work_dir / "candidates.json"
@@ -210,18 +210,15 @@ NEXT STEP
         # -----------------------------------
 
         self.telegram.send_document(
-            str(transcript_path),
-            caption=f"📄 Transcript — JOB_ID: {self.job_id}"
+            str(transcript_path), caption=f"📄 Transcript — JOB_ID: {self.job_id}"
         )
 
         self.telegram.send_document(
-            str(candidates_path),
-            caption=f"📄 Candidates — JOB_ID: {self.job_id}"
+            str(candidates_path), caption=f"📄 Candidates — JOB_ID: {self.job_id}"
         )
 
         self.telegram.send_document(
-            str(prompt_path),
-            caption=f"📌 Prompt — JOB_ID: {self.job_id}"
+            str(prompt_path), caption=f"📌 Prompt — JOB_ID: {self.job_id}"
         )
 
         return {
@@ -229,7 +226,7 @@ NEXT STEP
             "job_id": self.job_id,
             "transcript_path": str(transcript_path),
             "candidates_path": str(candidates_path),
-            "prompt_path": str(prompt_path)
+            "prompt_path": str(prompt_path),
         }
 
     # ==================================================
@@ -259,10 +256,7 @@ NEXT STEP
 
         for path in cut_files:
 
-            self.telegram.send_video(
-                path,
-                caption=caption
-            )
+            self.telegram.send_video(path, caption=caption)
 
         self.telegram.send_message(
             f"""
@@ -274,8 +268,4 @@ Cortes enviados.
 """
         )
 
-        return {
-            "status": "success",
-            "job_id": self.job_id,
-            "cut_files": cut_files
-        }
+        return {"status": "success", "job_id": self.job_id, "cut_files": cut_files}
