@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     # ======================================
     # Core Pipeline Configuration
     # ======================================
-    video_url: str = Field(..., alias="VIDEO_URL")
+    video_url: str | None = Field(default=None, alias="VIDEO_URL")
     pipeline_mode: str = Field(default="v2", alias="PIPELINE_MODE")
     pipeline_stage: str = Field(
         default="prepare", alias="PIPELINE_STAGE"
