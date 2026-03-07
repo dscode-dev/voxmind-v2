@@ -60,6 +60,13 @@ class Settings(BaseSettings):
     # =========================
     telegram_bot_token: str = Field(..., alias="TELEGRAM_BOT_TOKEN")
     telegram_chat_id: str = Field(..., alias="TELEGRAM_CHAT_ID")
+    
+        # =========================
+    # Redis Queue
+    # =========================
+    redis_host: str = Field(default="redis.voxmind-v2.svc.cluster.local", alias="REDIS_HOST")
+    redis_port: int = Field(default=6379, alias="REDIS_PORT")
+    redis_queue_name: str = Field(default="voxmind_jobs", alias="REDIS_QUEUE_NAME")
 
 
 settings = Settings()

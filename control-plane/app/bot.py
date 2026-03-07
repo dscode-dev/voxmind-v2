@@ -1,25 +1,37 @@
 import json
 import logging
 import uuid
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
-from .job_creator import JobCreator
+from telegram import Update
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    filters,
+    ContextTypes,
+)
+
+from .queue_publisher import QueuePublisher
 from .settings import settings
 from .job_registry import JobRegistry
 
+
 logger = logging.getLogger(__name__)
-creator = JobCreator()
+
+publisher = QueuePublisher()
 registry = JobRegistry()
 
 
 class VoxmindBot:
 
     def __init__(self):
+
         self.app = ApplicationBuilder().token(settings.telegram_bot_token).build()
 
         self.app.add_handler(CommandHandler("new", self.handle_new))
-        self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text))
+        self.app.add_handler(
+            MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text)
+        )
 
     async def handle_new(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
 
@@ -32,10 +44,10 @@ class VoxmindBot:
 
         registry.register(job_id, video_url)
 
-        creator.create(
+        publisher.publish(
             video_url=video_url,
             job_id=job_id,
-            pipeline_stage="prepare"
+            pipeline_stage="prepare",
         )
 
         await update.message.reply_text(
@@ -69,11 +81,11 @@ class VoxmindBot:
             await update.message.reply_text("Job ID não encontrado.")
             return
 
-        creator.create(
+        publisher.publish(
             video_url=video_url,
             job_id=job_id,
             pipeline_stage="finalize",
-            manual_response=data
+            manual_response=data,
         )
 
         await update.message.reply_text(
