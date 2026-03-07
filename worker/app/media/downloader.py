@@ -14,12 +14,22 @@ class VideoDownloader:
         except subprocess.CalledProcessError:
             return False
 
+    def _find_audio(self) -> Path | None:
+
+        for ext in ["wav", "m4a", "webm", "mp3"]:
+            p = self.work_dir / f"audio.{ext}"
+            if p.exists():
+                return p
+
+        return None
+
     def download(self, youtube_url: str) -> Path:
 
         output_tpl = str(self.work_dir / "audio.%(ext)s")
 
         strategies = [
-            # strategy 1 — android client (mais estável)
+
+            # STRATEGY 1 — ANDROID CLIENT (mais estável)
             [
                 "yt-dlp",
                 "--no-playlist",
@@ -35,7 +45,8 @@ class VideoDownloader:
                 output_tpl,
                 youtube_url,
             ],
-            # strategy 2 — ios client
+
+            # STRATEGY 2 — IOS CLIENT
             [
                 "yt-dlp",
                 "--no-playlist",
@@ -51,7 +62,8 @@ class VideoDownloader:
                 output_tpl,
                 youtube_url,
             ],
-            # strategy 3 — web client
+
+            # STRATEGY 3 — WEB CLIENT
             [
                 "yt-dlp",
                 "--no-playlist",
@@ -65,12 +77,13 @@ class VideoDownloader:
                 output_tpl,
                 youtube_url,
             ],
-            # strategy 4 — fallback absoluto
+
+            # STRATEGY 4 — FALLBACK ABSOLUTO
             [
                 "yt-dlp",
                 "--no-playlist",
                 "-f",
-                "best",
+                "b",
                 "-x",
                 "--audio-format",
                 "wav",
@@ -84,9 +97,9 @@ class VideoDownloader:
 
             if self._run(cmd):
 
-                audio_file = self.work_dir / "audio.wav"
+                audio_file = self._find_audio()
 
-                if audio_file.exists():
+                if audio_file:
                     return audio_file
 
         raise RuntimeError("All yt-dlp download strategies failed")
