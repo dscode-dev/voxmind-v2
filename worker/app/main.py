@@ -3,6 +3,8 @@ import logging
 import uuid
 import redis
 
+from pathlib import Path
+
 from app.pipeline.pipeline import Pipeline
 from app.settings import settings
 from app.storage.minio_client import MinioStorage
@@ -25,9 +27,7 @@ def run_pipeline(job: dict):
     logger.info(f"Starting pipeline {job_id} ({pipeline_stage})")
 
     pipeline = Pipeline(
-        video_url=video_url,
-        job_id=job_id,
-        manual_response=manual_response
+        video_url=video_url, job_id=job_id, manual_response=manual_response
     )
 
     storage = MinioStorage()
@@ -38,11 +38,20 @@ def run_pipeline(job: dict):
 
         if result["status"] == "awaiting_manual_llm":
 
-            storage.upload(result["transcript_path"], f"{job_id}/transcript.json")
-            storage.upload(result["candidates_path"], f"{job_id}/candidates.json")
-            storage.upload(result["prompt_path"], f"{job_id}/prompt.txt")
+            transcript_path = Path(result["transcript_path"])
+            candidates_path = Path(result["candidates_path"])
+            prompt_path = Path(result["prompt_path"])
 
-            logger.info(f"{job_id} prepare stage uploaded to MinIO")
+            if transcript_path.exists():
+                storage.upload(transcript_path, f"{job_id}/transcript.json")
+
+            if candidates_path.exists():
+                storage.upload(candidates_path, f"{job_id}/candidates.json")
+
+            if prompt_path.exists():
+                storage.upload(prompt_path, f"{job_id}/prompt.txt")
+
+            logger.info("Stage prepare uploaded to MinIO.")
 
         elif result["status"] == "success":
 
@@ -64,9 +73,7 @@ def run_pipeline(job: dict):
 def main():
 
     redis_client = redis.Redis(
-        host=settings.redis_host,
-        port=settings.redis_port,
-        decode_responses=True
+        host=settings.redis_host, port=settings.redis_port, decode_responses=True
     )
 
     logger.info("VOXMIND WORKER READY — waiting for jobs")

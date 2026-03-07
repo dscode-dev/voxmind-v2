@@ -148,6 +148,9 @@ ERROR:
 
         segments = self.transcriber.transcribe(audio_path)
 
+        if not segments:
+            raise RuntimeError("Transcription returned no segments")
+
         self._log("✂️ Generating chunks...")
 
         chunks = self.chunker.chunk(segments)
@@ -175,9 +178,57 @@ ERROR:
         with open(prompt_path, "w") as f:
             f.write(prompt)
 
+        # =============================
+        # Envia o prompt
+        # =============================
+
         self.telegram.send_document(
             str(prompt_path),
-            caption=f"PROMPT — JOB_ID {self.job_id}",
+            caption=f"""
+🧠 VOXMIND — PROMPT GERADO
+
+JOB_ID: {self.job_id}
+
+1️⃣ Copie o conteúdo do arquivo PROMPT
+
+2️⃣ Cole no ChatGPT / Claude / Gemini
+
+3️⃣ Envie a resposta aqui usando:
+
+/finalize {self.job_id}
+
+Exemplo:
+
+/finalize {self.job_id}
+{{JSON_AQUI}}
+
+⚠️ O JSON precisa conter:
+
+shorts_content
+""",
+        )
+
+        # =============================
+        # Mensagem extra explicativa
+        # =============================
+
+        self.telegram.send_message(
+            f"""
+📊 PIPELINE PRONTO
+
+JOB_ID: {self.job_id}
+
+Para continuar o processamento envie:
+
+/finalize {self.job_id}
+
+seguido do JSON retornado pela IA.
+
+Exemplo:
+
+/finalize {self.job_id}
+{{ ... resposta da IA ... }}
+"""
         )
 
         return {
@@ -197,6 +248,9 @@ ERROR:
         if not self.manual_response:
             raise RuntimeError("Manual response missing")
 
+        if "shorts_content" not in self.manual_response:
+            raise RuntimeError("Invalid response: shorts_content missing")
+
         self._log("🎬 Generating cuts...")
 
         videos = list(self.work_dir.glob("video.*"))
@@ -208,10 +262,12 @@ ERROR:
 
         cuts = self.manual_response.get("shorts_content", [])
 
+        if not cuts:
+            raise RuntimeError("shorts_content is empty")
+
         cut_files = self.cutter.cut(video_path, cuts)
 
         for path in cut_files:
-
             self.telegram.send_video(path)
 
         return {
