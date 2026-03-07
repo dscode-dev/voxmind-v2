@@ -1,5 +1,6 @@
 import json
 import shutil
+import subprocess
 from pathlib import Path
 
 from app.media.downloader import VideoDownloader
@@ -50,6 +51,10 @@ class Pipeline:
         self.telegram = TelegramSender()
         self.prompt_builder = ManualPromptBuilder()
 
+    # ==================================================
+    # Logging helper
+    # ==================================================
+
     def _log(self, message: str):
 
         self.telegram.send_message(
@@ -61,6 +66,37 @@ JOB_ID: {self.job_id}
 {message}
 """
         )
+
+    # ==================================================
+    # Audio extraction
+    # ==================================================
+
+    def _extract_audio(self, video_path: Path) -> Path:
+
+        audio_path = self.work_dir / "audio.wav"
+
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(video_path),
+            "-vn",
+            "-acodec",
+            "pcm_s16le",
+            "-ar",
+            "16000",
+            "-ac",
+            "1",
+            str(audio_path),
+        ]
+
+        subprocess.run(cmd, check=True)
+
+        return audio_path
+
+    # ==================================================
+    # Main runner
+    # ==================================================
 
     def run(self):
 
@@ -94,11 +130,19 @@ ERROR:
             if self.work_dir.exists():
                 shutil.rmtree(self.work_dir, ignore_errors=True)
 
+    # ==================================================
+    # STAGE 1 - PREPARE
+    # ==================================================
+
     def _prepare_stage(self):
 
-        self._log("⬇️ Downloading audio...")
+        self._log("⬇️ Downloading video...")
 
-        audio_path = self.downloader.download(self.video_url)
+        video_path = self.downloader.download(self.video_url)
+
+        self._log("🎧 Extracting audio...")
+
+        audio_path = self._extract_audio(video_path)
 
         self._log("🧠 Transcribing audio...")
 
@@ -131,7 +175,10 @@ ERROR:
         with open(prompt_path, "w") as f:
             f.write(prompt)
 
-        self.telegram.send_document(str(prompt_path), caption="PROMPT")
+        self.telegram.send_document(
+            str(prompt_path),
+            caption=f"PROMPT — JOB_ID {self.job_id}",
+        )
 
         return {
             "status": "awaiting_manual_llm",
@@ -141,20 +188,30 @@ ERROR:
             "prompt_path": str(prompt_path),
         }
 
+    # ==================================================
+    # STAGE 2 - FINALIZE
+    # ==================================================
+
     def _finalize_stage(self):
 
         if not self.manual_response:
             raise RuntimeError("Manual response missing")
 
-        self._log("⬇️ Downloading video for cuts...")
+        self._log("🎬 Generating cuts...")
 
-        video_path = self.downloader.download(self.video_url)
+        videos = list(self.work_dir.glob("video.*"))
+
+        if not videos:
+            raise RuntimeError("Video not found in workspace")
+
+        video_path = videos[0]
 
         cuts = self.manual_response.get("shorts_content", [])
 
         cut_files = self.cutter.cut(video_path, cuts)
 
         for path in cut_files:
+
             self.telegram.send_video(path)
 
         return {

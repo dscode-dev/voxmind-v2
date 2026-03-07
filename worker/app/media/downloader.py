@@ -14,10 +14,10 @@ class VideoDownloader:
         except subprocess.CalledProcessError:
             return False
 
-    def _find_audio(self) -> Path | None:
+    def _find_video(self) -> Path | None:
 
-        for ext in ["wav", "m4a", "webm", "mp3"]:
-            p = self.work_dir / f"audio.{ext}"
+        for ext in ["mp4", "mkv", "webm", "mov"]:
+            p = self.work_dir / f"video.{ext}"
             if p.exists():
                 return p
 
@@ -25,7 +25,7 @@ class VideoDownloader:
 
     def download(self, youtube_url: str) -> Path:
 
-        output_tpl = str(self.work_dir / "audio.%(ext)s")
+        output_tpl = str(self.work_dir / "video.%(ext)s")
 
         strategies = [
 
@@ -37,10 +37,9 @@ class VideoDownloader:
                 "--extractor-args",
                 "youtube:player_client=android",
                 "-f",
-                "bestaudio/best",
-                "-x",
-                "--audio-format",
-                "wav",
+                "bestvideo+bestaudio/best",
+                "--merge-output-format",
+                "mp4",
                 "-o",
                 output_tpl,
                 youtube_url,
@@ -54,39 +53,20 @@ class VideoDownloader:
                 "--extractor-args",
                 "youtube:player_client=ios",
                 "-f",
-                "bestaudio/best",
-                "-x",
-                "--audio-format",
-                "wav",
+                "bestvideo+bestaudio/best",
+                "--merge-output-format",
+                "mp4",
                 "-o",
                 output_tpl,
                 youtube_url,
             ],
 
-            # STRATEGY 3 — WEB CLIENT
-            [
-                "yt-dlp",
-                "--no-playlist",
-                "--geo-bypass",
-                "-f",
-                "bestaudio/best",
-                "-x",
-                "--audio-format",
-                "wav",
-                "-o",
-                output_tpl,
-                youtube_url,
-            ],
-
-            # STRATEGY 4 — FALLBACK ABSOLUTO
+            # STRATEGY 3 — FALLBACK
             [
                 "yt-dlp",
                 "--no-playlist",
                 "-f",
-                "b",
-                "-x",
-                "--audio-format",
-                "wav",
+                "best",
                 "-o",
                 output_tpl,
                 youtube_url,
@@ -97,9 +77,9 @@ class VideoDownloader:
 
             if self._run(cmd):
 
-                audio_file = self._find_audio()
+                video = self._find_video()
 
-                if audio_file:
-                    return audio_file
+                if video:
+                    return video
 
         raise RuntimeError("All yt-dlp download strategies failed")
