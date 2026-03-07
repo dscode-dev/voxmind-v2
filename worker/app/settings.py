@@ -3,17 +3,16 @@ from pydantic import Field
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        extra="ignore"
-    )
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     # ======================================
     # Core Pipeline Configuration
     # ======================================
     video_url: str = Field(..., alias="VIDEO_URL")
     pipeline_mode: str = Field(default="v2", alias="PIPELINE_MODE")
-    pipeline_stage: str = Field(default="prepare", alias="PIPELINE_STAGE")  # prepare | finalize
+    pipeline_stage: str = Field(
+        default="prepare", alias="PIPELINE_STAGE"
+    )  # prepare | finalize
     work_dir: str = Field(default="/work", alias="WORK_DIR")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     WORKER_JOB_IMAGE: str | None = None
@@ -22,14 +21,10 @@ class Settings(BaseSettings):
     # Heuristic Pipeline Features
     # ======================================
     enable_candidate_scoring: bool = Field(
-        default=False,
-        alias="ENABLE_CANDIDATE_SCORING"
+        default=False, alias="ENABLE_CANDIDATE_SCORING"
     )
 
-    enable_hook_detector: bool = Field(
-        default=False,
-        alias="ENABLE_HOOK_DETECTOR"
-    )
+    enable_hook_detector: bool = Field(default=False, alias="ENABLE_HOOK_DETECTOR")
 
     # ======================================
     # LLM Configuration (Optional / Future)
@@ -56,13 +51,17 @@ class Settings(BaseSettings):
     # ======================================
     telegram_bot_token: str | None = Field(default=None, alias="TELEGRAM_BOT_TOKEN")
     telegram_chat_id: str | None = Field(default=None, alias="TELEGRAM_CHAT_ID")
-    
-        # ======================================
+
+    # ======================================
     # Redis Queue
     # ======================================
-    redis_host: str = Field(default="redis.voxmind-v2.svc.cluster.local", alias="REDIS_HOST")
-    redis_port: int = Field(default=6379, alias="REDIS_PORT")
-    redis_queue_name: str = Field(default="voxmind_jobs", alias="REDIS_QUEUE_NAME")
+    redis_host: str = Field(
+        default="redis.voxmind-v2.svc.cluster.local", alias="VOXMIND_REDIS_HOST"
+    )
+
+    redis_port: int = Field(default=6379, alias="VOXMIND_REDIS_PORT")
+
+    redis_queue_name: str = Field(default="voxmind_jobs", alias="VOXMIND_REDIS_QUEUE")
 
 
 settings = Settings()
