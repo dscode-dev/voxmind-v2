@@ -18,7 +18,11 @@ def run_pipeline(job: dict):
     pipeline_stage = job.get("pipeline_stage", "prepare")
     manual_response = job.get("manual_response")
 
-    logger.info(f"Starting pipeline: {job_id} ({pipeline_stage})")
+    if not video_url:
+        logger.error("Job received without video_url")
+        return
+
+    logger.info(f"Starting pipeline {job_id} ({pipeline_stage})")
 
     pipeline = Pipeline(
         video_url=video_url,
@@ -54,7 +58,7 @@ def run_pipeline(job: dict):
             logger.error(f"Unexpected pipeline result: {result}")
 
     except Exception as e:
-        logger.exception(f"Pipeline failed: {job_id} - {e}")
+        logger.exception(f"Pipeline failed for job {job_id}: {e}")
 
 
 def main():
