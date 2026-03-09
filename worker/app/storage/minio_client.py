@@ -29,6 +29,7 @@ class MinioStorage:
             self.client.make_bucket(bucket)
 
     def upload(self, local_path: str, object_name: str):
+
         self.client.fput_object(
             self.bucket,
             object_name,
@@ -36,4 +37,17 @@ class MinioStorage:
         )
 
     def upload_with_retry(self, local_path: str, object_name: str):
+
         self.upload(local_path, object_name)
+
+    def download(self, object_name: str, local_path: str):
+
+        Path(local_path).parent.mkdir(parents=True, exist_ok=True)
+
+        self.client.fget_object(
+            self.bucket,
+            object_name,
+            local_path
+        )
+
+        return local_path

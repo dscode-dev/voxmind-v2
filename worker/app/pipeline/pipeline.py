@@ -15,6 +15,8 @@ from app.pipeline.manual_prompt_builder import ManualPromptBuilder
 from app.integrations.telegram_sender import TelegramSender
 from app.settings import settings
 
+from app.storage.minio_client import MinioStorage
+
 
 class Pipeline:
 
@@ -31,6 +33,8 @@ class Pipeline:
 
         self.work_dir = Path(f"/tmp/voxmind/{job_id}")
         self.work_dir.mkdir(parents=True, exist_ok=True)
+
+        self.storage = MinioStorage()
 
         self.downloader = VideoDownloader(self.work_dir)
 
@@ -140,13 +144,18 @@ ERROR:
 
         video_path = self.downloader.download(self.video_url)
 
-        self._log("🎧 Extracting audio...")
+        # =============================
+        # Upload video to MinIO
+        # =============================
 
-        audio_path = self._extract_audio(video_path)
+        self.storage.upload(
+            str(video_path),
+            f"jobs/{self.job_id}/video.mp4"
+        )
 
-        self._log("🧠 Transcribing audio...")
+        self._log("🧠 Transcribing video...")
 
-        segments = self.transcriber.transcribe(audio_path)
+        segments = self.transcriber.transcribe(video_path)
 
         if not segments:
             raise RuntimeError("Transcription returned no segments")
@@ -179,6 +188,25 @@ ERROR:
             f.write(prompt)
 
         # =============================
+        # Upload artifacts to MinIO
+        # =============================
+
+        self.storage.upload(
+            str(transcript_path),
+            f"jobs/{self.job_id}/transcript.json"
+        )
+
+        self.storage.upload(
+            str(candidates_path),
+            f"jobs/{self.job_id}/candidates.json"
+        )
+
+        self.storage.upload(
+            str(prompt_path),
+            f"jobs/{self.job_id}/prompt.txt"
+        )
+
+        # =============================
         # Envia o prompt
         # =============================
 
@@ -193,24 +221,15 @@ JOB_ID: {self.job_id}
 
 2️⃣ Cole no ChatGPT / Claude / Gemini
 
-3️⃣ Envie a resposta aqui usando:
+3️⃣ Gere o JSON
 
-/finalize {self.job_id}
+4️⃣ Salve como:
 
-Exemplo:
+response.json
 
-/finalize {self.job_id}
-{{JSON_AQUI}}
-
-⚠️ O JSON precisa conter:
-
-shorts_content
+5️⃣ Envie o arquivo aqui para continuar o pipeline.
 """,
         )
-
-        # =============================
-        # Mensagem extra explicativa
-        # =============================
 
         self.telegram.send_message(
             f"""
@@ -218,24 +237,14 @@ shorts_content
 
 JOB_ID: {self.job_id}
 
-Para continuar o processamento envie:
-
-/finalize {self.job_id}
-
-seguido do JSON retornado pela IA.
-
-Exemplo:
-
-/finalize {self.job_id}
-{{ ... resposta da IA ... }}
+Envie o arquivo **response.json** retornado pela IA
+para continuar o processamento.
 """
         )
 
         return {
             "status": "awaiting_manual_llm",
             "job_id": self.job_id,
-            "transcript_path": str(transcript_path),
-            "candidates_path": str(candidates_path),
             "prompt_path": str(prompt_path),
         }
 
@@ -248,17 +257,29 @@ Exemplo:
         if not self.manual_response:
             raise RuntimeError("Manual response missing")
 
+        # =============================
+        # Sanitiza JSON da IA
+        # =============================
+
+        text = json.dumps(self.manual_response)
+
+        text = text.replace("“", '"').replace("”", '"')
+
+        self.manual_response = json.loads(text)
+
         if "shorts_content" not in self.manual_response:
             raise RuntimeError("Invalid response: shorts_content missing")
 
+        self._log("⬇️ Downloading video from storage...")
+
+        video_path = self.work_dir / "video.mp4"
+
+        self.storage.download(
+            f"jobs/{self.job_id}/video.mp4",
+            str(video_path),
+        )
+
         self._log("🎬 Generating cuts...")
-
-        videos = list(self.work_dir.glob("video.*"))
-
-        if not videos:
-            raise RuntimeError("Video not found in workspace")
-
-        video_path = videos[0]
 
         cuts = self.manual_response.get("shorts_content", [])
 

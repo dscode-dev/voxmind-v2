@@ -1,7 +1,5 @@
-from pathlib import Path
-from typing import Any
-import os
-
+import subprocess
+import numpy as np
 from faster_whisper import WhisperModel
 
 
@@ -9,7 +7,6 @@ class Transcriber:
 
     def __init__(
         self,
-        *,
         model_size: str,
         compute_type: str,
         language: str,
@@ -17,50 +14,62 @@ class Transcriber:
         vad_filter: bool,
     ):
 
-        # =========================================
-        # Configure HF cache for read-only FS
-        # =========================================
-
-        cache_dir = "/tmp/huggingface"
-
-        os.environ["HF_HOME"] = cache_dir
-        os.environ["TRANSFORMERS_CACHE"] = cache_dir
-
-        Path(cache_dir).mkdir(parents=True, exist_ok=True)
-
-        # =========================================
-        # Load Whisper model
-        # =========================================
-
         self.model = WhisperModel(
             model_size,
-            device="cpu",
             compute_type=compute_type,
-            download_root=cache_dir,
+            cpu_threads=4,
+            num_workers=2,
         )
 
         self.language = language
         self.beam_size = beam_size
         self.vad_filter = vad_filter
 
-    def transcribe(self, audio_path: Path) -> list[dict[str, Any]]:
+    def transcribe(self, video_path):
 
-        segments, _info = self.model.transcribe(
-            str(audio_path),
+        cmd = [
+            "ffmpeg",
+            "-i",
+            str(video_path),
+            "-f",
+            "s16le",
+            "-acodec",
+            "pcm_s16le",
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            "-"
+        ]
+
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL
+        )
+
+        audio = np.frombuffer(
+            process.stdout.read(),
+            np.int16
+        ).astype(np.float32) / 32768.0
+
+        segments, info = self.model.transcribe(
+            audio,
             language=self.language,
             beam_size=self.beam_size,
             vad_filter=self.vad_filter,
         )
 
-        out: list[dict[str, Any]] = []
+        results = []
 
-        for s in segments:
-            out.append(
+        for segment in segments:
+
+            results.append(
                 {
-                    "start": float(s.start),
-                    "end": float(s.end),
-                    "text": (s.text or "").strip(),
+                    "start": segment.start,
+                    "end": segment.end,
+                    "text": segment.text.strip(),
                 }
             )
 
-        return out
+        return results
