@@ -1,6 +1,7 @@
 import json
 import logging
 import uuid
+import os
 
 from telegram import Update
 from telegram.ext import (
@@ -29,7 +30,10 @@ class VoxmindBot:
         self.app = ApplicationBuilder().token(settings.telegram_bot_token).build()
 
         self.app.add_handler(CommandHandler("new", self.handle_new))
-        self.app.add_handler(CommandHandler("finalize", self.finalize_command))
+
+        self.app.add_handler(
+            MessageHandler(filters.Document.ALL, self.handle_document)
+        )
 
         self.app.add_handler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text)
@@ -57,79 +61,81 @@ class VoxmindBot:
         )
 
         await update.message.reply_text(
-            f"🎬 Pipeline iniciado!\nJob ID: {job_id}\nAguarde transcrição e prompt."
+            f"""
+🎬 Pipeline iniciado
+
+JOB_ID: {job_id}
+
+Aguarde a transcrição e o prompt.
+"""
         )
 
     # ==================================================
-    # /finalize
+    # JSON via arquivo
     # ==================================================
 
-    async def finalize_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def handle_document(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-        message = update.message.text
+        document = update.message.document
+
+        if not document.file_name.endswith(".json"):
+            await update.message.reply_text("Envie um arquivo JSON.")
+            return
+
+        file = await context.bot.get_file(document.file_id)
+
+        file_path = f"/tmp/{document.file_name}"
+
+        await file.download_to_drive(file_path)
 
         try:
 
-            lines = message.split("\n", 1)
+            with open(file_path) as f:
+                data = json.load(f)
 
-            header = lines[0]
-            json_part = lines[1] if len(lines) > 1 else None
+        except Exception:
+            await update.message.reply_text("JSON inválido.")
+            return
 
-            parts = header.split()
+        job_id = data.get("job_id")
 
-            if len(parts) != 2:
-                await update.message.reply_text(
-                    "Formato inválido.\n\nUse:\n/finalize JOB_ID\n{json}"
-                )
-                return
+        if not job_id:
+            await update.message.reply_text("JSON precisa conter job_id.")
+            return
 
-            job_id = parts[1]
-
-            if not json_part:
-                await update.message.reply_text("JSON não encontrado.")
-                return
-
-            manual_response = json.loads(json_part)
-
-            if "shorts_content" not in manual_response:
-                await update.message.reply_text(
-                    "JSON inválido. Campo obrigatório: shorts_content"
-                )
-                return
-
-            video_url = registry.get_video_url(job_id)
-
-            if not video_url:
-                await update.message.reply_text("Job ID não encontrado.")
-                return
-
-            publisher.publish(
-                video_url=video_url,
-                job_id=job_id,
-                pipeline_stage="finalize",
-                manual_response=manual_response,
-            )
-
+        if "shorts_content" not in data:
             await update.message.reply_text(
-                f"""
-🚀 Pipeline FINALIZE enviado
+                "JSON inválido. Campo obrigatório: shorts_content"
+            )
+            return
+
+        video_url = registry.get_video_url(job_id)
+
+        if not video_url:
+            await update.message.reply_text("Job ID não encontrado.")
+            return
+
+        publisher.publish(
+            video_url=video_url,
+            job_id=job_id,
+            pipeline_stage="finalize",
+            manual_response=data,
+        )
+
+        await update.message.reply_text(
+            f"""
+🚀 Finalização iniciada
 
 JOB_ID: {job_id}
 
 Gerando cortes...
 """
-            )
+        )
 
-        except json.JSONDecodeError:
-            await update.message.reply_text("JSON inválido.")
-        except Exception as e:
-            logger.exception("Erro no finalize")
-            await update.message.reply_text(
-                f"Erro ao processar finalize:\n{str(e)}"
-            )
+        os.remove(file_path)
 
     # ==================================================
-    # fallback json message
+    # JSON via texto
     # ==================================================
 
     async def handle_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -141,15 +147,17 @@ Gerando cortes...
         except Exception:
             return
 
-        if "job_id" not in data:
+        job_id = data.get("job_id")
+
+        if not job_id:
             await update.message.reply_text("JSON precisa conter job_id.")
             return
 
         if "shorts_content" not in data:
-            await update.message.reply_text("JSON precisa conter shorts_content.")
+            await update.message.reply_text(
+                "JSON inválido. Campo obrigatório: shorts_content"
+            )
             return
-
-        job_id = data.get("job_id")
 
         video_url = registry.get_video_url(job_id)
 

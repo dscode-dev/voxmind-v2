@@ -22,6 +22,16 @@ IMPORTANTE:
 - Retorne APENAS JSON válido.
 - Inclua obrigatoriamente o mesmo job_id no JSON final.
 
+⚠️ REGRA CRÍTICA:
+Sua resposta FINAL deve ser um **arquivo JSON válido**.
+Não escreva texto fora do JSON.
+Não use markdown.
+Não explique nada antes ou depois do JSON.
+
+Depois de gerar o conteúdo, **salve o resultado em um arquivo chamado**:
+
+response.json
+
 ━━━━━━━━━━━━━━━━━━
 PARTE 1 — CORTES VIRAIS
 ━━━━━━━━━━━━━━━━━━
@@ -52,6 +62,7 @@ Evite:
 - partes sem impacto
 
 Para cada corte, informe:
+
 - start
 - end
 - hook
@@ -68,12 +79,14 @@ PARTE 2 — ROTEIRO DE VÍDEO LONGO
 Crie um roteiro para um vídeo longo novo, de 8 a 12 minutos, inspirado no tema geral da transcrição.
 
 Esse roteiro deve ser:
+
 - editorialmente transformativo
 - adequado para narração por voz humana ou IA
 - claro, natural e envolvente
 - sem mencionar que veio de uma transcrição
 
 O roteiro deve incluir:
+
 - title
 - hook
 - context
@@ -126,8 +139,14 @@ CANDIDATOS PRIORIZADOS
 {json.dumps(candidates, ensure_ascii=False, indent=2)}
 
 ━━━━━━━━━━━━━━━━━━
-INSTRUÇÃO DE RETORNO
+INSTRUÇÃO FINAL
 ━━━━━━━━━━━━━━━━━━
 
-Depois de gerar o JSON, devolva exatamente esse JSON no Telegram para continuar o pipeline deste JOB_ID: {job_id}
+1. Gere o JSON final seguindo EXATAMENTE o formato especificado.
+2. Salve o resultado como um arquivo chamado **response.json**.
+3. Envie o arquivo **response.json** de volta no Telegram para continuar o pipeline.
+
+Este JSON será usado automaticamente para finalizar o JOB_ID:
+
+{job_id}
 """
