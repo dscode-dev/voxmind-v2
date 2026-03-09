@@ -134,8 +134,10 @@ Exemplo:
             await file.download_to_drive(file_path)
 
             with open(file_path) as f:
+                text = f.read()
 
-                data = json.load(f)
+            text = text.replace("“", '"').replace("”", '"')
+            data = json.loads(text)
 
         except Exception:
 
