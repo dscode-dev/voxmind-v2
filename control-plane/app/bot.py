@@ -29,14 +29,20 @@ class VoxmindBot:
         self.app = ApplicationBuilder().token(settings.telegram_bot_token).build()
 
         self.app.add_handler(CommandHandler("new", self.handle_new))
+        self.app.add_handler(CommandHandler("finalize", self.finalize_command))
+
         self.app.add_handler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text)
         )
 
+    # ==================================================
+    # /new
+    # ==================================================
+
     async def handle_new(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if not context.args:
-            await update.message.reply_text("Uso: /new URL <url-do-video>")
+            await update.message.reply_text("Uso: /new <url-do-video>")
             return
 
         video_url = context.args[-1]
@@ -54,6 +60,78 @@ class VoxmindBot:
             f"🎬 Pipeline iniciado!\nJob ID: {job_id}\nAguarde transcrição e prompt."
         )
 
+    # ==================================================
+    # /finalize
+    # ==================================================
+
+    async def finalize_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+        message = update.message.text
+
+        try:
+
+            lines = message.split("\n", 1)
+
+            header = lines[0]
+            json_part = lines[1] if len(lines) > 1 else None
+
+            parts = header.split()
+
+            if len(parts) != 2:
+                await update.message.reply_text(
+                    "Formato inválido.\n\nUse:\n/finalize JOB_ID\n{json}"
+                )
+                return
+
+            job_id = parts[1]
+
+            if not json_part:
+                await update.message.reply_text("JSON não encontrado.")
+                return
+
+            manual_response = json.loads(json_part)
+
+            if "shorts_content" not in manual_response:
+                await update.message.reply_text(
+                    "JSON inválido. Campo obrigatório: shorts_content"
+                )
+                return
+
+            video_url = registry.get_video_url(job_id)
+
+            if not video_url:
+                await update.message.reply_text("Job ID não encontrado.")
+                return
+
+            publisher.publish(
+                video_url=video_url,
+                job_id=job_id,
+                pipeline_stage="finalize",
+                manual_response=manual_response,
+            )
+
+            await update.message.reply_text(
+                f"""
+🚀 Pipeline FINALIZE enviado
+
+JOB_ID: {job_id}
+
+Gerando cortes...
+"""
+            )
+
+        except json.JSONDecodeError:
+            await update.message.reply_text("JSON inválido.")
+        except Exception as e:
+            logger.exception("Erro no finalize")
+            await update.message.reply_text(
+                f"Erro ao processar finalize:\n{str(e)}"
+            )
+
+    # ==================================================
+    # fallback json message
+    # ==================================================
+
     async def handle_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         text = update.message.text.strip()
@@ -63,17 +141,15 @@ class VoxmindBot:
         except Exception:
             return
 
-        required_keys = {"cuts", "title", "description", "hashtags"}
+        if "job_id" not in data:
+            await update.message.reply_text("JSON precisa conter job_id.")
+            return
 
-        if not required_keys.issubset(data.keys()):
-            await update.message.reply_text("JSON inválido.")
+        if "shorts_content" not in data:
+            await update.message.reply_text("JSON precisa conter shorts_content.")
             return
 
         job_id = data.get("job_id")
-
-        if not job_id:
-            await update.message.reply_text("JSON precisa conter job_id.")
-            return
 
         video_url = registry.get_video_url(job_id)
 
@@ -91,6 +167,10 @@ class VoxmindBot:
         await update.message.reply_text(
             "🚀 Finalização iniciada! Gerando cortes..."
         )
+
+    # ==================================================
+    # run
+    # ==================================================
 
     def run(self):
         self.app.run_polling()
