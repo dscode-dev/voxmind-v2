@@ -1,6 +1,5 @@
 import json
 import shutil
-import subprocess
 from pathlib import Path
 
 from app.media.downloader import VideoDownloader
@@ -72,33 +71,6 @@ JOB_ID: {self.job_id}
         )
 
     # ==================================================
-    # Audio extraction
-    # ==================================================
-
-    def _extract_audio(self, video_path: Path) -> Path:
-
-        audio_path = self.work_dir / "audio.wav"
-
-        cmd = [
-            "ffmpeg",
-            "-y",
-            "-i",
-            str(video_path),
-            "-vn",
-            "-acodec",
-            "pcm_s16le",
-            "-ar",
-            "16000",
-            "-ac",
-            "1",
-            str(audio_path),
-        ]
-
-        subprocess.run(cmd, check=True)
-
-        return audio_path
-
-    # ==================================================
     # Main runner
     # ==================================================
 
@@ -127,7 +99,11 @@ ERROR:
 """
             )
 
-            return {"status": "error", "job_id": self.job_id, "error": str(e)}
+            return {
+                "status": "error",
+                "job_id": self.job_id,
+                "error": str(e),
+            }
 
         finally:
 
@@ -144,9 +120,7 @@ ERROR:
 
         video_path = self.downloader.download(self.video_url)
 
-        # =============================
-        # Upload video to MinIO
-        # =============================
+        self._log("💾 Uploading video to storage...")
 
         self.storage.upload(
             str(video_path),
@@ -172,43 +146,28 @@ ERROR:
 
         ranked = self.scorer.score(candidates)
 
-        prompt = self.prompt_builder.build(segments, ranked, self.job_id)
+        self._log("📝 Building LLM prompt...")
+
+        prompt = self.prompt_builder.build(
+            segments,
+            ranked,
+            self.job_id,
+        )
 
         transcript_path = self.work_dir / "transcript.json"
         candidates_path = self.work_dir / "candidates.json"
         prompt_path = self.work_dir / "prompt.txt"
 
-        with open(transcript_path, "w") as f:
+        with open(transcript_path, "w", encoding="utf-8") as f:
             json.dump(segments, f, indent=2, ensure_ascii=False)
 
-        with open(candidates_path, "w") as f:
+        with open(candidates_path, "w", encoding="utf-8") as f:
             json.dump(ranked, f, indent=2, ensure_ascii=False)
 
-        with open(prompt_path, "w") as f:
+        with open(prompt_path, "w", encoding="utf-8") as f:
             f.write(prompt)
 
-        # =============================
-        # Upload artifacts to MinIO
-        # =============================
-
-        self.storage.upload(
-            str(transcript_path),
-            f"jobs/{self.job_id}/transcript.json"
-        )
-
-        self.storage.upload(
-            str(candidates_path),
-            f"jobs/{self.job_id}/candidates.json"
-        )
-
-        self.storage.upload(
-            str(prompt_path),
-            f"jobs/{self.job_id}/prompt.txt"
-        )
-
-        # =============================
-        # Envia o prompt
-        # =============================
+        self._log("📤 Sending prompt to Telegram...")
 
         self.telegram.send_document(
             str(prompt_path),
@@ -245,6 +204,8 @@ para continuar o processamento.
         return {
             "status": "awaiting_manual_llm",
             "job_id": self.job_id,
+            "transcript_path": str(transcript_path),
+            "candidates_path": str(candidates_path),
             "prompt_path": str(prompt_path),
         }
 
@@ -257,15 +218,21 @@ para continuar o processamento.
         if not self.manual_response:
             raise RuntimeError("Manual response missing")
 
-        # =============================
-        # Sanitiza JSON da IA
-        # =============================
+        self._log("🔎 Validating AI response...")
 
-        text = json.dumps(self.manual_response)
+        try:
 
-        text = text.replace("“", '"').replace("”", '"')
+            if isinstance(self.manual_response, str):
+                self.manual_response = json.loads(self.manual_response)
 
-        self.manual_response = json.loads(text)
+            text = json.dumps(self.manual_response)
+
+            text = text.replace("“", '"').replace("”", '"')
+
+            self.manual_response = json.loads(text)
+
+        except Exception:
+            raise RuntimeError("Invalid JSON received from AI")
 
         if "shorts_content" not in self.manual_response:
             raise RuntimeError("Invalid response: shorts_content missing")
@@ -279,6 +246,9 @@ para continuar o processamento.
             str(video_path),
         )
 
+        if not video_path.exists():
+            raise RuntimeError("Video not found in storage")
+
         self._log("🎬 Generating cuts...")
 
         cuts = self.manual_response.get("shorts_content", [])
@@ -287,6 +257,8 @@ para continuar o processamento.
             raise RuntimeError("shorts_content is empty")
 
         cut_files = self.cutter.cut(video_path, cuts)
+
+        self._log(f"📦 {len(cut_files)} cuts generated")
 
         for path in cut_files:
             self.telegram.send_video(path)

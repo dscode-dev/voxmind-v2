@@ -20,14 +20,40 @@ def run_pipeline(job: dict):
     pipeline_stage = job.get("pipeline_stage", "prepare")
     manual_response = job.get("manual_response")
 
-    if not video_url:
-        logger.error("Job received without video_url")
-        return
+    # ==========================================
+    # validações por estágio
+    # ==========================================
+
+    if pipeline_stage == "prepare":
+        if not video_url:
+            logger.error("Prepare job received without video_url")
+            return
+
+    if pipeline_stage == "finalize":
+        if not manual_response:
+            logger.error("Finalize job received without manual_response")
+            return
+
+        if "shorts_content" not in manual_response:
+            logger.error("Finalize job received invalid manual_response")
+            return
+
+        if not video_url:
+            logger.error("Finalize job received without video_url")
+            return
+
+    # ==========================================
+    # força o stage atual no settings global
+    # ==========================================
+
+    settings.pipeline_stage = pipeline_stage
 
     logger.info(f"Starting pipeline {job_id} ({pipeline_stage})")
 
     pipeline = Pipeline(
-        video_url=video_url, job_id=job_id, manual_response=manual_response
+        video_url=video_url,
+        job_id=job_id,
+        manual_response=manual_response,
     )
 
     storage = MinioStorage()
@@ -36,35 +62,81 @@ def run_pipeline(job: dict):
 
         result = pipeline.run()
 
+        # ==========================================
+        # PREPARE
+        # ==========================================
+
         if result["status"] == "awaiting_manual_llm":
 
-            transcript_path = Path(result["transcript_path"])
-            candidates_path = Path(result["candidates_path"])
-            prompt_path = Path(result["prompt_path"])
+            transcript_path = result.get("transcript_path")
+            candidates_path = result.get("candidates_path")
+            prompt_path = result.get("prompt_path")
 
-            if transcript_path.exists():
-                storage.upload(transcript_path, f"{job_id}/transcript.json")
+            if transcript_path and Path(transcript_path).exists():
+                storage.upload(
+                    str(transcript_path),
+                    f"jobs/{job_id}/transcript.json",
+                )
 
-            if candidates_path.exists():
-                storage.upload(candidates_path, f"{job_id}/candidates.json")
+            if candidates_path and Path(candidates_path).exists():
+                storage.upload(
+                    str(candidates_path),
+                    f"jobs/{job_id}/candidates.json",
+                )
 
-            if prompt_path.exists():
-                storage.upload(prompt_path, f"{job_id}/prompt.txt")
+            if prompt_path and Path(prompt_path).exists():
+                storage.upload(
+                    str(prompt_path),
+                    f"jobs/{job_id}/prompt.txt",
+                )
 
-            logger.info("Stage prepare uploaded to MinIO.")
+            logger.info(f"{job_id} prepare stage uploaded to MinIO")
+            return
 
-        elif result["status"] == "success":
+        # ==========================================
+        # FINALIZE
+        # ==========================================
 
-            storage.upload(result["cuts_path"], f"{job_id}/cuts.json")
+        if result["status"] == "success":
 
-            for file_path in result["cut_files"]:
-                filename = file_path.split("/")[-1]
-                storage.upload(file_path, f"{job_id}/cuts/{filename}")
+            # salva resposta da IA
+            if manual_response:
+                ai_output_path = Path(f"/tmp/{job_id}_ai_output.json")
+
+                with open(ai_output_path, "w", encoding="utf-8") as f:
+                    json.dump(manual_response, f, ensure_ascii=False, indent=2)
+
+                if ai_output_path.exists():
+                    storage.upload(
+                        str(ai_output_path),
+                        f"jobs/{job_id}/ai_output.json",
+                    )
+
+                try:
+                    ai_output_path.unlink()
+                except Exception:
+                    pass
+
+            # salva cortes
+            cut_files = result.get("cut_files", [])
+
+            for file_path in cut_files:
+                path_obj = Path(file_path)
+
+                if path_obj.exists():
+                    storage.upload(
+                        str(path_obj),
+                        f"jobs/{job_id}/cuts/{path_obj.name}",
+                    )
 
             logger.info(f"{job_id} finalize stage uploaded to MinIO")
+            return
 
-        else:
-            logger.error(f"Unexpected pipeline result: {result}")
+        # ==========================================
+        # erro / retorno inesperado
+        # ==========================================
+
+        logger.error(f"Unexpected pipeline result: {result}")
 
     except Exception as e:
         logger.exception(f"Pipeline failed for job {job_id}: {e}")
@@ -73,7 +145,9 @@ def run_pipeline(job: dict):
 def main():
 
     redis_client = redis.Redis(
-        host=settings.redis_host, port=settings.redis_port, decode_responses=True
+        host=settings.redis_host,
+        port=settings.redis_port,
+        decode_responses=True,
     )
 
     logger.info("VOXMIND WORKER READY — waiting for jobs")
