@@ -14,22 +14,37 @@ class VideoCutter:
 
         for index, cut in enumerate(cuts, start=1):
 
-            output_path = self.work_dir / f"cut_{index:02d}.mp4"
+            start = float(cut["start"])
+            end = float(cut["end"])
 
-            start = cut["start"]
-            duration = cut["end"] - cut["start"]
+            duration = end - start
+
+            # ignora cortes absurdos
+            if duration < 25:
+                continue
+
+            output_path = self.work_dir / f"cut_{index:02d}.mp4"
 
             command = [
                 "ffmpeg",
+                "-y",
                 "-ss", str(start),
                 "-i", str(video_path),
                 "-t", str(duration),
-                "-c", "copy",
+                "-c:v", "libx264",
+                "-preset", "veryfast",
+                "-crf", "23",
+                "-c:a", "aac",
+                "-movflags", "+faststart",
                 str(output_path),
-                "-y"
             ]
 
-            subprocess.run(command, check=True)
+            subprocess.run(
+                command,
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
 
             output_files.append(output_path)
 

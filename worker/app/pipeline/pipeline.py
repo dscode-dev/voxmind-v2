@@ -252,11 +252,34 @@ para continuar o processamento.
         self._log("🎬 Generating cuts...")
 
         cuts = self.manual_response.get("shorts_content", [])
-
+        
         if not cuts:
             raise RuntimeError("shorts_content is empty")
-
-        cut_files = self.cutter.cut(video_path, cuts)
+        
+        # filtra cortes muito curtos
+        filtered_cuts = []
+        
+        for cut in cuts:
+        
+            start = float(cut["start"])
+            end = float(cut["end"])
+        
+            if end <= start:
+                continue
+            
+            duration = end - start
+        
+            if duration < 25:
+                continue
+            
+            filtered_cuts.append(cut)
+        
+        self._log(f"Valid cuts after filtering: {len(filtered_cuts)}")
+        
+        if not filtered_cuts:
+            raise RuntimeError("No valid cuts after filtering")
+        
+        cut_files = self.cutter.cut(video_path, filtered_cuts)
 
         self._log(f"📦 {len(cut_files)} cuts generated")
 
