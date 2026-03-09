@@ -2,6 +2,7 @@ import json
 import logging
 import uuid
 import os
+import tempfile
 
 from telegram import Update
 from telegram.ext import (
@@ -29,12 +30,16 @@ class VoxmindBot:
 
         self.app = ApplicationBuilder().token(settings.telegram_bot_token).build()
 
+        # comandos
         self.app.add_handler(CommandHandler("new", self.handle_new))
+        self.app.add_handler(CommandHandler("finalize", self.handle_finalize))
 
+        # json enviado como arquivo
         self.app.add_handler(
-            MessageHandler(filters.Document.ALL, self.handle_document)
+            MessageHandler(filters.Document.FileExtension("json"), self.handle_document)
         )
 
+        # json enviado como texto
         self.app.add_handler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text)
         )
@@ -50,6 +55,7 @@ class VoxmindBot:
             return
 
         video_url = context.args[-1]
+
         job_id = str(uuid.uuid4())
 
         registry.register(job_id, video_url)
@@ -71,48 +77,94 @@ Aguarde a transcrição e o prompt.
         )
 
     # ==================================================
-    # JSON via arquivo
+    # /finalize + arquivo JSON
+    # ==================================================
+
+    async def handle_finalize(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+        document = update.message.document
+
+        if not document:
+
+            await update.message.reply_text(
+                """
+Envie o comando junto com o arquivo JSON.
+
+Exemplo:
+
+/finalize
+📎 response.json
+"""
+            )
+
+            return
+
+        await self._process_json_document(update, context, document)
+
+    # ==================================================
+    # JSON enviado como arquivo (sem comando)
     # ==================================================
 
     async def handle_document(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         document = update.message.document
 
-        if not document.file_name.endswith(".json"):
-            await update.message.reply_text("Envie um arquivo JSON.")
-            return
+        await self._process_json_document(update, context, document)
 
-        file = await context.bot.get_file(document.file_id)
+    # ==================================================
+    # processamento central do JSON
+    # ==================================================
 
-        file_path = f"/tmp/{document.file_name}"
-
-        await file.download_to_drive(file_path)
+    async def _process_json_document(self, update, context, document):
 
         try:
 
+            if not document.file_name.endswith(".json"):
+
+                await update.message.reply_text("Envie um arquivo JSON.")
+
+                return
+
+            file = await context.bot.get_file(document.file_id)
+
+            tmp_dir = tempfile.gettempdir()
+
+            file_path = os.path.join(tmp_dir, document.file_name)
+
+            await file.download_to_drive(file_path)
+
             with open(file_path) as f:
+
                 data = json.load(f)
 
         except Exception:
+
             await update.message.reply_text("JSON inválido.")
+
             return
 
         job_id = data.get("job_id")
 
         if not job_id:
+
             await update.message.reply_text("JSON precisa conter job_id.")
+
             return
 
         if "shorts_content" not in data:
+
             await update.message.reply_text(
                 "JSON inválido. Campo obrigatório: shorts_content"
             )
+
             return
 
         video_url = registry.get_video_url(job_id)
 
         if not video_url:
+
             await update.message.reply_text("Job ID não encontrado.")
+
             return
 
         publisher.publish(
@@ -132,10 +184,13 @@ Gerando cortes...
 """
         )
 
-        os.remove(file_path)
+        try:
+            os.remove(file_path)
+        except Exception:
+            pass
 
     # ==================================================
-    # JSON via texto
+    # JSON enviado como texto
     # ==================================================
 
     async def handle_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -143,26 +198,35 @@ Gerando cortes...
         text = update.message.text.strip()
 
         try:
+
             data = json.loads(text)
+
         except Exception:
+
             return
 
         job_id = data.get("job_id")
 
         if not job_id:
+
             await update.message.reply_text("JSON precisa conter job_id.")
+
             return
 
         if "shorts_content" not in data:
+
             await update.message.reply_text(
                 "JSON inválido. Campo obrigatório: shorts_content"
             )
+
             return
 
         video_url = registry.get_video_url(job_id)
 
         if not video_url:
+
             await update.message.reply_text("Job ID não encontrado.")
+
             return
 
         publisher.publish(
@@ -181,4 +245,7 @@ Gerando cortes...
     # ==================================================
 
     def run(self):
+
+        logger.info("Starting Voxmind Telegram Bot")
+
         self.app.run_polling()
