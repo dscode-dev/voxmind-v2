@@ -10,11 +10,15 @@ from app.pipeline.chunker import Chunker
 from app.pipeline.candidate_builder import CandidateBuilder
 from app.pipeline.scorer import Scorer
 from app.pipeline.manual_prompt_builder import ManualPromptBuilder
+from app.pipeline.hook_detector import HookDetector
+from app.pipeline.audio_peak_detector import AudioPeakDetector
+from app.pipeline.story_shift_detector import StoryShiftDetector
 
 from app.integrations.telegram_sender import TelegramSender
 from app.settings import settings
 
 from app.storage.minio_client import MinioStorage
+
 
 
 class Pipeline:
@@ -29,6 +33,9 @@ class Pipeline:
         self.video_url = video_url
         self.job_id = job_id
         self.manual_response = manual_response
+        self.hook_detector = HookDetector()
+        self.audio_peak_detector = AudioPeakDetector()
+        self.story_shift_detector = StoryShiftDetector()
 
         self.work_dir = Path(f"/tmp/voxmind/{job_id}")
         self.work_dir.mkdir(parents=True, exist_ok=True)
@@ -138,8 +145,20 @@ ERROR:
 
         chunks = self.chunker.chunk(segments)
 
-        self._log("🔥 Extracting candidates...")
+        self._log("🔎 Detecting hooks...")
 
+        chunks = self.hook_detector.analyze(chunks)
+
+        self._log("🎧 Detecting audio peaks...")
+
+        chunks = self.audio_peak_detector.analyze(video_path, chunks)
+
+        self._log("📖 Detecting narrative shifts...")
+        
+        chunks = self.story_shift_detector.analyze(chunks)
+        
+        self._log("🔥 Extracting candidates...")
+        
         candidates = self.builder.build(chunks)
 
         self._log("📊 Ranking candidates...")

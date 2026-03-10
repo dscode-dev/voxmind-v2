@@ -19,8 +19,7 @@ class VideoCutter:
 
             duration = end - start
 
-            # ignora cortes absurdos
-            if duration < 25:
+            if duration < 30:
                 continue
 
             output_path = self.work_dir / f"cut_{index:02d}.mp4"
@@ -29,13 +28,14 @@ class VideoCutter:
                 "ffmpeg",
                 "-y",
                 "-ss", str(start),
+                "-to", str(end),
                 "-i", str(video_path),
-                "-t", str(duration),
                 "-c:v", "libx264",
-                "-preset", "veryfast",
+                "-preset", "fast",
                 "-crf", "23",
                 "-c:a", "aac",
                 "-movflags", "+faststart",
+                "-avoid_negative_ts", "make_zero",
                 str(output_path),
             ]
 

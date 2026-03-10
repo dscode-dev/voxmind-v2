@@ -24,22 +24,22 @@ publisher = QueuePublisher()
 registry = JobRegistry()
 
 
+MIN_CUT_DURATION = 30
+
+
 class VoxmindBot:
 
     def __init__(self):
 
         self.app = ApplicationBuilder().token(settings.telegram_bot_token).build()
 
-        # comandos
         self.app.add_handler(CommandHandler("new", self.handle_new))
         self.app.add_handler(CommandHandler("finalize", self.handle_finalize))
 
-        # json enviado como arquivo
         self.app.add_handler(
             MessageHandler(filters.Document.FileExtension("json"), self.handle_document)
         )
 
-        # json enviado como texto
         self.app.add_handler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text)
         )
@@ -102,7 +102,7 @@ Exemplo:
         await self._process_json_document(update, context, document)
 
     # ==================================================
-    # JSON enviado como arquivo (sem comando)
+    # JSON enviado como arquivo
     # ==================================================
 
     async def handle_document(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -110,6 +110,35 @@ Exemplo:
         document = update.message.document
 
         await self._process_json_document(update, context, document)
+
+    # ==================================================
+    # Validação dos cortes
+    # ==================================================
+
+    def _validate_shorts(self, data: dict):
+
+        shorts = data.get("shorts_content")
+
+        if not isinstance(shorts, list) or not shorts:
+            raise RuntimeError("shorts_content must be a non-empty list")
+
+        for index, cut in enumerate(shorts):
+
+            if "start" not in cut or "end" not in cut:
+                raise RuntimeError(f"Cut {index} missing start/end")
+
+            start = float(cut["start"])
+            end = float(cut["end"])
+
+            if start >= end:
+                raise RuntimeError(f"Cut {index} start >= end")
+
+            duration = end - start
+
+            if duration < MIN_CUT_DURATION:
+                raise RuntimeError(
+                    f"Cut {index} duration too short ({duration:.2f}s). Minimum is {MIN_CUT_DURATION}s"
+                )
 
     # ==================================================
     # processamento central do JSON
@@ -129,7 +158,9 @@ Exemplo:
 
             tmp_dir = tempfile.gettempdir()
 
-            file_path = os.path.join(tmp_dir, document.file_name)
+            unique_name = f"{uuid.uuid4()}_{document.file_name}"
+
+            file_path = os.path.join(tmp_dir, unique_name)
 
             await file.download_to_drive(file_path)
 
@@ -137,6 +168,7 @@ Exemplo:
                 text = f.read()
 
             text = text.replace("“", '"').replace("”", '"')
+
             data = json.loads(text)
 
         except Exception:
@@ -157,6 +189,17 @@ Exemplo:
 
             await update.message.reply_text(
                 "JSON inválido. Campo obrigatório: shorts_content"
+            )
+
+            return
+
+        try:
+            self._validate_shorts(data)
+
+        except Exception as e:
+
+            await update.message.reply_text(
+                f"JSON inválido: {str(e)}"
             )
 
             return
@@ -200,11 +243,8 @@ Gerando cortes...
         text = update.message.text.strip()
 
         try:
-
             data = json.loads(text)
-
         except Exception:
-
             return
 
         job_id = data.get("job_id")
@@ -219,6 +259,17 @@ Gerando cortes...
 
             await update.message.reply_text(
                 "JSON inválido. Campo obrigatório: shorts_content"
+            )
+
+            return
+
+        try:
+            self._validate_shorts(data)
+
+        except Exception as e:
+
+            await update.message.reply_text(
+                f"JSON inválido: {str(e)}"
             )
 
             return

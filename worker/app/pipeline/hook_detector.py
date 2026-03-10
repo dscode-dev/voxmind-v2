@@ -11,14 +11,28 @@ HOOK_PATTERNS = [
     r"olha isso",
     r"preste atenção",
     r"isso explica",
+    r"\bnunca\b",
+    r"\bningu[eé]m\b",
+    r"\bvoc[eê] sabia\b",
+    r"\bo problema\b",
+    r"\bo segredo\b",
+    r"\bningu[eé]m fala\b",
 ]
 
 
+QUESTION_PATTERN = r"\?"
+
+CONTRAST_PATTERNS = [
+    r"\bmas\b",
+    r"\bpor[eé]m\b",
+    r"\bso que\b",
+]
+
 class HookDetector:
 
-    def detect(self, chunks: List[Dict]) -> List[Dict]:
+    def analyze(self, chunks: List[Dict]) -> List[Dict]:
 
-        processed = []
+        enriched = []
 
         for chunk in chunks:
 
@@ -26,12 +40,31 @@ class HookDetector:
 
             hook_score = 0
 
-            for pattern in HOOK_PATTERNS:
-                if re.search(pattern, text):
-                    hook_score += 1
+            # hook phrases
+            for p in HOOK_PATTERNS:
+                if re.search(p, text):
+                    hook_score += 3
 
-            chunk["hook_score"] = hook_score
+            # questions
+            if re.search(QUESTION_PATTERN, text):
+                hook_score += 2
 
-            processed.append(chunk)
+            # contrast
+            for p in CONTRAST_PATTERNS:
+                if re.search(p, text):
+                    hook_score += 2
 
-        return processed
+            # strong start
+            first_words = " ".join(text.split()[:6])
+
+            if any(re.search(p, first_words) for p in HOOK_PATTERNS):
+                hook_score += 3
+
+            enriched.append(
+                {
+                    **chunk,
+                    "hook_score": hook_score
+                }
+            )
+
+        return enriched
