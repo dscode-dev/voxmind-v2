@@ -20,7 +20,6 @@ from app.settings import settings
 from app.storage.minio_client import MinioStorage
 
 
-
 class Pipeline:
 
     def __init__(
@@ -33,11 +32,8 @@ class Pipeline:
         self.video_url = video_url
         self.job_id = job_id
         self.manual_response = manual_response
-        self.hook_detector = HookDetector()
-        self.audio_peak_detector = AudioPeakDetector()
-        self.story_shift_detector = StoryShiftDetector()
 
-        self.work_dir = Path(f"/tmp/voxmind/{job_id}")
+        self.work_dir = Path(settings.work_dir) / job_id
         self.work_dir.mkdir(parents=True, exist_ok=True)
 
         self.storage = MinioStorage()
@@ -50,11 +46,16 @@ class Pipeline:
             language=settings.asr_language,
             beam_size=settings.asr_beam_size,
             vad_filter=settings.asr_vad_filter,
+            segment_duration_sec=settings.asr_segment_duration_sec,
+            parallel_workers=settings.asr_parallel_workers,
         )
 
         self.chunker = Chunker()
         self.builder = CandidateBuilder()
         self.scorer = Scorer()
+        self.hook_detector = HookDetector()
+        self.audio_peak_detector = AudioPeakDetector()
+        self.story_shift_detector = StoryShiftDetector()
 
         self.cutter = VideoCutter(self.work_dir)
 
@@ -134,7 +135,7 @@ ERROR:
             f"jobs/{self.job_id}/video.mp4"
         )
 
-        self._log("🧠 Transcribing video...")
+        self._log("🧠 Transcribing video in segments...")
 
         segments = self.transcriber.transcribe(video_path)
 
@@ -154,11 +155,11 @@ ERROR:
         chunks = self.audio_peak_detector.analyze(video_path, chunks)
 
         self._log("📖 Detecting narrative shifts...")
-        
+
         chunks = self.story_shift_detector.analyze(chunks)
-        
+
         self._log("🔥 Extracting candidates...")
-        
+
         candidates = self.builder.build(chunks)
 
         self._log("📊 Ranking candidates...")
@@ -271,33 +272,32 @@ para continuar o processamento.
         self._log("🎬 Generating cuts...")
 
         cuts = self.manual_response.get("shorts_content", [])
-        
+
         if not cuts:
             raise RuntimeError("shorts_content is empty")
-        
-        # filtra cortes muito curtos
+
         filtered_cuts = []
-        
+
         for cut in cuts:
-        
+
             start = float(cut["start"])
             end = float(cut["end"])
-        
+
             if end <= start:
                 continue
-            
+
             duration = end - start
-        
+
             if duration < 25:
                 continue
-            
+
             filtered_cuts.append(cut)
-        
+
         self._log(f"Valid cuts after filtering: {len(filtered_cuts)}")
-        
+
         if not filtered_cuts:
             raise RuntimeError("No valid cuts after filtering")
-        
+
         cut_files = self.cutter.cut(video_path, filtered_cuts)
 
         self._log(f"📦 {len(cut_files)} cuts generated")
