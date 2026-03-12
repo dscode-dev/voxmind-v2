@@ -64,9 +64,42 @@ class ClipAssetType(str, enum.Enum):
     PROMPT = "prompt"
     AI_RESPONSE = "ai_response"
 
-
 class AssetStatus(str, enum.Enum):
     READY = "ready"
     PROCESSING = "processing"
     FAILED = "failed"
     DELETED = "deleted"
+    
+class JobEventType(str, enum.Enum):
+
+    JOB_CREATED = "job_created"
+
+    DOWNLOAD_STARTED = "download_started"
+    DOWNLOAD_FINISHED = "download_finished"
+
+    TRANSCRIPTION_STARTED = "transcription_started"
+    TRANSCRIPTION_FINISHED = "transcription_finished"
+
+    LLM_REQUEST_STARTED = "llm_request_started"
+    LLM_REQUEST_FINISHED = "llm_request_finished"
+
+    CUT_GENERATED = "cut_generated"
+
+    RENDER_STARTED = "render_started"
+    RENDER_FINISHED = "render_finished"
+
+    JOB_COMPLETED = "job_completed"
+    JOB_FAILED = "job_failed"
+
+
+class UsageMetricType(str, enum.Enum):
+
+    GPU_SECONDS = "gpu_seconds"
+
+    CPU_SECONDS = "cpu_seconds"
+
+    STORAGE_BYTES = "storage_bytes"
+
+    LLM_TOKENS = "llm_tokens"
+
+    TRANSCRIPTION_SECONDS = "transcription_seconds"

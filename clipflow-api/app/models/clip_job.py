@@ -3,17 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import (
-    CheckConstraint,
-    Enum,
-    ForeignKey,
-    Index,
-    Integer,
-    Numeric,
-    String,
-    Text,
-    DateTime,
-)
+from sqlalchemy import CheckConstraint, Enum, ForeignKey, Index, Integer, Numeric, String, Text, DateTime
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -26,9 +16,7 @@ class ClipJob(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __table_args__ = (
         Index("ix_clip_jobs_user_status", "user_id", "status"),
         Index("ix_clip_jobs_purchase_status", "purchase_id", "status"),
-        CheckConstraint(
-            "video_duration_sec >= 0", name="clip_jobs_video_duration_non_negative"
-        ),
+        CheckConstraint("video_duration_sec >= 0", name="clip_jobs_video_duration_non_negative"),
     )
 
     user_id: Mapped[uuid.UUID] = mapped_column(
@@ -76,39 +64,27 @@ class ClipJob(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     video_title: Mapped[str | None] = mapped_column(String(500), nullable=True)
     video_duration_sec: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
-    pipeline_stage: Mapped[str] = mapped_column(
-        String(64), nullable=False, default="prepare"
-    )
+    pipeline_stage: Mapped[str] = mapped_column(String(64), nullable=False, default="prepare")
     worker_job_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     queued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
-    prompt_mode: Mapped[str] = mapped_column(
-        String(64), nullable=False, default="manual"
-    )
+    prompt_mode: Mapped[str] = mapped_column(String(64), nullable=False, default="manual")
     llm_provider: Mapped[str | None] = mapped_column(String(64), nullable=True)
     llm_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
-    requested_shorts_count: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=5
-    )
+    requested_shorts_count: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
     merge_enabled: Mapped[bool] = mapped_column(nullable=False, default=True)
 
-    transcript_storage_key: Mapped[str | None] = mapped_column(
-        String(500), nullable=True
-    )
+    transcript_storage_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
     prompt_storage_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    ai_response_storage_key: Mapped[str | None] = mapped_column(
-        String(500), nullable=True
-    )
+    ai_response_storage_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    processing_cost_usd: Mapped[float | None] = mapped_column(
-        Numeric(10, 4), nullable=True
-    )
+    processing_cost_usd: Mapped[float | None] = mapped_column(Numeric(10, 4), nullable=True)
 
     metadata_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
@@ -116,6 +92,5 @@ class ClipJob(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     purchase = relationship("Purchase", back_populates="jobs")
     product = relationship("BillingProduct", back_populates="jobs")
 
-    assets = relationship(
-        "ClipAsset", back_populates="job", cascade="all, delete-orphan"
-    )
+    assets = relationship("ClipAsset", back_populates="job", cascade="all, delete-orphan")
+    events = relationship("JobEvent", back_populates="job", cascade="all, delete-orphan")

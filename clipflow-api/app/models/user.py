@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from sqlalchemy import Boolean, Enum, Index, String
+from datetime import datetime
+
+from sqlalchemy import Boolean, DateTime, Enum, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -10,13 +12,27 @@ from app.models.enums import UserRole, UserStatus
 class User(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "users"
     __table_args__ = (
-        Index("ix_users_email_status", "email", "status"),
+        Index("ix_users_phone_status", "phone_number", "status"),
     )
 
-    email: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
-    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    # ==============================
+    # Identidade básica
+    # ==============================
 
-    full_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    phone_number: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        unique=True,
+    )
+
+    full_name: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+
+    # ==============================
+    # Autorização / Controle
+    # ==============================
 
     role: Mapped[UserRole] = mapped_column(
         Enum(UserRole, name="user_role_enum"),
@@ -27,17 +43,134 @@ class User(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     status: Mapped[UserStatus] = mapped_column(
         Enum(UserStatus, name="user_status_enum"),
         nullable=False,
-        default=UserStatus.PENDING_VERIFICATION,
+        default=UserStatus.ACTIVE,
     )
 
-    email_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    marketing_opt_in: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # ==============================
+    # Sistema de créditos
+    # ==============================
 
-    stripe_customer_id: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True)
-    mercadopago_customer_id: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True)
+    credits: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+    )
 
-    last_login_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # ==============================
+    # Segurança JWT
+    # ==============================
 
-    purchases = relationship("Purchase", back_populates="user", cascade="all, delete-orphan")
-    jobs = relationship("ClipJob", back_populates="user", cascade="all, delete-orphan")
-    idempotency_keys = relationship("IdempotencyKey", back_populates="user", cascade="all, delete-orphan")
+    token_version: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=1,
+    )
+
+    token_created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    last_seen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    # ==============================
+    # Fingerprint leve
+    # ==============================
+
+    fingerprint_hash: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+
+    last_login_ip: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+    )
+
+    marketing_opt_in: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+    )
+
+    # ==============================
+    # Billing externo
+    # ==============================
+
+    stripe_customer_id: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+        unique=True,
+    )
+
+    mercadopago_customer_id: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+        unique=True,
+    )
+
+    # ==============================
+    # OTP / Challenge
+    # ==============================
+
+    otp_hash: Mapped[str | None] = mapped_column(
+        String(128),
+        nullable=True,
+    )
+
+    otp_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    otp_attempts: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+    )
+
+    otp_last_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    otp_locked_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    otp_challenge_id: Mapped[str | None] = mapped_column(
+        String(128),
+        nullable=True,
+        index=True,
+    )
+
+    otp_challenge_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    # ==============================
+    # Relacionamentos
+    # ==============================
+
+    purchases = relationship(
+        "Purchase",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+
+    jobs = relationship(
+        "ClipJob",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+
+    idempotency_keys = relationship(
+        "IdempotencyKey",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
