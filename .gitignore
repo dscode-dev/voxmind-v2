@@ -2,3 +2,4 @@
 venv/
 env
 k8s/
+__pycache__
