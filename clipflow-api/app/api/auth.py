@@ -20,6 +20,10 @@ from app.services.otp_service import (
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
+# ==========================================
+# Schemas
+# ==========================================
+
 class StartAuthInput(BaseModel):
     phone_number: str = Field(..., min_length=5, max_length=32)
     country_code: str = Field(..., min_length=1, max_length=10)
@@ -50,6 +54,10 @@ class MeResponse(BaseModel):
     credits: int
     status: str
 
+
+# ==========================================
+# Start authentication (OTP request)
+# ==========================================
 
 @router.post("/start", response_model=StartAuthResponse)
 def start_auth(
@@ -103,7 +111,7 @@ def start_auth(
 
     db.commit()
 
-    # TODO: integrar provedor real de SMS
+    # TODO integrar provedor real de SMS
     print("OTP:", code)
 
     return StartAuthResponse(
@@ -112,6 +120,10 @@ def start_auth(
         expires_in_seconds=300,
     )
 
+
+# ==========================================
+# Verify OTP
+# ==========================================
 
 @router.post("/verify", response_model=VerifyAuthResponse)
 def verify_code(
@@ -202,6 +214,10 @@ def verify_code(
     return VerifyAuthResponse(status="authenticated")
 
 
+# ==========================================
+# Current user
+# ==========================================
+
 @router.get("/me", response_model=MeResponse)
 def me(user: User = Depends(get_current_user)):
     return MeResponse(
@@ -212,6 +228,10 @@ def me(user: User = Depends(get_current_user)):
         status=user.status.name,
     )
 
+
+# ==========================================
+# Logout
+# ==========================================
 
 @router.post("/logout")
 def logout(response: Response):
