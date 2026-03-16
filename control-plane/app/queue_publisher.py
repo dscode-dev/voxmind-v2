@@ -19,7 +19,10 @@ class QueuePublisher:
         video_url: str,
         job_id: str,
         pipeline_stage: str,
-        manual_response: dict | None = None
+        manual_response: dict | None = None,
+        clip_mode: str = "short_serie",
+        video_ratio: str = "portrait",
+        build_ia: bool = False,
     ):
 
         payload = {
@@ -27,6 +30,9 @@ class QueuePublisher:
             "job_id": job_id,
             "pipeline_stage": pipeline_stage,
             "manual_response": manual_response,
+            "clip_mode": clip_mode,
+            "video_ratio": video_ratio,
+            "build_ia": build_ia,
         }
 
         self.redis.lpush(

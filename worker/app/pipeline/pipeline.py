@@ -9,7 +9,7 @@ from app.video.cutter import VideoCutter
 from app.pipeline.chunker import Chunker
 from app.pipeline.candidate_builder import CandidateBuilder
 from app.pipeline.scorer import Scorer
-from app.pipeline.manual_prompt_builder import ManualPromptBuilder
+from worker.app.prompts.manual_prompt_builder import ManualPromptBuilder
 from app.pipeline.hook_detector import HookDetector
 from app.pipeline.audio_peak_detector import AudioPeakDetector
 from app.pipeline.story_shift_detector import StoryShiftDetector
@@ -27,11 +27,18 @@ class Pipeline:
         video_url: str,
         job_id: str,
         manual_response: dict | None = None,
+        clip_mode: str = "short_serie",
+        video_ratio: str = "portrait",
+        build_ia: bool = False,
     ):
 
         self.video_url = video_url
         self.job_id = job_id
         self.manual_response = manual_response
+
+        self.clip_mode = clip_mode
+        self.video_ratio = video_ratio
+        self.build_ia = build_ia
 
         self.work_dir = Path(settings.work_dir) / job_id
         self.work_dir.mkdir(parents=True, exist_ok=True)

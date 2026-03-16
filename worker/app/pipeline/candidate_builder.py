@@ -1,5 +1,5 @@
-import re
 from typing import List, Dict
+import re
 
 
 EMOTIONAL_WORDS = [
@@ -20,6 +20,11 @@ EMOTIONAL_WORDS = [
 ]
 
 
+NUMERIC_PATTERN = r"\b\d+\b"
+QUESTION_PATTERN = r"\?"
+CONTRAST_PATTERN = r"\bmas\b|\bpor[eé]m\b|\bso que\b"
+
+
 class CandidateBuilder:
 
     def build(self, chunks: List[Dict]) -> List[Dict]:
@@ -30,64 +35,61 @@ class CandidateBuilder:
 
             text = chunk["text"].lower()
 
-            score = chunk.get("hook_score", 0)
-
+            hook_score = chunk.get("hook_score", 0)
             audio_peak = chunk.get("audio_peak_score", 0)
-            
-            if audio_peak > 0.7:
-                score += 3
-            elif audio_peak > 0.4:
-                score += 1
-            
-            # narrativa
+
             setup = chunk.get("story_setup", 0)
             conflict = chunk.get("story_conflict", 0)
             reveal = chunk.get("story_reveal", 0)
-            
-            score += setup + (conflict * 2) + (reveal * 3)
-            
-            # energia emocional do áudio
-            if audio_peak > 0.7:
-                score += 3
-            elif audio_peak > 0.4:
-                score += 1
 
-            # emotional triggers
+            narrative_score = setup + (conflict * 2) + (reveal * 3)
+
+            emotional_score = 0
+
             for word in EMOTIONAL_WORDS:
                 if word in text:
-                    score += 2
+                    emotional_score += 2
 
-            # question
-            if "?" in text:
-                score += 3
+            question_score = 3 if re.search(QUESTION_PATTERN, text) else 0
 
-            # contrast
-            if re.search(r"\bmas\b|\bporém\b|\bso que\b", text):
-                score += 2
+            contrast_score = 2 if re.search(CONTRAST_PATTERN, text) else 0
 
-            # numbers
-            if re.search(r"\b\d+\b", text):
-                score += 1
+            number_score = 1 if re.search(NUMERIC_PATTERN, text) else 0
 
-            # strong start
-            first_words = " ".join(text.split()[:6])
+            length_score = 1 if len(text.split()) > 20 else 0
 
-            if any(word in first_words for word in EMOTIONAL_WORDS):
-                score += 3
+            audio_score = 0
 
-            # text length bonus
-            if len(text.split()) > 20:
-                score += 1
+            if audio_peak > 0.7:
+                audio_score = 4
+            elif audio_peak > 0.4:
+                audio_score = 2
 
-            if score >= 4:
+            total = (
+                hook_score
+                + narrative_score
+                + emotional_score
+                + question_score
+                + contrast_score
+                + number_score
+                + length_score
+                + audio_score
+            )
 
-                candidates.append(
-                    {
-                        "start": chunk["start"],
-                        "end": chunk["end"],
-                        "text": chunk["text"],
-                        "heuristic_score": score,
-                    }
-                )
+            if total < 5:
+                continue
+
+            candidates.append(
+                {
+                    "start": chunk["start"],
+                    "end": chunk["end"],
+                    "text": chunk["text"],
+                    "hook_score": hook_score,
+                    "narrative_score": narrative_score,
+                    "emotional_score": emotional_score,
+                    "audio_score": audio_score,
+                    "total_score": total,
+                }
+            )
 
         return candidates

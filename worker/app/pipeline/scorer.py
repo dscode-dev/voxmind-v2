@@ -1,75 +1,20 @@
 from typing import List, Dict
-import re
-
-
-STRONG_PATTERNS = [
-    r"\bnunca\b",
-    r"\bningu[eé]m\b",
-    r"\bverdade\b",
-    r"\bsegredo\b",
-    r"\bproblema\b",
-    r"\berro\b",
-    r"\babsurdo\b",
-    r"\bchocante\b",
-]
-
-CONTRAST_PATTERNS = [
-    r"\bmas\b",
-    r"\bpor[eé]m\b",
-    r"\bso que\b",
-]
-
-QUESTION_PATTERNS = [
-    r"\?",
-]
 
 
 class Scorer:
 
-    def __init__(self, max_candidates: int = 12, min_gap: int = 15):
-
+    def __init__(
+        self,
+        max_candidates: int = 10,
+        min_gap: int = 18,
+    ):
         self.max_candidates = max_candidates
         self.min_gap = min_gap
-
-    def _semantic_score(self, text: str) -> int:
-
-        text = text.lower()
-
-        score = 0
-
-        for p in STRONG_PATTERNS:
-            if re.search(p, text):
-                score += 3
-
-        for p in CONTRAST_PATTERNS:
-            if re.search(p, text):
-                score += 2
-
-        for p in QUESTION_PATTERNS:
-            if re.search(p, text):
-                score += 2
-
-        if len(text.split()) > 25:
-            score += 1
-
-        return score
 
     def score(self, candidates: List[Dict]) -> List[Dict]:
 
         if not candidates:
             return []
-
-        for c in candidates:
-
-            semantic = self._semantic_score(c["text"])
-
-            c["semantic_score"] = semantic
-
-            c["total_score"] = (
-                c.get("heuristic_score", 0)
-                + semantic
-                + (c.get("audio_peak_score", 0) * 3)
-            ) 
 
         ranked = sorted(
             candidates,
@@ -79,23 +24,72 @@ class Scorer:
 
         results = []
 
-        for c in ranked:
+        for candidate in ranked:
 
             if len(results) >= self.max_candidates:
                 break
 
-            if any(abs(c["start"] - r["start"]) < self.min_gap for r in results):
+            if self._too_close(candidate, results):
                 continue
 
             results.append(
                 {
-                    "start": c["start"],
-                    "end": c["end"],
-                    "text": c["text"],
-                    "heuristic_score": c.get("heuristic_score", 0),
-                    "semantic_score": c.get("semantic_score", 0),
-                    "total_score": c.get("total_score", 0),
+                    "start": candidate["start"],
+                    "end": candidate["end"],
+                    "text": candidate["text"],
+                    "total_score": candidate["total_score"],
                 }
             )
 
-        return results
+        return self._expand_windows(results, candidates)
+
+    def _too_close(self, candidate: Dict, results: List[Dict]) -> bool:
+
+        for r in results:
+
+            if abs(candidate["start"] - r["start"]) < self.min_gap:
+                return True
+
+        return False
+
+    def _expand_windows(self, selected: List[Dict], all_candidates: List[Dict]) -> List[Dict]:
+
+        expanded = []
+
+        for cut in selected:
+
+            start = cut["start"]
+            end = cut["end"]
+
+            best_start = start
+            best_end = end
+            best_score = cut["total_score"]
+
+            for candidate in all_candidates:
+
+                if candidate["start"] < start and candidate["end"] <= end:
+
+                    score = candidate["total_score"]
+
+                    if score > best_score * 0.7:
+
+                        best_start = candidate["start"]
+
+                if candidate["end"] > end and candidate["start"] >= start:
+
+                    score = candidate["total_score"]
+
+                    if score > best_score * 0.7:
+
+                        best_end = candidate["end"]
+
+            expanded.append(
+                {
+                    "start": best_start,
+                    "end": best_end,
+                    "text": cut["text"],
+                    "total_score": best_score,
+                }
+            )
+
+        return expanded

@@ -3,3 +3,4 @@ venv/
 env
 k8s/
 __pycache__
+node_modules

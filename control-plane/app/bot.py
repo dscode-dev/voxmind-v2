@@ -23,7 +23,6 @@ logger = logging.getLogger(__name__)
 publisher = QueuePublisher()
 registry = JobRegistry()
 
-
 MIN_CUT_DURATION = 30
 
 
@@ -44,17 +43,56 @@ class VoxmindBot:
             MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text)
         )
 
-    # ==================================================
-    # /new
-    # ==================================================
-
     async def handle_new(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if not context.args:
-            await update.message.reply_text("Uso: /new <url-do-video>")
+            await update.message.reply_text(
+                """
+Uso:
+
+/new [--short | --long | --short-serie]
+     [--portrait | --landscape]
+     [--build-ia]
+     <url>
+"""
+            )
             return
 
-        video_url = context.args[-1]
+        clip_mode = "short_serie"
+        video_ratio = "portrait"
+        build_ia = False
+        video_url = None
+
+        for arg in context.args:
+
+            if arg == "--short":
+                clip_mode = "short"
+
+            elif arg == "--long":
+                clip_mode = "long"
+
+            elif arg == "--short-serie":
+                clip_mode = "short_serie"
+
+            elif arg == "--portrait":
+                video_ratio = "portrait"
+
+            elif arg == "--landscape":
+                video_ratio = "landscape"
+
+            elif arg == "--build-ia":
+                build_ia = True
+
+            elif arg.startswith("http"):
+                video_url = arg
+
+        if not video_url:
+
+            await update.message.reply_text(
+                "URL do vídeo não encontrada.\n\nUso: /new [flags] <url>"
+            )
+
+            return
 
         job_id = str(uuid.uuid4())
 
@@ -64,6 +102,9 @@ class VoxmindBot:
             video_url=video_url,
             job_id=job_id,
             pipeline_stage="prepare",
+            clip_mode=clip_mode,
+            video_ratio=video_ratio,
+            build_ia=build_ia,
         )
 
         await update.message.reply_text(
@@ -72,13 +113,13 @@ class VoxmindBot:
 
 JOB_ID: {job_id}
 
-Aguarde a transcrição e o prompt.
+Mode: {clip_mode}
+Ratio: {video_ratio}
+Auto IA: {"ON" if build_ia else "OFF"}
+
+Aguarde o processamento.
 """
         )
-
-    # ==================================================
-    # /finalize + arquivo JSON
-    # ==================================================
 
     async def handle_finalize(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
 
@@ -101,19 +142,11 @@ Exemplo:
 
         await self._process_json_document(update, context, document)
 
-    # ==================================================
-    # JSON enviado como arquivo
-    # ==================================================
-
     async def handle_document(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         document = update.message.document
 
         await self._process_json_document(update, context, document)
-
-    # ==================================================
-    # Validação dos cortes
-    # ==================================================
 
     def _validate_shorts(self, data: dict):
 
@@ -139,10 +172,6 @@ Exemplo:
                 raise RuntimeError(
                     f"Cut {index} duration too short ({duration:.2f}s). Minimum is {MIN_CUT_DURATION}s"
                 )
-
-    # ==================================================
-    # processamento central do JSON
-    # ==================================================
 
     async def _process_json_document(self, update, context, document):
 
@@ -234,10 +263,6 @@ Gerando cortes...
         except Exception:
             pass
 
-    # ==================================================
-    # JSON enviado como texto
-    # ==================================================
-
     async def handle_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         text = update.message.text.strip()
@@ -292,10 +317,6 @@ Gerando cortes...
         await update.message.reply_text(
             "🚀 Finalização iniciada! Gerando cortes..."
         )
-
-    # ==================================================
-    # run
-    # ==================================================
 
     def run(self):
 
