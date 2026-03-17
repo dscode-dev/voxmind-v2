@@ -9,7 +9,7 @@ from app.video.cutter import VideoCutter
 from app.pipeline.chunker import Chunker
 from app.pipeline.candidate_builder import CandidateBuilder
 from app.pipeline.scorer import Scorer
-from worker.app.prompts.manual_prompt_builder import ManualPromptBuilder
+from app.prompts.manual_prompt_builder import ManualPromptBuilder
 from app.pipeline.hook_detector import HookDetector
 from app.pipeline.audio_peak_detector import AudioPeakDetector
 from app.pipeline.story_shift_detector import StoryShiftDetector
