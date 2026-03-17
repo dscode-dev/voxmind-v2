@@ -45,6 +45,7 @@ class Chunker:
 
         while i < len(segments):
 
+            current_i = i
             start_time = segments[i]["start"]
             text_parts = []
             j = i
@@ -54,13 +55,10 @@ class Chunker:
                 text_parts.append(segments[j]["text"])
 
                 duration = segments[j]["end"] - start_time
-
                 text_joined = " ".join(text_parts).lower()
 
-                if duration >= self.target_duration:
-
-                    if self._is_good_ending(text_joined):
-                        break
+                if duration >= self.target_duration and self._is_good_ending(text_joined):
+                    break
 
                 if duration >= self.max_duration:
                     break
@@ -75,11 +73,17 @@ class Chunker:
             chunk = self._build_chunk(chunk_segments)
 
             if chunk["end"] - chunk["start"] >= self.min_duration:
-
                 if not self._bad_start(chunk["text"]):
                     chunks.append(chunk)
 
-            i = self._advance_index(segments, j)
+            next_i = self._advance_index(segments, j)
+
+            # GARANTIA DE PROGRESSO:
+            # nunca permitir que o índice fique parado ou volte.
+            if next_i <= current_i:
+                i = current_i + 1
+            else:
+                i = next_i
 
         return chunks
 
@@ -113,11 +117,10 @@ class Chunker:
         target_time = segments[current_index]["end"] - self.overlap
 
         for i in range(current_index - 1, -1, -1):
-
             if segments[i]["start"] <= target_time:
                 return i
 
-        return current_index
+        return current_index + 1
 
     def _build_chunk(self, segments: List[Dict]) -> Dict:
 
