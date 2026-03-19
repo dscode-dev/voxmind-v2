@@ -32,10 +32,12 @@ class CandidateBuilder:
         min_total_score: float = 6.0,
         max_candidates_per_window: int = 4,
         window_size_sec: int = 180,
+        max_candidate_duration_sec: int = 90,
     ):
         self.min_total_score = min_total_score
         self.max_candidates_per_window = max_candidates_per_window
         self.window_size_sec = window_size_sec
+        self.max_candidate_duration_sec = max_candidate_duration_sec
 
     def build(self, chunks: List[Dict]) -> List[Dict]:
         if not chunks:
@@ -58,6 +60,9 @@ class CandidateBuilder:
 
         text_lower = text.lower()
         duration = max(float(chunk["end"]) - float(chunk["start"]), 0.01)
+        if duration > self.max_candidate_duration_sec:
+            return None
+
         word_count = len(text.split())
 
         hook_score = float(chunk.get("hook_score", 0))

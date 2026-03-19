@@ -122,3 +122,30 @@ def test_scorer_suppresses_semantically_redundant_candidates():
 
     assert len(ranked) == 1
     assert ranked[0]["candidate_id"] == "cand_1"
+
+
+def test_candidate_builder_rejects_excessively_long_candidates():
+    chunks = [
+        {
+            "start": 0.0,
+            "end": 140.0,
+            "text": "Esse trecho e muito longo para virar candidato de short mesmo tendo narrativa e conclusao.",
+            "hook_score": 4,
+            "audio_peak_score": 0.8,
+            "story_setup": 1,
+            "story_conflict": 1,
+            "story_reveal": 2,
+            "segment_count": 6,
+            "speaker_count": 1,
+            "speakers": ["UNKNOWN"],
+        }
+    ]
+
+    builder = CandidateBuilder(
+        min_total_score=5.0,
+        max_candidate_duration_sec=90,
+    )
+
+    candidates = builder.build(chunks)
+
+    assert candidates == []

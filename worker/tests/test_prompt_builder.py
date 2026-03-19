@@ -65,3 +65,34 @@ def test_manual_prompt_builder_respects_context_budget():
     )
 
     assert len(prompt) < 5000
+
+
+def test_manual_prompt_builder_adapts_when_speakers_are_unknown():
+    transcript = [
+        {"start": 0.0, "end": 12.0, "text": "Bloco inicial de contexto.", "speaker": "UNKNOWN"},
+        {"start": 12.0, "end": 24.0, "text": "Fechamento da ideia principal.", "speaker": "UNKNOWN"},
+    ]
+    candidates = [
+        {
+            "candidate_id": "cand_0001",
+            "start": 0.0,
+            "end": 24.0,
+            "duration": 24.0,
+            "text": "Bloco inicial de contexto. Fechamento da ideia principal.",
+            "total_score": 12.0,
+            "speakers": ["UNKNOWN"],
+            "score_breakdown": {"hook_score": 3.0},
+        }
+    ]
+
+    prompt = ManualPromptBuilder(max_context_chars=2000).build(
+        transcript=transcript,
+        candidates=candidates,
+        job_id="job-789",
+        clip_mode="short",
+        video_ratio="portrait",
+    )
+
+    assert "REGRAS SOBRE LOCUTOR" in prompt
+    assert "Não invente trocas de locutor." in prompt
+    assert "REGRAS ESPECÍFICAS DE LOCUTOR" not in prompt

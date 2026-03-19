@@ -17,7 +17,7 @@ def build_transcript_context(
     transcript: List[Dict],
     candidates: List[Dict],
     max_chars: int,
-    context_padding_sec: int = 12,
+    context_padding_sec: int = 8,
 ) -> str:
     full_text = _format_transcript_segments(transcript)
     if len(full_text) <= max_chars:
@@ -48,7 +48,8 @@ def build_transcript_context(
             selected_segments.append(segment)
 
     selected_segments.sort(key=lambda item: float(item["start"]))
-    focused_text = _format_transcript_segments(selected_segments)
+    focused_segments = _limit_transcript_segments(selected_segments)
+    focused_text = _format_transcript_segments(focused_segments)
 
     if len(focused_text) <= max_chars:
         return focused_text
@@ -90,6 +91,47 @@ def _format_transcript_segments(segments: List[Dict]) -> str:
         lines.append(f"[{start} - {end}] {speaker}: {text}")
 
     return "\n".join(lines)
+
+
+def _limit_transcript_segments(
+    segments: List[Dict],
+    max_segment_duration_sec: float = 24.0,
+) -> List[Dict]:
+    limited = []
+
+    for segment in segments:
+        start = float(segment["start"])
+        end = float(segment["end"])
+        if end - start <= max_segment_duration_sec:
+            limited.append(segment)
+            continue
+
+        text = (segment.get("text") or "").strip()
+        if not text:
+            continue
+
+        midpoint = start + ((end - start) / 2)
+        words = text.split()
+        midpoint_index = max(1, len(words) // 2)
+
+        limited.append(
+            {
+                **segment,
+                "start": start,
+                "end": round(midpoint, 2),
+                "text": " ".join(words[:midpoint_index]).strip(),
+            }
+        )
+        limited.append(
+            {
+                **segment,
+                "start": round(midpoint, 2),
+                "end": end,
+                "text": " ".join(words[midpoint_index:]).strip(),
+            }
+        )
+
+    return limited
 
 
 def _truncate_text(text: str, limit: int) -> str:

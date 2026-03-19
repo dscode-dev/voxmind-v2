@@ -67,6 +67,7 @@ class Pipeline:
             vad_filter=settings.asr_vad_filter,
             segment_duration_sec=settings.asr_segment_duration_sec,
             parallel_workers=settings.asr_parallel_workers,
+            max_merged_segment_duration_sec=settings.asr_max_merged_segment_duration_sec,
         )
         self.diarizer = SpeakerDiarizer(
             enabled=settings.diarization_enabled,
@@ -78,7 +79,9 @@ class Pipeline:
         )
 
         self.chunker = Chunker()
-        self.builder = CandidateBuilder()
+        self.builder = CandidateBuilder(
+            max_candidate_duration_sec=settings.candidate_max_duration_sec,
+        )
         self.scorer = Scorer()
         self.delivery_package_builder = DeliveryPackageBuilder()
         self.auto_review_policy = AutoReviewPolicy(
@@ -311,6 +314,8 @@ ERROR:
             segments,
             ranked,
             self.job_id,
+            clip_mode=self.clip_mode,
+            video_ratio=self.video_ratio,
         )
         self._mark_step("prompt_build", "completed", prompt_chars=len(prompt))
 

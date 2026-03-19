@@ -124,6 +124,10 @@ class Settings(BaseSettings):
         default=2,
         alias="ASR_PARALLEL_WORKERS"
     )
+    asr_max_merged_segment_duration_sec: int = Field(
+        default=18,
+        alias="ASR_MAX_MERGED_SEGMENT_DURATION_SEC"
+    )
 
     diarization_enabled: bool = Field(
         default=False,
@@ -148,6 +152,10 @@ class Settings(BaseSettings):
     qa_enabled: bool = Field(
         default=True,
         alias="QA_ENABLED"
+    )
+    candidate_max_duration_sec: int = Field(
+        default=90,
+        alias="CANDIDATE_MAX_DURATION_SEC"
     )
 
     qa_min_clip_duration_sec: int = Field(

@@ -22,6 +22,10 @@ class ManualPromptBuilder:
         clip_mode: str = "short_serie",
         video_ratio: str = "portrait",
     ) -> str:
+        has_named_speakers = any(
+            (segment.get("speaker") or "").strip().upper() not in {"", "UNKNOWN"}
+            for segment in transcript
+        )
         transcript_context = build_transcript_context(
             transcript=transcript,
             candidates=candidates,
@@ -69,12 +73,7 @@ REGRAS NARRATIVAS OBRIGATÓRIAS
 - Você pode ajustar timestamps em aproximadamente ±8 segundos para capturar início natural, desenvolvimento e fechamento.
 - Os candidatos são pistas, não limites rígidos.
 
-REGRAS ESPECÍFICAS DE LOCUTOR
-
-- O transcript inclui speaker labels como SPEAKER_01, SPEAKER_02, etc.
-- Use esses labels para entender diálogos, mudanças de contexto e continuidade.
-- Prefira cortes que respeitem a conclusão do speaker atual.
-- Evite trocar de speaker exatamente no início ou no fim do corte sem contexto suficiente.
+{self._build_speaker_guidance(has_named_speakers)}
 
 QUALIDADE DO CORTE
 
@@ -128,6 +127,25 @@ CANDIDATOS PRIORIZADOS
 INSTRUÇÃO FINAL
 
 Retorne apenas o JSON final.
+"""
+
+    def _build_speaker_guidance(self, has_named_speakers: bool) -> str:
+        if not has_named_speakers:
+            return """
+REGRAS SOBRE LOCUTOR
+
+- O transcript não tem labels de speaker confiáveis neste job.
+- Não invente trocas de locutor.
+- Baseie a continuidade principalmente em frases completas, contexto e fechamento da ideia.
+"""
+
+        return """
+REGRAS ESPECÍFICAS DE LOCUTOR
+
+- O transcript inclui speaker labels como SPEAKER_01, SPEAKER_02, etc.
+- Use esses labels para entender diálogos, mudanças de contexto e continuidade.
+- Prefira cortes que respeitem a conclusão do speaker atual.
+- Evite trocar de speaker exatamente no início ou no fim do corte sem contexto suficiente.
 """
 
     def _build_mode_instructions(self, clip_mode: str) -> str:

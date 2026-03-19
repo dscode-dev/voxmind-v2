@@ -18,6 +18,7 @@ class Transcriber:
         vad_filter: bool,
         segment_duration_sec: int = 600,
         parallel_workers: int = 2,
+        max_merged_segment_duration_sec: int = 18,
     ):
 
         self.model = WhisperModel(
@@ -31,6 +32,7 @@ class Transcriber:
         self.beam_size = beam_size
         self.vad_filter = vad_filter
         self.segment_duration_sec = segment_duration_sec
+        self.max_merged_segment_duration_sec = max_merged_segment_duration_sec
 
     def transcribe(self, video_path: Path) -> List[Dict]:
 
@@ -207,8 +209,9 @@ class Transcriber:
             previous = merged[-1]
 
             gap = current["start"] - previous["end"]
+            merged_duration = current["end"] - previous["start"]
 
-            if gap <= max_gap:
+            if gap <= max_gap and merged_duration <= self.max_merged_segment_duration_sec:
 
                 previous["end"] = current["end"]
 
