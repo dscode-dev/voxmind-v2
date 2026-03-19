@@ -3,6 +3,7 @@ import logging
 import uuid
 import os
 import tempfile
+import asyncio
 
 from telegram import Update
 from telegram.ext import (
@@ -332,6 +333,11 @@ Gerando cortes...
             health.mark_ready("polling")
 
         try:
+            try:
+                asyncio.get_event_loop()
+            except RuntimeError:
+                asyncio.set_event_loop(asyncio.new_event_loop())
+
             self.app.run_polling()
         finally:
             if health:
