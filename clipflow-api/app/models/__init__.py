@@ -8,6 +8,7 @@ from app.models.job_event import JobEvent
 from app.models.job_lease import JobLease
 from app.models.job_queue import JobQueue
 from app.models.usage_metric import UsageMetric
+from app.models.audit_log import AuditLog
 
 __all__ = [
     "User",
@@ -20,4 +21,5 @@ __all__ = [
     "JobLease",
     "JobQueue",
     "UsageMetric",
+    "AuditLog",
 ]

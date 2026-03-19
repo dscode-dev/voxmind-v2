@@ -50,10 +50,17 @@ class ClipFlowApiClient:
         response = requests.post(
             url,
             params=params,
+            headers=self._headers(),
             timeout=settings.clipflow_api_timeout_sec,
         )
         response.raise_for_status()
         return response.json()
+
+    def _headers(self) -> dict[str, str]:
+        headers: dict[str, str] = {}
+        if settings.clipflow_api_internal_token:
+            headers["X-Internal-Token"] = settings.clipflow_api_internal_token
+        return headers
 
     def sync_job_artifacts_safe(
         self,

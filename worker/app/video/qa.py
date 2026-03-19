@@ -28,7 +28,9 @@ class ClipQA:
             "approved_clips": 0,
             "needs_review_clips": 0,
             "blocked_clips": 0,
+            "average_score": 0,
         }
+        total_score = 0
 
         for index, rendered_file in enumerate(rendered_files):
             cut = requested_cuts[index] if index < len(requested_cuts) else {}
@@ -41,12 +43,16 @@ class ClipQA:
             clip_reports.append(report)
             summary["total_clips"] += 1
             summary[f"{report['decision']}_clips"] += 1
+            total_score += report["score"]
 
         overall_decision = "approved"
         if summary["blocked_clips"] > 0:
             overall_decision = "blocked"
         elif summary["needs_review_clips"] > 0:
             overall_decision = "needs_review"
+
+        if summary["total_clips"] > 0:
+            summary["average_score"] = round(total_score / summary["total_clips"])
 
         return {
             "decision": overall_decision,
@@ -101,10 +107,12 @@ class ClipQA:
                 warnings.append("ends_mid_segment")
 
         decision = self._decision_from_issues(issues)
+        score = self._score_clip(issues, warnings)
         return {
             "clip_index": clip_index,
             "file_name": rendered_file.name,
             "decision": decision,
+            "score": score,
             "requested": {
                 "start": requested_start,
                 "end": requested_end,
@@ -123,6 +131,41 @@ class ClipQA:
         if "review" in severities:
             return "needs_review"
         return "approved"
+
+    def _score_clip(self, issues: List[Dict], warnings: List[str]) -> int:
+        score = 100
+
+        for issue in issues:
+            code = str(issue.get("code", ""))
+            severity = str(issue.get("severity", "review"))
+            if severity == "blocked":
+                if code == "render_invalid_duration":
+                    score -= 50
+                elif code == "duration_too_short":
+                    score -= 40
+                else:
+                    score -= 35
+            else:
+                if code == "render_duration_mismatch":
+                    score -= 15
+                elif code == "too_many_speakers":
+                    score -= 12
+                elif code == "duration_too_long":
+                    score -= 8
+                else:
+                    score -= 10
+
+        for warning in warnings:
+            if warning in {"starts_mid_segment", "ends_mid_segment"}:
+                score -= 8
+            elif warning == "missing_hook":
+                score -= 4
+            elif warning in {"missing_title", "missing_description"}:
+                score -= 3
+            else:
+                score -= 2
+
+        return max(0, min(100, score))
 
     def _probe_duration(self, video_path: Path) -> float:
         if not video_path.exists():

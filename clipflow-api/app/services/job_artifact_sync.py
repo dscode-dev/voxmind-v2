@@ -14,6 +14,7 @@ from app.models.clip_asset import ClipAsset
 from app.models.clip_job import ClipJob
 from app.models.enums import AssetStatus, ClipAssetType, JobEventType, JobStatus
 from app.models.job_event import JobEvent
+from app.services.asset_url_service import AssetUrlService
 
 
 JOB_ARTIFACT_FIELDS = {
@@ -61,8 +62,9 @@ class JobArtifactSyncService:
             settings.minio_endpoint,
             access_key=settings.minio_access_key,
             secret_key=settings.minio_secret_key,
-            secure=False,
+            secure=settings.minio_secure,
         )
+        self.asset_url_service = AssetUrlService()
 
     def sync_job(
         self,
@@ -181,6 +183,7 @@ class JobArtifactSyncService:
 
             asset.status = AssetStatus.READY
             asset.storage_key = object_name
+            asset.public_url = self.asset_url_service.build_signed_url(object_name)
             db.add(asset)
 
     def _sync_clip_assets(
@@ -234,11 +237,18 @@ class JobArtifactSyncService:
             asset.merge_group = clip.get("merge_group")
             asset.thumbnail_text = clip.get("thumbnail")
             asset.hashtags_json = clip.get("hashtags", [])
+            previous_extra = dict(asset.extra_json or {})
+            review_payload = previous_extra.get("review")
             asset.extra_json = {
+                **previous_extra,
                 "hook": clip.get("hook"),
                 "qa": qa_by_file.get(file_name),
+                "automation": clip.get("automation"),
             }
+            if review_payload is not None:
+                asset.extra_json["review"] = review_payload
             asset.storage_key = storage_key
+            asset.public_url = self.asset_url_service.build_signed_url(storage_key)
             db.add(asset)
 
     def _merge_job_metadata(
@@ -257,10 +267,13 @@ class JobArtifactSyncService:
             metadata["clip_mode"] = delivery_package.get("clip_mode")
             metadata["video_ratio"] = delivery_package.get("video_ratio")
             metadata["long_video_script"] = delivery_package.get("long_video_script")
+            metadata["automation"] = delivery_package.get("automation")
 
         if qa_report:
             metadata["qa_summary"] = qa_report.get("summary")
             metadata["qa_decision"] = qa_report.get("decision")
+            if qa_report.get("automation") and "automation" not in metadata:
+                metadata["automation"] = qa_report.get("automation")
 
         if runtime_status:
             metadata["runtime"] = {

@@ -5,6 +5,7 @@ from app.db.session import get_db
 from app.models.clip_job import ClipJob
 from app.models.clip_asset import ClipAsset
 from app.models.job_event import JobEvent
+from app.security.access_control import scope_job_query
 from app.security.auth_middleware import get_current_user
 from app.models.user import User
 from app.services.pipeline_progress import calculate_progress
@@ -20,11 +21,8 @@ def job_state(
 ):
 
     job = (
-        db.query(ClipJob)
-        .filter(
-            ClipJob.id == job_id,
-            ClipJob.user_id == user.id,
-        )
+        scope_job_query(db.query(ClipJob), user, ClipJob)
+        .filter(ClipJob.id == job_id)
         .first()
     )
 

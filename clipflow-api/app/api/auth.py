@@ -4,10 +4,14 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.core.settings import settings
 from app.db.session import get_db
+from app.models.enums import UserRole, UserStatus
 from app.models.user import User
 from app.security.auth_middleware import get_current_user
+from app.security.phone import normalize_phone_number
 from app.security.jwt_service import _fingerprint, generate_token
+from app.services.audit_service import AuditService
 from app.services.otp_service import (
     challenge_expiration,
     generate_challenge_id,
@@ -18,6 +22,7 @@ from app.services.otp_service import (
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+audit_service = AuditService()
 
 
 # ==========================================
@@ -53,6 +58,8 @@ class MeResponse(BaseModel):
     phone_number: str
     credits: int
     status: str
+    role: str
+    is_admin: bool
 
 
 # ==========================================
@@ -62,11 +69,54 @@ class MeResponse(BaseModel):
 @router.post("/start", response_model=StartAuthResponse)
 def start_auth(
     payload: StartAuthInput,
+    request: Request,
     db: Session = Depends(get_db),
 ):
+    try:
+        phone_number = normalize_phone_number(payload.phone_number, payload.country_code)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid phone number")
+
+    ip_address = request.client.host if request.client else None
+    user_agent = request.headers.get("user-agent")
+
+    if ip_address and audit_service.recent_count(
+        db,
+        action="auth.start",
+        since_seconds=settings.otp_rate_limit_window_sec,
+        ip_address=ip_address,
+    ) >= settings.otp_request_limit_per_ip_window:
+        audit_service.log(
+            db,
+            action="auth.start",
+            outcome="rate_limited",
+            ip_address=ip_address,
+            user_agent=user_agent,
+            metadata={"phone_number": phone_number, "country_code": payload.country_code},
+        )
+        db.commit()
+        raise HTTPException(status_code=429, detail="Too many login attempts from this IP")
+
+    if audit_service.recent_count(
+        db,
+        action="auth.start",
+        since_seconds=settings.otp_rate_limit_window_sec,
+        phone_number=phone_number,
+    ) >= settings.otp_request_limit_per_phone_window:
+        audit_service.log(
+            db,
+            action="auth.start",
+            outcome="rate_limited",
+            ip_address=ip_address,
+            user_agent=user_agent,
+            metadata={"phone_number": phone_number, "country_code": payload.country_code},
+        )
+        db.commit()
+        raise HTTPException(status_code=429, detail="Too many codes requested for this phone")
+
     user = (
         db.query(User)
-        .filter(User.phone_number == payload.phone_number)
+        .filter(User.phone_number == phone_number)
         .first()
     )
 
@@ -74,7 +124,7 @@ def start_auth(
 
     if not user:
         user = User(
-            phone_number=payload.phone_number,
+            phone_number=phone_number,
             full_name=payload.full_name,
             credits=0,
             token_version=1,
@@ -82,6 +132,8 @@ def start_auth(
         db.add(user)
         db.flush()
     else:
+        if user.status in {UserStatus.SUSPENDED, UserStatus.DELETED}:
+            raise HTTPException(status_code=403, detail="Account unavailable")
         if payload.full_name and not user.full_name:
             user.full_name = payload.full_name
 
@@ -111,6 +163,19 @@ def start_auth(
 
     db.commit()
 
+    audit_service.log(
+        db,
+        action="auth.start",
+        outcome="success",
+        actor_user=user,
+        target_type="user",
+        target_id=str(user.id),
+        ip_address=ip_address,
+        user_agent=user_agent,
+        metadata={"phone_number": phone_number, "country_code": payload.country_code},
+    )
+    db.commit()
+
     # TODO integrar provedor real de SMS
     print("OTP:", code)
 
@@ -132,14 +197,43 @@ def verify_code(
     response: Response,
     db: Session = Depends(get_db),
 ):
+    ip_address = request.client.host if request.client else None
+    user_agent = request.headers.get("user-agent")
+
+    try:
+        phone_number = normalize_phone_number(payload.phone_number)
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Invalid authentication flow")
+
+    if ip_address and audit_service.recent_count(
+        db,
+        action="auth.verify",
+        since_seconds=settings.otp_rate_limit_window_sec,
+        ip_address=ip_address,
+        outcome="failed",
+    ) >= settings.otp_verify_fail_limit_per_ip_window:
+        audit_service.log(
+            db,
+            action="auth.verify",
+            outcome="rate_limited",
+            ip_address=ip_address,
+            user_agent=user_agent,
+            metadata={"phone_number": phone_number},
+        )
+        db.commit()
+        raise HTTPException(status_code=429, detail="Too many failed verification attempts")
+
     user = (
         db.query(User)
-        .filter(User.phone_number == payload.phone_number)
+        .filter(User.phone_number == phone_number)
         .first()
     )
 
     if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise HTTPException(status_code=401, detail="Invalid authentication flow")
+
+    if user.status in {UserStatus.SUSPENDED, UserStatus.DELETED}:
+        raise HTTPException(status_code=403, detail="Account unavailable")
 
     now = datetime.utcnow()
 
@@ -174,6 +268,18 @@ def verify_code(
             user.otp_locked_until = now + timedelta(minutes=5)
 
         db.commit()
+        audit_service.log(
+            db,
+            action="auth.verify",
+            outcome="failed",
+            actor_user=user,
+            target_type="user",
+            target_id=str(user.id),
+            ip_address=ip_address,
+            user_agent=user_agent,
+            metadata={"phone_number": phone_number},
+        )
+        db.commit()
 
         raise HTTPException(
             status_code=401,
@@ -192,8 +298,8 @@ def verify_code(
         key="cf_session",
         value=token,
         httponly=True,
-        secure=True,
-        samesite="lax",
+        secure=settings.cookie_secure,
+        samesite=settings.cookie_samesite,
         max_age=60 * 60 * 24 * 30 if payload.remember_me else None,
         path="/",
     )
@@ -209,6 +315,17 @@ def verify_code(
     user.fingerprint_hash = fingerprint
     user.last_login_ip = request.client.host if request.client else None
 
+    audit_service.log(
+        db,
+        action="auth.verify",
+        outcome="success",
+        actor_user=user,
+        target_type="user",
+        target_id=str(user.id),
+        ip_address=ip_address,
+        user_agent=user_agent,
+        metadata={"phone_number": phone_number},
+    )
     db.commit()
 
     return VerifyAuthResponse(status="authenticated")
@@ -225,7 +342,9 @@ def me(user: User = Depends(get_current_user)):
         full_name=user.full_name,
         phone_number=user.phone_number,
         credits=user.credits,
-        status=user.status.name,
+        status=user.status.value,
+        role=user.role.value,
+        is_admin=user.role == UserRole.ADMIN,
     )
 
 
@@ -235,5 +354,5 @@ def me(user: User = Depends(get_current_user)):
 
 @router.post("/logout")
 def logout(response: Response):
-    response.delete_cookie("cf_session", path="/")
+    response.delete_cookie("cf_session", path="/", samesite=settings.cookie_samesite, secure=settings.cookie_secure)
     return {"status": "logged_out"}

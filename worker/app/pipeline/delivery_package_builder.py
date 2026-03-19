@@ -13,15 +13,22 @@ class DeliveryPackageBuilder:
         cut_files: List[Path],
         long_video_script: Dict | None,
         qa_report: Dict | None,
+        automation_report: Dict | None,
         artifacts_manifest: Dict | None,
     ) -> Dict:
         clips = []
+        automation_by_index = {
+            int(clip.get("clip_index", 0)): clip
+            for clip in (automation_report or {}).get("clips", [])
+            if clip.get("clip_index")
+        }
 
         for index, cut_file in enumerate(cut_files):
             cut = cuts[index] if index < len(cuts) else {}
+            clip_index = index + 1
             clips.append(
                 {
-                    "clip_index": index + 1,
+                    "clip_index": clip_index,
                     "file_name": cut_file.name,
                     "local_path": str(cut_file),
                     "start": float(cut.get("start", 0.0)),
@@ -36,6 +43,7 @@ class DeliveryPackageBuilder:
                     "hashtags": cut.get("hashtags", []),
                     "thumbnail": cut.get("thumbnail"),
                     "merge_group": cut.get("merge_group"),
+                    "automation": automation_by_index.get(clip_index),
                 }
             )
 
@@ -45,6 +53,7 @@ class DeliveryPackageBuilder:
             "video_ratio": video_ratio,
             "delivery_status": self._resolve_delivery_status(qa_report),
             "qa_decision": qa_report.get("decision") if qa_report else None,
+            "automation": automation_report,
             "clip_count": len(clips),
             "clips": clips,
             "long_video_script": long_video_script,

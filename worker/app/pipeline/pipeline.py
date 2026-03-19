@@ -11,6 +11,7 @@ from app.video.cutter import VideoCutter
 from app.video.qa import ClipQA
 
 from app.pipeline.chunker import Chunker
+from app.pipeline.auto_review import AutoReviewPolicy
 from app.pipeline.candidate_builder import CandidateBuilder
 from app.pipeline.delivery_package_builder import DeliveryPackageBuilder
 from app.pipeline.scorer import Scorer
@@ -80,6 +81,12 @@ class Pipeline:
         self.builder = CandidateBuilder()
         self.scorer = Scorer()
         self.delivery_package_builder = DeliveryPackageBuilder()
+        self.auto_review_policy = AutoReviewPolicy(
+            enabled=settings.auto_review_enabled,
+            ready_score_threshold=settings.auto_review_ready_score_threshold,
+            blocked_score_threshold=settings.auto_review_blocked_score_threshold,
+            max_review_clips=settings.auto_review_max_review_clips,
+        )
         self.hook_detector = HookDetector()
         self.audio_peak_detector = AudioPeakDetector()
         self.story_shift_detector = StoryShiftDetector()
@@ -515,7 +522,15 @@ para continuar o processamento.
         self._log(f"📦 {len(cut_files)} cuts generated")
 
         qa_report = self._run_clip_qa(filtered_cuts, cut_files, transcript_segments)
-        delivery_package = self._build_delivery_package(filtered_cuts, cut_files, qa_report)
+        automation_report = self._run_auto_review(qa_report, filtered_cuts)
+        if qa_report is not None:
+            qa_report["automation"] = automation_report
+        delivery_package = self._build_delivery_package(
+            filtered_cuts,
+            cut_files,
+            qa_report,
+            automation_report,
+        )
 
         self._mark_step("send_cuts", "started")
         for path in cut_files:
@@ -611,6 +626,7 @@ para continuar o processamento.
         filtered_cuts: list[dict],
         cut_files: list[Path],
         qa_report: dict | None,
+        automation_report: dict | None,
     ) -> dict:
         self._mark_step("delivery_package", "started")
         package = self.delivery_package_builder.build(
@@ -621,6 +637,7 @@ para continuar o processamento.
             cut_files=cut_files,
             long_video_script=self.manual_response.get("long_video_script"),
             qa_report=qa_report,
+            automation_report=automation_report,
             artifacts_manifest=self.artifacts.read(),
         )
         self._mark_step(
@@ -630,3 +647,25 @@ para continuar o processamento.
             delivery_status=package.get("delivery_status"),
         )
         return package
+
+    def _run_auto_review(
+        self,
+        qa_report: dict | None,
+        filtered_cuts: list[dict],
+    ) -> dict | None:
+        if qa_report is None:
+            self._mark_step("auto_review", "skipped", reason="qa_unavailable")
+            return None
+
+        self._mark_step("auto_review", "started")
+        report = self.auto_review_policy.evaluate(
+            qa_report=qa_report,
+            cuts=filtered_cuts,
+        )
+        self._mark_step(
+            "auto_review",
+            "completed",
+            status=report.get("status"),
+            readiness_score=report.get("readiness_score"),
+        )
+        return report

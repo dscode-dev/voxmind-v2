@@ -1,9 +1,25 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from contextlib import asynccontextmanager
 
 from app.api.router import api_router
 from app.core.settings import settings
+from app.db.session import SessionLocal
+from app.services.bootstrap_service import BootstrapService
+
+
+bootstrap_service = BootstrapService()
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    db = SessionLocal()
+    try:
+        bootstrap_service.ensure_default_admin(db)
+    finally:
+        db.close()
+    yield
 
 
 app = FastAPI(
@@ -11,6 +27,7 @@ app = FastAPI(
     version=settings.api_version,
     docs_url="/docs",
     redoc_url=None,
+    lifespan=lifespan,
 )
 
 
@@ -20,10 +37,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://sanninjiraiya.lab",
-        "http://sanninjiraiya.lab",
-    ],
+    allow_origins=[origin.strip() for origin in settings.cors_allowed_origins.split(",") if origin.strip()],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

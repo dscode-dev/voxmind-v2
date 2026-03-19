@@ -37,6 +37,8 @@ def test_clip_qa_marks_clip_for_review_when_many_speakers(tmp_path):
 
     assert report["decision"] == "needs_review"
     assert report["clips"][0]["decision"] == "needs_review"
+    assert report["clips"][0]["score"] < 100
+    assert report["summary"]["average_score"] < 100
 
 
 def test_clip_qa_blocks_invalid_render_duration(tmp_path):
@@ -54,3 +56,4 @@ def test_clip_qa_blocks_invalid_render_duration(tmp_path):
 
     assert report["decision"] == "blocked"
     assert report["clips"][0]["decision"] == "blocked"
+    assert report["clips"][0]["score"] <= 60

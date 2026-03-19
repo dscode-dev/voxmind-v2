@@ -1,10 +1,12 @@
 from datetime import datetime
 
-from fastapi import Depends, HTTPException, Request
+from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.models.user import User
+from app.core.settings import settings
+from app.security.access_control import is_admin
 from app.security.jwt_service import decode_token, _fingerprint
 
 
@@ -52,3 +54,21 @@ def get_current_user(
     db.commit()
 
     return user
+
+
+def get_current_admin(
+    user: User = Depends(get_current_user),
+) -> User:
+    if not is_admin(user):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return user
+
+
+def require_internal_api_token(
+    x_internal_token: str | None = Header(default=None, alias="X-Internal-Token"),
+) -> None:
+    expected = settings.internal_api_token
+    if not expected:
+        return
+    if x_internal_token != expected:
+        raise HTTPException(status_code=401, detail="Invalid internal token")

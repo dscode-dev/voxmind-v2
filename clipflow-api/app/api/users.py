@@ -15,5 +15,7 @@ def get_me(user: User = Depends(get_current_user)):
         "phone_number": user.phone_number,
         "full_name": user.full_name,
         "credits": user.credits,
-        "status": user.status.name,
+        "status": user.status.value,
+        "role": user.role.value,
+        "is_admin": user.role.value == "admin",
     }

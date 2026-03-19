@@ -1,5 +1,7 @@
 import uuid
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -10,9 +12,56 @@ from app.models.clip_asset import ClipAsset
 from app.models.enums import ClipAssetType
 from app.models.user import User
 from app.security.auth_middleware import get_current_user
+from app.security.access_control import can_bypass_credits, is_admin, scope_job_query
 from app.models.enums import JobStatus
+from app.services.asset_url_service import AssetUrlService
+from app.services.artifact_content_service import ArtifactContentService
+from app.services.audit_service import AuditService
 
 router = APIRouter()
+asset_url_service = AssetUrlService()
+artifact_content_service = ArtifactContentService()
+audit_service = AuditService()
+
+
+def _serialize_asset(asset: ClipAsset) -> dict:
+    return {
+        "id": str(asset.id),
+        "type": asset.asset_type.value,
+        "status": asset.status.value,
+        "order": asset.order_index,
+        "title": asset.title,
+        "description": asset.description,
+        "url": asset_url_service.build_signed_url(asset.storage_key) or asset.public_url,
+        "storage_key": asset.storage_key,
+        "start": float(asset.start_sec),
+        "end": float(asset.end_sec),
+        "duration": float(asset.duration_sec),
+        "thumbnail_text": asset.thumbnail_text,
+        "hashtags": asset.hashtags_json,
+        "extra": asset.extra_json,
+    }
+
+
+def _clip_review_summary(assets: list[ClipAsset]) -> dict[str, int]:
+    summary = {
+        "total": 0,
+        "approved": 0,
+        "rejected": 0,
+        "needs_changes": 0,
+        "pending": 0,
+    }
+
+    for asset in assets:
+        summary["total"] += 1
+        review = (asset.extra_json or {}).get("review", {}) if asset.extra_json else {}
+        decision = review.get("decision")
+        if decision in {"approved", "rejected", "needs_changes"}:
+            summary[decision] += 1
+        else:
+            summary["pending"] += 1
+
+    return summary
 
 
 @router.post("/jobs")
@@ -28,7 +77,7 @@ def create_job(
     if not product:
         raise HTTPException(status_code=404, detail="Invalid product")
 
-    if user.credits <= 0:
+    if user.credits <= 0 and not can_bypass_credits(user):
         raise HTTPException(status_code=402, detail="No credits")
 
     job = ClipJob(
@@ -41,17 +90,17 @@ def create_job(
 
     db.add(job)
 
-    user.credits -= 1
-
-    if user.credits == 0:
-        user.token_version += 1
+    if not can_bypass_credits(user):
+        user.credits -= 1
+        if user.credits == 0:
+            user.token_version += 1
 
     db.commit()
     db.refresh(job)
 
     return {
         "job_id": str(job.id),
-        "status": job.status.name,
+        "status": job.status.value,
     }
 
 
@@ -61,14 +110,26 @@ def list_jobs(
     user: User = Depends(get_current_user),
 ):
 
-    jobs = db.query(ClipJob).filter(ClipJob.user_id == user.id).all()
+    jobs = scope_job_query(db.query(ClipJob), user, ClipJob).all()
 
     return [
         {
             "id": str(j.id),
-            "status": j.status.name,
+            "status": j.status.value,
+            "pipeline_stage": j.pipeline_stage,
             "source_url": j.source_url,
             "created_at": j.created_at,
+            "metadata": {
+                **(j.metadata_json or {}),
+                "review_summary": _clip_review_summary(
+                    db.query(ClipAsset)
+                    .filter(
+                        ClipAsset.job_id == j.id,
+                        ClipAsset.asset_type.in_([ClipAssetType.SHORT_CLIP, ClipAssetType.MERGED_CLIP]),
+                    )
+                    .all()
+                ),
+            },
         }
         for j in jobs
     ]
@@ -82,11 +143,8 @@ def job_detail(
 ):
 
     job = (
-        db.query(ClipJob)
-        .filter(
-            ClipJob.id == job_id,
-            ClipJob.user_id == user.id,
-        )
+        scope_job_query(db.query(ClipJob), user, ClipJob)
+        .filter(ClipJob.id == job_id)
         .first()
     )
 
@@ -95,7 +153,7 @@ def job_detail(
 
     return {
         "id": str(job.id),
-        "status": job.status.name,
+        "status": job.status.value,
         "source_url": job.source_url,
         "pipeline_stage": job.pipeline_stage,
         "created_at": job.created_at,
@@ -121,34 +179,23 @@ def job_assets(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    job = (
+        scope_job_query(db.query(ClipJob), user, ClipJob)
+        .filter(ClipJob.id == job_id)
+        .first()
+    )
+
+    if not job:
+        raise HTTPException(status_code=404)
 
     assets = (
         db.query(ClipAsset)
-        .join(ClipJob)
-        .filter(
-            ClipJob.id == job_id,
-            ClipJob.user_id == user.id,
-        )
+        .filter(ClipAsset.job_id == job.id)
         .all()
     )
 
     return [
-        {
-            "id": str(a.id),
-            "type": a.asset_type.value,
-            "status": a.status.value,
-            "order": a.order_index,
-            "title": a.title,
-            "description": a.description,
-            "url": a.public_url,
-            "storage_key": a.storage_key,
-            "start": float(a.start_sec),
-            "end": float(a.end_sec),
-            "duration": float(a.duration_sec),
-            "thumbnail_text": a.thumbnail_text,
-            "hashtags": a.hashtags_json,
-            "extra": a.extra_json,
-        }
+        _serialize_asset(a)
         for a in assets
     ]
 
@@ -161,11 +208,8 @@ def job_delivery_package(
 ):
 
     job = (
-        db.query(ClipJob)
-        .filter(
-            ClipJob.id == job_id,
-            ClipJob.user_id == user.id,
-        )
+        scope_job_query(db.query(ClipJob), user, ClipJob)
+        .filter(ClipJob.id == job_id)
         .first()
     )
 
@@ -199,11 +243,15 @@ def job_delivery_package(
         "pipeline_stage": job.pipeline_stage,
         "delivery_package": {
             "storage_key": job.delivery_package_storage_key or (delivery_asset.storage_key if delivery_asset else None),
-            "url": delivery_asset.public_url if delivery_asset else None,
+            "url": asset_url_service.build_signed_url(
+                job.delivery_package_storage_key or (delivery_asset.storage_key if delivery_asset else None)
+            ) or (delivery_asset.public_url if delivery_asset else None),
         },
         "qa_report": {
             "storage_key": job.qa_report_storage_key or (qa_asset.storage_key if qa_asset else None),
-            "url": qa_asset.public_url if qa_asset else None,
+            "url": asset_url_service.build_signed_url(
+                job.qa_report_storage_key or (qa_asset.storage_key if qa_asset else None)
+            ) or (qa_asset.public_url if qa_asset else None),
         },
         "artifact_keys": {
             "transcript": job.transcript_storage_key,
@@ -225,7 +273,7 @@ def job_delivery_package(
                 "title": asset.title,
                 "description": asset.description,
                 "storage_key": asset.storage_key,
-                "url": asset.public_url,
+                "url": asset_url_service.build_signed_url(asset.storage_key) or asset.public_url,
                 "start": float(asset.start_sec),
                 "end": float(asset.end_sec),
                 "duration": float(asset.duration_sec),
@@ -236,5 +284,172 @@ def job_delivery_package(
             }
             for asset in clips
         ],
+        "metadata": job.metadata_json,
+    }
+
+
+@router.post("/jobs/{job_id}/clips/{asset_id}/review")
+def review_clip(
+    job_id: str,
+    asset_id: str,
+    decision: str,
+    note: str | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+
+    if decision not in {"approved", "rejected", "needs_changes"}:
+        raise HTTPException(status_code=400, detail="Invalid decision")
+
+    asset = (
+        db.query(ClipAsset)
+        .join(ClipJob)
+        .filter(
+            ClipAsset.id == asset_id,
+            ClipAsset.job_id == job_id,
+            ClipAsset.asset_type.in_([ClipAssetType.SHORT_CLIP, ClipAssetType.MERGED_CLIP]),
+        )
+        .first()
+    )
+    if asset and not is_admin(user) and asset.job.user_id != user.id:
+        asset = None
+
+    if not asset:
+        raise HTTPException(status_code=404, detail="Clip not found")
+
+    extra = dict(asset.extra_json or {})
+    extra["review"] = {
+        "decision": decision,
+        "note": note,
+        "reviewed_at": datetime.now(timezone.utc).isoformat(),
+    }
+    asset.extra_json = extra
+
+    db.add(asset)
+    audit_service.log(
+        db,
+        action="clip.review",
+        outcome="success",
+        actor_user=user,
+        target_type="clip_asset",
+        target_id=str(asset.id),
+        metadata={
+            "job_id": str(job_id),
+            "decision": decision,
+            "admin_actor": is_admin(user),
+        },
+    )
+    db.commit()
+    db.refresh(asset)
+
+    return {
+        "status": "ok",
+        "asset": _serialize_asset(asset),
+    }
+
+
+@router.post("/jobs/{job_id}/review/approve-all")
+def approve_all_clips(
+    job_id: str,
+    note: str | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+
+    job = (
+        scope_job_query(db.query(ClipJob), user, ClipJob)
+        .filter(ClipJob.id == job_id)
+        .first()
+    )
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    assets = (
+        db.query(ClipAsset)
+        .filter(
+            ClipAsset.job_id == job.id,
+            ClipAsset.asset_type.in_([ClipAssetType.SHORT_CLIP, ClipAssetType.MERGED_CLIP]),
+        )
+        .all()
+    )
+
+    if not assets:
+        raise HTTPException(status_code=400, detail="Job has no clips to approve")
+
+    reviewed_at = datetime.now(timezone.utc).isoformat()
+    for asset in assets:
+        extra = dict(asset.extra_json or {})
+        extra["review"] = {
+            "decision": "approved",
+            "note": note,
+            "reviewed_at": reviewed_at,
+            "bulk_action": True,
+        }
+        asset.extra_json = extra
+        db.add(asset)
+
+    metadata = dict(job.metadata_json or {})
+    metadata["review"] = {
+        "all_clips_approved": True,
+        "ready_for_publication": True,
+        "approved_at": reviewed_at,
+        "note": note,
+    }
+    job.metadata_json = metadata
+    db.add(job)
+    audit_service.log(
+        db,
+        action="job.review.approve_all",
+        outcome="success",
+        actor_user=user,
+        target_type="clip_job",
+        target_id=str(job.id),
+        metadata={
+            "approved_clip_count": len(assets),
+            "admin_actor": is_admin(user),
+        },
+    )
+
+    db.commit()
+    db.refresh(job)
+
+    return {
+        "status": "ok",
+        "job_id": str(job.id),
+        "review_summary": _clip_review_summary(assets),
+        "ready_for_publication": True,
+    }
+
+
+@router.get("/jobs/{job_id}/editorial-context")
+def job_editorial_context(
+    job_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+
+    job = (
+        scope_job_query(db.query(ClipJob), user, ClipJob)
+        .filter(ClipJob.id == job_id)
+        .first()
+    )
+
+    if not job:
+        raise HTTPException(status_code=404)
+
+    transcript_with_speakers = artifact_content_service.load_json(
+        job.transcript_with_speakers_storage_key
+    )
+    qa_report = artifact_content_service.load_json(job.qa_report_storage_key)
+    speaker_turns = artifact_content_service.load_json(job.speaker_turns_storage_key)
+
+    return {
+        "job_id": str(job.id),
+        "status": job.status.value,
+        "pipeline_stage": job.pipeline_stage,
+        "qa_report": qa_report if isinstance(qa_report, dict) else None,
+        "transcript_with_speakers": transcript_with_speakers if isinstance(transcript_with_speakers, list) else [],
+        "speaker_turns": speaker_turns if isinstance(speaker_turns, list) else [],
         "metadata": job.metadata_json,
     }

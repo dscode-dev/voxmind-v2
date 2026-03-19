@@ -164,6 +164,26 @@ class Settings(BaseSettings):
         alias="QA_MAX_SPEAKERS_PER_CLIP"
     )
 
+    auto_review_enabled: bool = Field(
+        default=True,
+        alias="AUTO_REVIEW_ENABLED"
+    )
+
+    auto_review_ready_score_threshold: int = Field(
+        default=85,
+        alias="AUTO_REVIEW_READY_SCORE_THRESHOLD"
+    )
+
+    auto_review_blocked_score_threshold: int = Field(
+        default=45,
+        alias="AUTO_REVIEW_BLOCKED_SCORE_THRESHOLD"
+    )
+
+    auto_review_max_review_clips: int = Field(
+        default=1,
+        alias="AUTO_REVIEW_MAX_REVIEW_CLIPS"
+    )
+
     render_min_clip_duration_sec: int = Field(
         default=25,
         alias="RENDER_MIN_CLIP_DURATION_SEC"
@@ -223,6 +243,10 @@ class Settings(BaseSettings):
     clipflow_api_timeout_sec: int = Field(
         default=15,
         alias="CLIPFLOW_API_TIMEOUT_SEC"
+    )
+    clipflow_api_internal_token: str | None = Field(
+        default=None,
+        alias="CLIPFLOW_API_INTERNAL_TOKEN"
     )
 
     # ======================================
