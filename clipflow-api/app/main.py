@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.api.router import api_router
 from app.core.settings import settings
@@ -16,7 +17,7 @@ bootstrap_service = BootstrapService()
 async def lifespan(_: FastAPI):
     db = SessionLocal()
     try:
-        bootstrap_service.ensure_default_admin(db)
+        bootstrap_service.ensure_default_admin_safe(db)
     finally:
         db.close()
     yield
@@ -55,7 +56,17 @@ def health():
 
 @app.get("/ready", tags=["infra"])
 def readiness():
-    return JSONResponse({"status": "ready"})
+    db = SessionLocal()
+    try:
+        if not bootstrap_service.database_ready(db):
+            return JSONResponse({"status": "not_ready", "reason": "database_unavailable"}, status_code=503)
+
+        bootstrap_service.ensure_default_admin_safe(db)
+        return JSONResponse({"status": "ready"})
+    except SQLAlchemyError:
+        return JSONResponse({"status": "not_ready", "reason": "database_error"}, status_code=503)
+    finally:
+        db.close()
 
 
 # =========================================================

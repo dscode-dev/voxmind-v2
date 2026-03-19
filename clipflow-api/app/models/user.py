@@ -177,5 +177,6 @@ class User(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 
     audit_logs = relationship(
         "AuditLog",
+        back_populates="actor",
         cascade="all, delete-orphan",
     )

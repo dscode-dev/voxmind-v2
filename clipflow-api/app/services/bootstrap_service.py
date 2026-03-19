@@ -1,9 +1,16 @@
+import logging
+
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.settings import settings
 from app.models.enums import UserRole, UserStatus
 from app.models.user import User
 from app.security.phone import normalize_phone_number
+
+
+logger = logging.getLogger(__name__)
 
 
 class BootstrapService:
@@ -36,3 +43,21 @@ class BootstrapService:
                 user.credits = settings.default_admin_credits
 
         db.commit()
+
+    def ensure_default_admin_safe(self, db: Session) -> bool:
+        try:
+            self.ensure_default_admin(db)
+            return True
+        except SQLAlchemyError as exc:
+            db.rollback()
+            logger.warning("default_admin_bootstrap_failed", extra={"error": str(exc)})
+            return False
+
+    def database_ready(self, db: Session) -> bool:
+        try:
+            db.execute(text("SELECT 1"))
+            return True
+        except SQLAlchemyError as exc:
+            db.rollback()
+            logger.warning("database_not_ready", extra={"error": str(exc)})
+            return False

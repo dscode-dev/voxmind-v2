@@ -33,4 +33,4 @@ class AuditLog(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     user_agent: Mapped[str | None] = mapped_column(String(255), nullable=True)
     metadata_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
-    actor = relationship("User")
+    actor = relationship("User", back_populates="audit_logs")
