@@ -149,3 +149,37 @@ def test_candidate_builder_rejects_excessively_long_candidates():
     candidates = builder.build(chunks)
 
     assert candidates == []
+
+
+def test_candidate_builder_penalizes_longer_than_preferred_duration():
+    short_chunk = {
+        "start": 0.0,
+        "end": 46.0,
+        "text": "Trecho forte com abertura clara, desenvolvimento e conclusao final.",
+        "hook_score": 4,
+        "audio_peak_score": 0.8,
+        "story_setup": 1,
+        "story_conflict": 1,
+        "story_reveal": 2,
+        "segment_count": 4,
+        "speaker_count": 1,
+        "speakers": ["UNKNOWN"],
+    }
+    long_chunk = {
+        **short_chunk,
+        "start": 60.0,
+        "end": 128.0,
+        "text": "Trecho forte com abertura clara, desenvolvimento e conclusao final. " * 2,
+    }
+
+    builder = CandidateBuilder(
+        min_total_score=5.0,
+        max_candidate_duration_sec=68,
+        preferred_duration_sec=48,
+        min_candidate_duration_sec=26,
+    )
+
+    candidates = builder.build([short_chunk, long_chunk])
+
+    assert len(candidates) == 2
+    assert candidates[0]["duration_penalty"] < candidates[1]["duration_penalty"]

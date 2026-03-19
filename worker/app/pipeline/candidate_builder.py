@@ -33,11 +33,15 @@ class CandidateBuilder:
         max_candidates_per_window: int = 4,
         window_size_sec: int = 180,
         max_candidate_duration_sec: int = 90,
+        preferred_duration_sec: int = 55,
+        min_candidate_duration_sec: int = 28,
     ):
         self.min_total_score = min_total_score
         self.max_candidates_per_window = max_candidates_per_window
         self.window_size_sec = window_size_sec
         self.max_candidate_duration_sec = max_candidate_duration_sec
+        self.preferred_duration_sec = preferred_duration_sec
+        self.min_candidate_duration_sec = min_candidate_duration_sec
 
     def build(self, chunks: List[Dict]) -> List[Dict]:
         if not chunks:
@@ -60,6 +64,8 @@ class CandidateBuilder:
 
         text_lower = text.lower()
         duration = max(float(chunk["end"]) - float(chunk["start"]), 0.01)
+        if duration < self.min_candidate_duration_sec:
+            return None
         if duration > self.max_candidate_duration_sec:
             return None
 
@@ -200,11 +206,13 @@ class CandidateBuilder:
         return score
 
     def _duration_penalty(self, duration: float) -> float:
-        if duration < 28.0:
+        if duration < self.min_candidate_duration_sec:
             return 2.0
-        if duration <= 75.0:
+        if duration <= self.preferred_duration_sec:
             return 0.0
-        return min((duration - 75.0) / 10.0, 4.0)
+        if duration <= self.max_candidate_duration_sec:
+            return min((duration - self.preferred_duration_sec) / 6.0, 6.0)
+        return 8.0
 
     def _bad_start(self, text: str) -> bool:
         first_words = " ".join(text.split()[:3]).lower()

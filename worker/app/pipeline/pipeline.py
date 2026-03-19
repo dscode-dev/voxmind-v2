@@ -78,11 +78,9 @@ class Pipeline:
             min_overlap_sec=settings.diarization_min_overlap_sec,
         )
 
-        self.chunker = Chunker()
-        self.builder = CandidateBuilder(
-            max_candidate_duration_sec=settings.candidate_max_duration_sec,
-        )
-        self.scorer = Scorer()
+        self.chunker = self._build_chunker()
+        self.builder = self._build_candidate_builder()
+        self.scorer = self._build_scorer()
         self.delivery_package_builder = DeliveryPackageBuilder()
         self.auto_review_policy = AutoReviewPolicy(
             enabled=settings.auto_review_enabled,
@@ -106,6 +104,65 @@ class Pipeline:
 
         self.telegram = TelegramSender()
         self.prompt_builder = ManualPromptBuilder()
+
+    def _build_chunker(self) -> Chunker:
+        if self.clip_mode == "short" and self.video_ratio == "portrait":
+            return Chunker(min_duration=24, target_duration=40, max_duration=60, overlap=5)
+
+        if self.clip_mode == "short_serie" and self.video_ratio == "portrait":
+            return Chunker(min_duration=26, target_duration=46, max_duration=68, overlap=5)
+
+        if self.clip_mode == "short":
+            return Chunker(min_duration=26, target_duration=48, max_duration=72, overlap=5)
+
+        if self.clip_mode == "short_serie":
+            return Chunker(min_duration=28, target_duration=50, max_duration=75, overlap=5)
+
+        return Chunker()
+
+    def _build_candidate_builder(self) -> CandidateBuilder:
+        if self.clip_mode == "short" and self.video_ratio == "portrait":
+            return CandidateBuilder(
+                max_candidate_duration_sec=60,
+                preferred_duration_sec=42,
+                min_candidate_duration_sec=24,
+                max_candidates_per_window=3,
+            )
+
+        if self.clip_mode == "short_serie" and self.video_ratio == "portrait":
+            return CandidateBuilder(
+                max_candidate_duration_sec=68,
+                preferred_duration_sec=48,
+                min_candidate_duration_sec=26,
+                max_candidates_per_window=3,
+            )
+
+        if self.clip_mode == "short":
+            return CandidateBuilder(
+                max_candidate_duration_sec=72,
+                preferred_duration_sec=50,
+                min_candidate_duration_sec=26,
+            )
+
+        if self.clip_mode == "short_serie":
+            return CandidateBuilder(
+                max_candidate_duration_sec=75,
+                preferred_duration_sec=52,
+                min_candidate_duration_sec=28,
+            )
+
+        return CandidateBuilder(
+            max_candidate_duration_sec=settings.candidate_max_duration_sec,
+        )
+
+    def _build_scorer(self) -> Scorer:
+        if self.clip_mode == "short" and self.video_ratio == "portrait":
+            return Scorer(max_candidates=8, max_candidates_per_window=1, min_start_gap=18)
+
+        if self.clip_mode == "short_serie" and self.video_ratio == "portrait":
+            return Scorer(max_candidates=8, max_candidates_per_window=1, min_start_gap=16)
+
+        return Scorer()
 
     # ==================================================
     # Logging helper
