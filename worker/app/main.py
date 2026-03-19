@@ -1,4 +1,5 @@
 import json
+import time
 import uuid
 import redis
 
@@ -111,6 +112,9 @@ def run_pipeline(job: dict):
         video_url=video_url,
         job_id=job_id,
         manual_response=manual_response,
+        clip_mode=job.get("clip_mode", "short_serie"),
+        video_ratio=job.get("video_ratio", "portrait"),
+        build_ia=bool(job.get("build_ia", False)),
     )
 
     storage = MinioStorage()
@@ -352,6 +356,9 @@ def run_pipeline(job: dict):
 
 
 def main():
+    if settings.worker_mode == "scheduler":
+        run_private_scheduler()
+        return
 
     redis_client = redis.Redis(
         host=settings.redis_host,
@@ -378,6 +385,44 @@ def main():
             continue
 
         run_pipeline(job)
+
+
+def run_private_scheduler():
+    redis_client = redis.Redis(
+        host=settings.redis_host,
+        port=settings.redis_port,
+        decode_responses=True,
+    )
+    api_client = ClipFlowApiClient()
+    worker_id = f"private-scheduler-{uuid.uuid4()}"
+
+    logger.info(
+        "VOXMIND PRIVATE SCHEDULER READY",
+        extra={"step": "private_scheduler_boot", "status": "ready"},
+    )
+
+    while True:
+        claimed = api_client.claim_due_private_scheduler_runs_safe(
+            worker_id=worker_id,
+            limit=3,
+        ) or {"runs": []}
+
+        for item in claimed.get("runs", []):
+            payload = item.get("job_payload")
+            if not payload:
+                continue
+            redis_client.lpush(settings.redis_queue_name, json.dumps(payload))
+            logger.info(
+                "Queued private scheduler job",
+                extra={
+                    "job_id": payload.get("job_id"),
+                    "pipeline_stage": payload.get("pipeline_stage"),
+                    "step": "private_scheduler_enqueue",
+                    "status": "queued",
+                },
+            )
+
+        time.sleep(settings.scheduler_poll_interval_sec)
 
 
 if __name__ == "__main__":

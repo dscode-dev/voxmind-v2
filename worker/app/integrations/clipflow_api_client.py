@@ -87,3 +87,47 @@ class ClipFlowApiClient:
                 },
             )
             return None
+
+    @retry(
+        retry=retry_if_exception_type(requests.RequestException),
+        wait=wait_exponential(
+            min=settings.integration_retry_min_sec,
+            max=settings.integration_retry_max_sec,
+        ),
+        stop=stop_after_attempt(settings.integration_retry_attempts),
+        reraise=True,
+    )
+    def claim_due_private_scheduler_runs(
+        self,
+        worker_id: str,
+        limit: int = 3,
+    ) -> dict[str, Any] | None:
+        if not self.enabled:
+            return None
+
+        url = f"{self.base_url}/internal/private-scheduler/claim-due"
+        response = requests.post(
+            url,
+            params={"worker_id": worker_id, "limit": limit},
+            headers=self._headers(),
+            timeout=settings.clipflow_api_timeout_sec,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def claim_due_private_scheduler_runs_safe(
+        self,
+        worker_id: str,
+        limit: int = 3,
+    ) -> dict[str, Any] | None:
+        try:
+            return self.claim_due_private_scheduler_runs(worker_id=worker_id, limit=limit)
+        except Exception:
+            logger.exception(
+                "Failed to claim due private scheduler runs",
+                extra={
+                    "step": "private_scheduler_claim",
+                    "status": "failed",
+                },
+            )
+            return None

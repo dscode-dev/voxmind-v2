@@ -63,6 +63,9 @@ REGRAS NARRATIVAS OBRIGATÓRIAS
 - Nunca corte no meio do turno de fala de um locutor se isso quebrar o sentido.
 - Preserve continuidade entre falas relacionadas.
 - Em diálogos, garanta que a troca entre speakers continue compreensível.
+- Prefira trechos com setup, desenvolvimento e payoff claros.
+- Evite cortes redundantes entre si; cada corte precisa trazer uma ideia distinta.
+- Se houver dúvida entre um trecho muito chamativo e um trecho mais completo, prefira o mais completo.
 - Você pode ajustar timestamps em aproximadamente ±8 segundos para capturar início natural, desenvolvimento e fechamento.
 - Os candidatos são pistas, não limites rígidos.
 
@@ -80,6 +83,8 @@ QUALIDADE DO CORTE
 - payoff, conclusão, revelação ou fechamento
 - contexto suficiente para funcionar no modo solicitado
 - retenção alta nos primeiros segundos
+- coerência editorial entre hook, title, description e thumbnail
+- diversidade entre os cortes selecionados
 
 OUTPUT JSON
 
@@ -93,6 +98,7 @@ OUTPUT JSON
       "end": 45.3,
       "hook": "frase forte do início do corte",
       "reason": "por que esse trecho respeita narrativa, speaker continuity e clip_mode",
+      "narrative_role": "hook | setup | development | payoff",
       "title": "título curto e impactante",
       "description": "descrição curta",
       "hashtags": ["#tag1", "#tag2", "#tag3"],

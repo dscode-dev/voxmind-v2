@@ -9,6 +9,8 @@ from app.models.job_lease import JobLease
 from app.models.job_queue import JobQueue
 from app.models.usage_metric import UsageMetric
 from app.models.audit_log import AuditLog
+from app.models.private_scheduler_profile import PrivateSchedulerProfile
+from app.models.private_scheduler_run import PrivateSchedulerRun
 
 __all__ = [
     "User",
@@ -22,4 +24,6 @@ __all__ = [
     "JobQueue",
     "UsageMetric",
     "AuditLog",
+    "PrivateSchedulerProfile",
+    "PrivateSchedulerRun",
 ]

@@ -4,16 +4,36 @@ from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.models.audit_log import AuditLog
+from app.models.private_scheduler_profile import PrivateSchedulerProfile
+from app.models.private_scheduler_run import PrivateSchedulerRun
 from app.models.user import User
 from app.security.auth_middleware import get_current_admin
+from app.services.audit_service import AuditService
+from app.services.private_scheduler_service import PrivateSchedulerService
 
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+audit_service = AuditService()
+private_scheduler_service = PrivateSchedulerService()
+
+
+class PrivateSchedulerCreateInput(BaseModel):
+    name: str = Field(..., min_length=3, max_length=120)
+    topic_label: str = Field(..., min_length=3, max_length=255)
+    product_id: str
+    seed_urls: list[str] = Field(default_factory=list)
+    schedule_hours: list[int] = Field(default_factory=list)
+    clip_mode: str = Field(default="short")
+    video_ratio: str = Field(default="portrait")
+    timezone_name: str = Field(default="America/Recife")
+    discovery_mode: str = Field(default="seed_urls")
+    is_active: bool = Field(default=True)
 
 
 def _apply_audit_filters(
@@ -291,3 +311,95 @@ def export_audit_logs(
             "Content-Disposition": f'attachment; filename="audit-logs-{timestamp}.csv"'
         },
     )
+
+
+@router.get("/private-schedulers")
+def list_private_schedulers(
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    profiles = (
+        db.query(PrivateSchedulerProfile)
+        .order_by(PrivateSchedulerProfile.updated_at.desc())
+        .all()
+    )
+    runs = (
+        db.query(PrivateSchedulerRun)
+        .order_by(PrivateSchedulerRun.created_at.desc())
+        .limit(50)
+        .all()
+    )
+
+    return {
+        "profiles": [private_scheduler_service.serialize_profile(profile) for profile in profiles],
+        "runs": [private_scheduler_service.serialize_run(run) for run in runs],
+    }
+
+
+@router.post("/private-schedulers")
+def create_private_scheduler(
+    payload: PrivateSchedulerCreateInput,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    profile = PrivateSchedulerProfile(
+        owner_user_id=admin.id,
+        product_id=payload.product_id,
+        name=payload.name,
+        topic_label=payload.topic_label,
+        discovery_mode=payload.discovery_mode,
+        clip_mode=payload.clip_mode,
+        video_ratio=payload.video_ratio,
+        timezone_name=payload.timezone_name,
+        seed_urls_json=payload.seed_urls,
+        schedule_hours_json=sorted({int(hour) for hour in payload.schedule_hours if 0 <= int(hour) <= 23}),
+        metadata_json={"seed_cursor": 0},
+        is_active=payload.is_active,
+    )
+    db.add(profile)
+    audit_service.log(
+        db,
+        action="admin.private_scheduler.create",
+        outcome="success",
+        actor_user=admin,
+        target_type="private_scheduler_profile",
+        metadata={"name": payload.name, "topic_label": payload.topic_label},
+    )
+    db.commit()
+    db.refresh(profile)
+    return private_scheduler_service.serialize_profile(profile)
+
+
+@router.post("/private-schedulers/{profile_id}/trigger")
+def trigger_private_scheduler(
+    profile_id: str,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    profile = db.query(PrivateSchedulerProfile).filter(PrivateSchedulerProfile.id == profile_id).first()
+    if not profile:
+        return {"status": "ignored"}
+
+    slot = private_scheduler_service.current_slot_for_profile(profile)
+    run, payload = private_scheduler_service.create_job_for_profile(
+        db=db,
+        profile=profile,
+        owner=admin,
+        scheduled_slot_at=slot,
+        manual_trigger=True,
+    )
+    audit_service.log(
+        db,
+        action="admin.private_scheduler.trigger",
+        outcome="success" if payload else "failed",
+        actor_user=admin,
+        target_type="private_scheduler_profile",
+        target_id=str(profile.id),
+        metadata={"run_id": str(run.id), "job_payload": payload},
+    )
+    db.commit()
+    return {
+        "status": "queued" if payload else "failed",
+        "run": private_scheduler_service.serialize_run(run),
+        "job_payload": payload,
+    }

@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     video_url: str | None = Field(default=None, alias="VIDEO_URL")
 
     pipeline_mode: str = Field(default="v2", alias="PIPELINE_MODE")
+    worker_mode: str = Field(default="queue", alias="WORKER_MODE")
 
     pipeline_stage: str = Field(
         default="prepare",
@@ -247,6 +248,10 @@ class Settings(BaseSettings):
     clipflow_api_internal_token: str | None = Field(
         default=None,
         alias="CLIPFLOW_API_INTERNAL_TOKEN"
+    )
+    scheduler_poll_interval_sec: int = Field(
+        default=300,
+        alias="SCHEDULER_POLL_INTERVAL_SEC"
     )
 
     # ======================================

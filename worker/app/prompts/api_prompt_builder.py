@@ -50,6 +50,8 @@ MANDATORY RULES
 - Respect speaker continuity when dialogue is important.
 - Use candidates as hints, not strict boundaries.
 - You may adjust timestamps slightly to preserve complete meaning.
+- Prefer editorially complete cuts over merely loud or sensational ones.
+- Avoid redundant cuts that repeat the same narrative beat.
 
 MODE RULES
 
@@ -75,6 +77,7 @@ Return ONLY valid JSON in this format:
       "end": 45.3,
       "hook": "strong hook at the beginning",
       "reason": "why this cut is good and respects speaker continuity and requested mode",
+      "narrative_role": "hook | setup | development | payoff",
       "title": "short impactful title",
       "description": "short description",
       "hashtags": ["#tag1", "#tag2", "#tag3"],

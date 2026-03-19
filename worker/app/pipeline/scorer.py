@@ -56,6 +56,9 @@ class Scorer:
             if self._interval_iou(candidate, existing) >= self.overlap_iou_threshold:
                 return True
 
+            if self._text_similarity(candidate.get("text", ""), existing.get("text", "")) >= 0.72:
+                return True
+
         return False
 
     def _interval_iou(self, left: Dict, right: Dict) -> float:
@@ -85,6 +88,8 @@ class Scorer:
             "window_index": candidate.get("window_index"),
             "speaker_count": candidate.get("speaker_count", 0),
             "speakers": candidate.get("speakers", []),
+            "narrative_role": candidate.get("narrative_role"),
+            "editorial_signals": candidate.get("editorial_signals", {}),
             "score_breakdown": {
                 "hook_score": candidate.get("hook_score", 0.0),
                 "narrative_score": candidate.get("narrative_score", 0.0),
@@ -92,7 +97,30 @@ class Scorer:
                 "audio_score": candidate.get("audio_score", 0.0),
                 "boundary_score": candidate.get("boundary_score", 0.0),
                 "speaker_score": candidate.get("speaker_score", 0.0),
+                "narrative_completeness_score": candidate.get("narrative_completeness_score", 0.0),
+                "dialogue_penalty": candidate.get("dialogue_penalty", 0.0),
+                "title_signal_score": candidate.get("title_signal_score", 0.0),
+                "retention_score": candidate.get("retention_score", 0.0),
                 "density_bonus": candidate.get("density_bonus", 0.0),
                 "duration_penalty": candidate.get("duration_penalty", 0.0),
             },
+        }
+
+    def _text_similarity(self, left_text: str, right_text: str) -> float:
+        left_tokens = self._tokenize(left_text)
+        right_tokens = self._tokenize(right_text)
+        if not left_tokens or not right_tokens:
+            return 0.0
+
+        intersection = len(left_tokens & right_tokens)
+        denominator = min(len(left_tokens), len(right_tokens))
+        if denominator == 0:
+            return 0.0
+        return intersection / denominator
+
+    def _tokenize(self, text: str) -> set[str]:
+        return {
+            token
+            for token in "".join(char.lower() if char.isalnum() else " " for char in text).split()
+            if len(token) > 2
         }

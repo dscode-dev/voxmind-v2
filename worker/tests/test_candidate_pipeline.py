@@ -32,6 +32,8 @@ def test_candidate_builder_limits_candidates_per_time_window():
 
     assert len(candidates) == 2
     assert all(candidate["window_index"] == 0 for candidate in candidates)
+    assert all("narrative_role" in candidate for candidate in candidates)
+    assert all("editorial_signals" in candidate for candidate in candidates)
 
 
 def test_scorer_suppresses_heavily_overlapping_candidates():
@@ -85,3 +87,38 @@ def test_scorer_suppresses_heavily_overlapping_candidates():
 
     assert len(ranked) == 2
     assert [candidate["candidate_id"] for candidate in ranked] == ["cand_1", "cand_3"]
+
+
+def test_scorer_suppresses_semantically_redundant_candidates():
+    candidates = [
+        {
+            "candidate_id": "cand_1",
+            "start": 0.0,
+            "end": 48.0,
+            "duration": 48.0,
+            "text": "Esse foi o erro que mudou tudo na estratégia da empresa.",
+            "total_score": 15.2,
+            "window_index": 0,
+            "boundary_score": 2.0,
+            "speaker_count": 1,
+            "speakers": ["SPEAKER_01"],
+        },
+        {
+            "candidate_id": "cand_2",
+            "start": 80.0,
+            "end": 126.0,
+            "duration": 46.0,
+            "text": "O erro que mudou tudo na estratégia da empresa foi justamente esse.",
+            "total_score": 14.9,
+            "window_index": 0,
+            "boundary_score": 2.0,
+            "speaker_count": 1,
+            "speakers": ["SPEAKER_01"],
+        },
+    ]
+
+    scorer = Scorer(max_candidates=10, max_candidates_per_window=5)
+    ranked = scorer.score(candidates)
+
+    assert len(ranked) == 1
+    assert ranked[0]["candidate_id"] == "cand_1"
