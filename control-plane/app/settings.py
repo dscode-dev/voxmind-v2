@@ -62,6 +62,22 @@ class Settings(BaseSettings):
     redis_port: int = Field(default=6379, alias="VOXMIND_REDIS_PORT")
 
     redis_queue_name: str = Field(default="voxmind_jobs", alias="VOXMIND_REDIS_QUEUE")
+    redis_job_registry_prefix: str = Field(
+        default="voxmind:job_registry",
+        alias="VOXMIND_JOB_REGISTRY_PREFIX",
+    )
+    job_registry_ttl_sec: int = Field(
+        default=604800,
+        alias="VOXMIND_JOB_REGISTRY_TTL_SEC",
+    )
+
+    # =========================
+    # Bot validation
+    # =========================
+    min_cut_duration_sec: int = Field(
+        default=25,
+        alias="MIN_CUT_DURATION_SEC",
+    )
 
 
 settings = Settings()

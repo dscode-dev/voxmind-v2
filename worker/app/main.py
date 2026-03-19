@@ -1,16 +1,58 @@
 import json
-import logging
 import uuid
 import redis
 
 from pathlib import Path
 
+from app.integrations.clipflow_api_client import ClipFlowApiClient
+from app.observability import configure_logging, get_logger
 from app.pipeline.pipeline import Pipeline
 from app.settings import settings
 from app.storage.minio_client import MinioStorage
 
-logging.basicConfig(level=settings.log_level)
-logger = logging.getLogger(__name__)
+configure_logging()
+logger = get_logger(__name__)
+
+
+def _sync_clipflow_api(
+    api_client: ClipFlowApiClient,
+    job_id: str,
+    pipeline_stage: str,
+    status: str | None = None,
+    error_message: str | None = None,
+) -> None:
+    result = api_client.sync_job_artifacts_safe(
+        job_id=job_id,
+        pipeline_stage=pipeline_stage,
+        status=status,
+        error_message=error_message,
+    )
+    if result:
+        logger.info(
+            "ClipFlow API sync completed",
+            extra={
+                "job_id": job_id,
+                "pipeline_stage": pipeline_stage,
+                "step": "clipflow_api_sync",
+                "status": "completed",
+            },
+        )
+
+
+def _upload_if_exists(
+    storage: MinioStorage,
+    local_path: str | None,
+    object_name: str,
+) -> bool:
+    if not local_path:
+        return False
+
+    path = Path(local_path)
+    if not path.exists():
+        return False
+
+    storage.upload(str(path), object_name)
+    return True
 
 
 def run_pipeline(job: dict):
@@ -26,20 +68,32 @@ def run_pipeline(job: dict):
 
     if pipeline_stage == "prepare":
         if not video_url:
-            logger.error("Prepare job received without video_url")
+            logger.error(
+                "Prepare job received without video_url",
+                extra={"job_id": job_id, "pipeline_stage": pipeline_stage, "step": "validate_job", "status": "failed"},
+            )
             return
 
     if pipeline_stage == "finalize":
         if not manual_response:
-            logger.error("Finalize job received without manual_response")
+            logger.error(
+                "Finalize job received without manual_response",
+                extra={"job_id": job_id, "pipeline_stage": pipeline_stage, "step": "validate_job", "status": "failed"},
+            )
             return
 
         if "shorts_content" not in manual_response:
-            logger.error("Finalize job received invalid manual_response")
+            logger.error(
+                "Finalize job received invalid manual_response",
+                extra={"job_id": job_id, "pipeline_stage": pipeline_stage, "step": "validate_job", "status": "failed"},
+            )
             return
 
         if not video_url:
-            logger.error("Finalize job received without video_url")
+            logger.error(
+                "Finalize job received without video_url",
+                extra={"job_id": job_id, "pipeline_stage": pipeline_stage, "step": "validate_job", "status": "failed"},
+            )
             return
 
     # ==========================================
@@ -48,7 +102,10 @@ def run_pipeline(job: dict):
 
     settings.pipeline_stage = pipeline_stage
 
-    logger.info(f"Starting pipeline {job_id} ({pipeline_stage})")
+    logger.info(
+        f"Starting pipeline {job_id} ({pipeline_stage})",
+        extra={"job_id": job_id, "pipeline_stage": pipeline_stage, "step": "pipeline", "status": "started"},
+    )
 
     pipeline = Pipeline(
         video_url=video_url,
@@ -57,6 +114,15 @@ def run_pipeline(job: dict):
     )
 
     storage = MinioStorage()
+    api_client = ClipFlowApiClient()
+
+    stage_status = "preparing" if pipeline_stage == "prepare" else "finalizing"
+    _sync_clipflow_api(
+        api_client,
+        job_id=job_id,
+        pipeline_stage=pipeline_stage,
+        status=stage_status,
+    )
 
     try:
 
@@ -69,28 +135,82 @@ def run_pipeline(job: dict):
         if result["status"] == "awaiting_manual_llm":
 
             transcript_path = result.get("transcript_path")
+            transcript_with_speakers_path = result.get("transcript_with_speakers_path")
             candidates_path = result.get("candidates_path")
             prompt_path = result.get("prompt_path")
+            runtime_status_path = result.get("runtime_status_path")
+            artifacts_manifest_path = result.get("artifacts_manifest_path")
 
-            if transcript_path and Path(transcript_path).exists():
-                storage.upload(
-                    str(transcript_path),
+            if _upload_if_exists(storage, transcript_path, f"jobs/{job_id}/transcript.json"):
+                pipeline.artifacts.mark_remote(
+                    "transcript",
+                    pipeline_stage,
                     f"jobs/{job_id}/transcript.json",
+                    transcript_path,
                 )
 
-            if candidates_path and Path(candidates_path).exists():
-                storage.upload(
-                    str(candidates_path),
+            if _upload_if_exists(
+                storage,
+                transcript_with_speakers_path,
+                f"jobs/{job_id}/transcript_with_speakers.json",
+            ):
+                pipeline.artifacts.mark_remote(
+                    "transcript_with_speakers",
+                    pipeline_stage,
+                    f"jobs/{job_id}/transcript_with_speakers.json",
+                    transcript_with_speakers_path,
+                )
+
+            if _upload_if_exists(storage, candidates_path, f"jobs/{job_id}/candidates.json"):
+                pipeline.artifacts.mark_remote(
+                    "candidates",
+                    pipeline_stage,
                     f"jobs/{job_id}/candidates.json",
+                    candidates_path,
                 )
 
-            if prompt_path and Path(prompt_path).exists():
-                storage.upload(
-                    str(prompt_path),
+            if _upload_if_exists(storage, prompt_path, f"jobs/{job_id}/prompt.txt"):
+                pipeline.artifacts.mark_remote(
+                    "prompt",
+                    pipeline_stage,
                     f"jobs/{job_id}/prompt.txt",
+                    prompt_path,
                 )
 
-            logger.info(f"{job_id} prepare stage uploaded to MinIO")
+            speaker_turns_path = str(Path(pipeline.work_dir) / "speaker_turns.json")
+            if _upload_if_exists(
+                storage,
+                speaker_turns_path,
+                f"jobs/{job_id}/speaker_turns.json",
+            ):
+                pipeline.artifacts.mark_remote(
+                    "speaker_turns",
+                    pipeline_stage,
+                    f"jobs/{job_id}/speaker_turns.json",
+                    speaker_turns_path,
+                )
+
+            _upload_if_exists(
+                storage,
+                runtime_status_path,
+                f"jobs/{job_id}/runtime_status.json",
+            )
+            _upload_if_exists(
+                storage,
+                artifacts_manifest_path,
+                f"jobs/{job_id}/artifacts_manifest.json",
+            )
+
+            logger.info(
+                f"{job_id} prepare stage uploaded to MinIO",
+                extra={"job_id": job_id, "pipeline_stage": pipeline_stage, "step": "upload_artifacts", "status": "completed"},
+            )
+            _sync_clipflow_api(
+                api_client,
+                job_id=job_id,
+                pipeline_stage="prepare",
+                status="awaiting_manual_llm",
+            )
             return
 
         # ==========================================
@@ -111,6 +231,12 @@ def run_pipeline(job: dict):
                         str(ai_output_path),
                         f"jobs/{job_id}/ai_output.json",
                     )
+                    pipeline.artifacts.mark_remote(
+                        "ai_output",
+                        pipeline_stage,
+                        f"jobs/{job_id}/ai_output.json",
+                        ai_output_path,
+                    )
 
                 try:
                     ai_output_path.unlink()
@@ -119,6 +245,8 @@ def run_pipeline(job: dict):
 
             # salva cortes
             cut_files = result.get("cut_files", [])
+            qa_report_path = result.get("qa_report_path")
+            delivery_package_path = result.get("delivery_package_path")
 
             for file_path in cut_files:
                 path_obj = Path(file_path)
@@ -128,18 +256,99 @@ def run_pipeline(job: dict):
                         str(path_obj),
                         f"jobs/{job_id}/cuts/{path_obj.name}",
                     )
+                    pipeline.artifacts.mark_remote(
+                        path_obj.stem,
+                        pipeline_stage,
+                        f"jobs/{job_id}/cuts/{path_obj.name}",
+                        path_obj,
+                    )
 
-            logger.info(f"{job_id} finalize stage uploaded to MinIO")
+            if _upload_if_exists(
+                storage,
+                qa_report_path,
+                f"jobs/{job_id}/qa_report.json",
+            ):
+                pipeline.artifacts.mark_remote(
+                    "qa_report",
+                    pipeline_stage,
+                    f"jobs/{job_id}/qa_report.json",
+                    qa_report_path,
+                )
+
+            if _upload_if_exists(
+                storage,
+                delivery_package_path,
+                f"jobs/{job_id}/delivery_package.json",
+            ):
+                pipeline.artifacts.mark_remote(
+                    "delivery_package",
+                    pipeline_stage,
+                    f"jobs/{job_id}/delivery_package.json",
+                    delivery_package_path,
+                )
+
+            _upload_if_exists(
+                storage,
+                result.get("runtime_status_path"),
+                f"jobs/{job_id}/runtime_status.json",
+            )
+            _upload_if_exists(
+                storage,
+                result.get("artifacts_manifest_path"),
+                f"jobs/{job_id}/artifacts_manifest.json",
+            )
+
+            logger.info(
+                f"{job_id} finalize stage uploaded to MinIO",
+                extra={"job_id": job_id, "pipeline_stage": pipeline_stage, "step": "upload_artifacts", "status": "completed"},
+            )
+            _sync_clipflow_api(
+                api_client,
+                job_id=job_id,
+                pipeline_stage="finalize",
+                status="completed",
+            )
             return
 
         # ==========================================
         # erro / retorno inesperado
         # ==========================================
 
-        logger.error(f"Unexpected pipeline result: {result}")
+        logger.error(
+            f"Unexpected pipeline result: {result}",
+            extra={"job_id": job_id, "pipeline_stage": pipeline_stage, "step": "pipeline", "status": "unexpected_result"},
+        )
+
+        _upload_if_exists(
+            storage,
+            result.get("runtime_status_path"),
+            f"jobs/{job_id}/runtime_status.json",
+        )
+        _upload_if_exists(
+            storage,
+            result.get("artifacts_manifest_path"),
+            f"jobs/{job_id}/artifacts_manifest.json",
+        )
+        _sync_clipflow_api(
+            api_client,
+            job_id=job_id,
+            pipeline_stage=pipeline_stage,
+            status="failed",
+            error_message=result.get("error") or "Unexpected pipeline result",
+        )
 
     except Exception as e:
-        logger.exception(f"Pipeline failed for job {job_id}: {e}")
+        logger.exception(
+            f"Pipeline failed for job {job_id}: {e}",
+            extra={"job_id": job_id, "pipeline_stage": pipeline_stage, "step": "pipeline", "status": "failed"},
+        )
+        _sync_clipflow_api(
+            api_client,
+            job_id=job_id,
+            pipeline_stage=pipeline_stage,
+            status="failed",
+            error_message=str(e),
+        )
 
 
 def main():
@@ -150,7 +359,10 @@ def main():
         decode_responses=True,
     )
 
-    logger.info("VOXMIND WORKER READY — waiting for jobs")
+    logger.info(
+        "VOXMIND WORKER READY — waiting for jobs",
+        extra={"step": "worker_boot", "status": "ready"},
+    )
 
     while True:
 
@@ -159,7 +371,10 @@ def main():
         try:
             job = json.loads(payload)
         except Exception:
-            logger.error("Invalid job payload")
+            logger.error(
+                "Invalid job payload",
+                extra={"step": "parse_job", "status": "failed"},
+            )
             continue
 
         run_pipeline(job)

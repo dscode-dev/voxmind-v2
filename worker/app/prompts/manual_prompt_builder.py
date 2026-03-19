@@ -1,8 +1,18 @@
-import json
-from typing import List, Dict
+from typing import Dict, List
+
+from app.prompts.prompt_context import build_candidate_context, build_transcript_context
 
 
 class ManualPromptBuilder:
+
+    def __init__(self, max_context_chars: int | None = None):
+        if max_context_chars is not None:
+            self.max_context_chars = max_context_chars
+            return
+
+        from app.settings import settings
+
+        self.max_context_chars = settings.llm_max_chars
 
     def build(
         self,
@@ -12,196 +22,66 @@ class ManualPromptBuilder:
         clip_mode: str = "short_serie",
         video_ratio: str = "portrait",
     ) -> str:
-
-        mode_instructions = self._build_mode_instructions(clip_mode)
-        ratio_instructions = self._build_ratio_instructions(video_ratio)
+        transcript_context = build_transcript_context(
+            transcript=transcript,
+            candidates=candidates,
+            max_chars=int(self.max_context_chars * 0.72),
+        )
+        candidate_context = build_candidate_context(
+            candidates=candidates,
+            max_chars=int(self.max_context_chars * 0.28),
+        )
 
         return f"""
 JOB_ID: {job_id}
 
-Você é um **editor profissional de conteúdo viral e estrategista de retenção para YouTube Shorts, TikTok, Reels e vídeos longos**.
+Você é um editor sênior de conteúdo para Shorts, TikTok, Reels e vídeos longos.
 
-Seu trabalho é analisar a transcrição e identificar os melhores momentos do vídeo para gerar cortes de alta qualidade narrativa.
+Sua função é selecionar os melhores cortes do vídeo preservando integridade narrativa,
+continuidade de fala e contexto suficiente para o espectador entender cada trecho.
 
-⚠️ REGRA CRÍTICA
+REGRA CRÍTICA
 
-Retorne **APENAS JSON válido**.
-
-Não escreva texto fora do JSON.
+Retorne APENAS JSON válido.
 Não use markdown.
-Não explique nada antes ou depois.
+Não escreva explicações fora do JSON.
 
-Depois de gerar o conteúdo:
+CONFIGURAÇÃO
 
-Salve o resultado em um arquivo chamado:
-
-response.json
-
-━━━━━━━━━━━━━━━━━━
-CONFIGURAÇÃO DO JOB
-━━━━━━━━━━━━━━━━━━
-
-JOB_ID: {job_id}
-
+job_id: {job_id}
 clip_mode: {clip_mode}
 video_ratio: {video_ratio}
 
-{mode_instructions}
+{self._build_mode_instructions(clip_mode)}
 
-{ratio_instructions}
+{self._build_ratio_instructions(video_ratio)}
 
-━━━━━━━━━━━━━━━━━━
-REGRA MAIS IMPORTANTE
-━━━━━━━━━━━━━━━━━━
+REGRAS NARRATIVAS OBRIGATÓRIAS
 
-Independentemente do modo, NUNCA gere cortes que:
+- Nunca comece no meio de frase.
+- Nunca termine antes do fechamento da ideia.
+- Nunca corte no meio do turno de fala de um locutor se isso quebrar o sentido.
+- Preserve continuidade entre falas relacionadas.
+- Em diálogos, garanta que a troca entre speakers continue compreensível.
+- Você pode ajustar timestamps em aproximadamente ±8 segundos para capturar início natural, desenvolvimento e fechamento.
+- Os candidatos são pistas, não limites rígidos.
 
-• comecem no meio de uma frase
-• terminem no meio de uma frase
-• terminem antes da conclusão da ideia
-• dependam fortemente do trecho anterior para fazer sentido
-• deixem o assunto pela metade
+REGRAS ESPECÍFICAS DE LOCUTOR
 
-Todo corte ou grupo de cortes deve preservar a integridade narrativa.
+- O transcript inclui speaker labels como SPEAKER_01, SPEAKER_02, etc.
+- Use esses labels para entender diálogos, mudanças de contexto e continuidade.
+- Prefira cortes que respeitem a conclusão do speaker atual.
+- Evite trocar de speaker exatamente no início ou no fim do corte sem contexto suficiente.
 
-Se necessário, você pode ajustar os timestamps alguns segundos
-antes ou depois do candidato sugerido para capturar:
+QUALIDADE DO CORTE
 
-• começo natural da fala
-• desenvolvimento suficiente
-• fechamento da ideia
+- começo natural
+- desenvolvimento claro
+- payoff, conclusão, revelação ou fechamento
+- contexto suficiente para funcionar no modo solicitado
+- retenção alta nos primeiros segundos
 
-Você pode ajustar os timestamps em aproximadamente ±8 segundos
-quando isso for necessário para manter o sentido completo.
-
-━━━━━━━━━━━━━━━━━━
-OBJETIVO
-━━━━━━━━━━━━━━━━━━
-
-Gerar:
-
-1️⃣ Cortes do vídeo original de acordo com o clip_mode
-2️⃣ Sugestões de MERGE entre cortes quando fizer sentido
-3️⃣ Um roteiro editorial para vídeo longo
-
-━━━━━━━━━━━━━━━━━━
-CRITÉRIO DE QUALIDADE DOS CORTES
-━━━━━━━━━━━━━━━━━━
-
-Um bom corte deve:
-
-• ter começo natural
-• desenvolver a ideia principal
-• terminar com conclusão, revelação, payoff ou fechamento claro
-• funcionar bem no formato solicitado
-• manter contexto suficiente para o espectador entender o trecho
-
-Priorize momentos com:
-
-• revelações
-• histórias pessoais
-• momentos de tensão
-• opiniões fortes
-• perguntas provocativas
-• contrastes de ideias
-• viradas narrativas
-• reflexões fortes
-• frases memoráveis
-
-Evite:
-
-• trechos neutros
-• partes muito explicativas sem payoff
-• trechos quebrados
-• momentos sem começo ou sem conclusão
-• cortes que parecem apenas pedaços soltos de conversa
-
-━━━━━━━━━━━━━━━━━━
-USO DOS CANDIDATOS
-━━━━━━━━━━━━━━━━━━
-
-Os candidatos priorizados abaixo são apenas pontos de partida.
-
-Você NÃO está limitado a eles.
-
-Você pode:
-
-• expandir o início
-• expandir o fim
-• ajustar timestamps
-• ignorar candidatos fracos
-• combinar candidatos próximos quando fizer sentido narrativo
-
-O objetivo não é obedecer rigidamente aos candidatos.
-O objetivo é escolher os MELHORES cortes possíveis mantendo narrativa completa.
-
-━━━━━━━━━━━━━━━━━━
-MERGE ENTRE CORTES
-━━━━━━━━━━━━━━━━━━
-
-Se dois ou mais cortes fizerem parte da mesma narrativa,
-eles devem compartilhar o mesmo valor em:
-
-merge_group
-
-Exemplo:
-
-merge_group: "story_1"
-
-Use merge_group quando os cortes:
-
-• pertencem à mesma ideia
-• fazem parte da mesma história
-• podem ser unidos para formar um conteúdo mais completo
-
-Se o corte for totalmente independente:
-
-merge_group: null
-
-━━━━━━━━━━━━━━━━━━
-PARTE 1 — CORTES
-━━━━━━━━━━━━━━━━━━
-
-Identifique os melhores cortes de acordo com o modo solicitado.
-
-Para cada corte informe:
-
-• start
-• end
-• hook
-• reason
-• title
-• description
-• hashtags
-• thumbnail
-• merge_group
-
-━━━━━━━━━━━━━━━━━━
-PARTE 2 — ROTEIRO DE VÍDEO LONGO
-━━━━━━━━━━━━━━━━━━
-
-Crie um roteiro editorial para um vídeo longo novo
-inspirado no tema geral da transcrição.
-
-Duração aproximada:
-
-8 a 12 minutos.
-
-O roteiro deve incluir:
-
-• title
-• hook
-• context
-• development
-• twist
-• conclusion
-• narration_style
-
-━━━━━━━━━━━━━━━━━━
-FORMATO DA RESPOSTA
-━━━━━━━━━━━━━━━━━━
-
-Retorne APENAS JSON válido neste formato:
+OUTPUT JSON
 
 {{
   "job_id": "{job_id}",
@@ -212,7 +92,7 @@ Retorne APENAS JSON válido neste formato:
       "start": 10.5,
       "end": 45.3,
       "hook": "frase forte do início do corte",
-      "reason": "por que esse trecho tem potencial e respeita o modo solicitado",
+      "reason": "por que esse trecho respeita narrativa, speaker continuity e clip_mode",
       "title": "título curto e impactante",
       "description": "descrição curta",
       "hashtags": ["#tag1", "#tag2", "#tag3"],
@@ -231,101 +111,62 @@ Retorne APENAS JSON válido neste formato:
   }}
 }}
 
-━━━━━━━━━━━━━━━━━━
-TRANSCRIÇÃO COMPLETA
-━━━━━━━━━━━━━━━━━━
+TRANSCRIPT RELEVANTE COM SPEAKERS
 
-{json.dumps(transcript, ensure_ascii=False, indent=2)}
+{transcript_context}
 
-━━━━━━━━━━━━━━━━━━
 CANDIDATOS PRIORIZADOS
-━━━━━━━━━━━━━━━━━━
 
-{json.dumps(candidates, ensure_ascii=False, indent=2)}
+{candidate_context}
 
-━━━━━━━━━━━━━━━━━━
 INSTRUÇÃO FINAL
-━━━━━━━━━━━━━━━━━━
 
-1. Gere o JSON final seguindo EXATAMENTE o formato especificado.
-2. Salve o resultado como **response.json**.
-3. Envie o arquivo **response.json** de volta no Telegram.
-
-JOB_ID: {job_id}
+Retorne apenas o JSON final.
 """
 
     def _build_mode_instructions(self, clip_mode: str) -> str:
-
         if clip_mode == "short":
             return """
-MODO SOLICITADO: SHORT
+MODO: SHORT
 
-Você deve gerar cortes independentes.
-
-Cada corte precisa funcionar sozinho, como um vídeo completo.
-
-Regras desse modo:
-
-• cada corte deve ser individual
-• cada corte deve ter começo, desenvolvimento e fim
-• um corte não deve depender do anterior
-• priorize cortes entre 30 e 60 segundos
-• se necessário, o corte pode ficar um pouco maior para preservar o fechamento
-• merge_group deve ser null na maioria dos casos
-• só use merge_group se houver uma justificativa narrativa muito forte, mas a preferência aqui é por cortes independentes
+- Gere cortes independentes.
+- Cada corte precisa funcionar sozinho.
+- Cada corte deve ter início, meio e fim.
+- Prefira 30 a 60 segundos, mas preserve o fechamento se precisar expandir.
+- merge_group deve ser null na maioria dos casos.
 """
 
         if clip_mode == "long":
             return """
-MODO SOLICITADO: LONG
+MODO: LONG
 
-Você deve gerar vários cortes que possam compor um vídeo mais longo.
-
-Regras desse modo:
-
-• os cortes não precisam ser totalmente independentes
-• eles podem representar blocos contínuos de uma narrativa maior
-• pense em blocos como introdução, desenvolvimento, argumento, conclusão
-• preserve continuidade entre trechos
-• não quebre o raciocínio no meio
-• priorize cortes mais longos que permitam manter contexto
-• use merge_group quando múltiplos cortes fizerem parte da mesma narrativa maior
-• a prioridade aqui é construir uma sequência coesa para um vídeo longo
+- Gere blocos que possam compor uma narrativa maior.
+- Os cortes podem depender da continuidade do bloco anterior.
+- Preserve ordem cronológica e fluidez entre trechos.
+- Use merge_group quando vários cortes fizerem parte da mesma história.
 """
 
         return """
-MODO SOLICITADO: SHORT-SERIE
+MODO: SHORT_SERIE
 
-Você deve gerar vários cortes conectados narrativamente,
-que depois possam ser unidos em um único short final.
-
-Regras desse modo:
-
-• os cortes devem fazer parte da mesma história ou da mesma linha de raciocínio
-• os cortes individualmente podem não ser totalmente independentes
-• juntos, eles devem formar um único conteúdo coeso
-• todos os cortes relacionados devem compartilhar o mesmo merge_group
-• a sequência final deve preservar começo, desenvolvimento e fechamento
-• a soma dos cortes conectados deve ser suficiente para formar um short final com pelo menos 1 minuto
-• nunca deixe a história ou o assunto pela metade
-• pense em sequência narrativa: setup → desenvolvimento → payoff
+- Gere cortes conectados que formem uma sequência coesa.
+- Os cortes podem depender do anterior, mas juntos precisam fechar a ideia.
+- Todos os trechos relacionados devem compartilhar merge_group.
+- Pense em setup, desenvolvimento e payoff.
 """
 
     def _build_ratio_instructions(self, video_ratio: str) -> str:
-
         if video_ratio == "landscape":
             return """
-FORMATO SOLICITADO: LANDSCAPE
+FORMATO: LANDSCAPE
 
-Considere que o vídeo final será usado em formato horizontal / tela ampla.
-Isso não muda os timestamps diretamente, mas pode influenciar levemente o tipo de trecho escolhido,
-priorizando momentos que funcionem bem em tela maior.
+- Considere um vídeo horizontal com mais espaço de contexto visual.
+- Você pode aceitar trechos ligeiramente mais contemplativos se a narrativa compensar.
 """
 
         return """
-FORMATO SOLICITADO: PORTRAIT
+FORMATO: PORTRAIT
 
-Considere que o vídeo final será usado em formato vertical / shorts / reels / tiktok.
-Isso não muda os timestamps diretamente, mas reforça a necessidade de trechos mais diretos,
-envolventes e com retenção forte.
+- Considere um vídeo vertical com alta exigência de retenção rápida.
+- Prefira trechos mais diretos, claros e fortes logo no início.
 """

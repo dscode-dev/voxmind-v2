@@ -1,28 +1,25 @@
 PIPELINE_STEPS = [
-    "DOWNLOAD_STARTED",
     "DOWNLOAD_FINISHED",
-    "TRANSCRIPTION_STARTED",
     "TRANSCRIPTION_FINISHED",
-    "LLM_REQUEST_STARTED",
+    "DIARIZATION_FINISHED",
     "LLM_REQUEST_FINISHED",
-    "CUT_GENERATED",
-    "RENDER_STARTED",
     "RENDER_FINISHED",
+    "QA_FINISHED",
+    "DELIVERY_PACKAGE_READY",
     "JOB_COMPLETED",
 ]
 
 
 def calculate_progress(events):
-
     if not events:
         return 0
 
-    completed = 0
+    completed_steps = {
+        e.event_type.name
+        for e in events
+        if e.event_type.name in PIPELINE_STEPS
+    }
 
-    for e in events:
-        if e.event_type.value in PIPELINE_STEPS:
-            completed += 1
-
-    progress = int((completed / len(PIPELINE_STEPS)) * 100)
+    progress = int((len(completed_steps) / len(PIPELINE_STEPS)) * 100)
 
     return min(progress, 100)

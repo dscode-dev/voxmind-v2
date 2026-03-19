@@ -61,8 +61,15 @@ class ClipAssetType(str, enum.Enum):
     MERGED_CLIP = "merged_clip"
     THUMBNAIL = "thumbnail"
     TRANSCRIPT = "transcript"
+    TRANSCRIPT_WITH_SPEAKERS = "transcript_with_speakers"
+    SPEAKER_TURNS = "speaker_turns"
+    CANDIDATES = "candidates"
     PROMPT = "prompt"
     AI_RESPONSE = "ai_response"
+    QA_REPORT = "qa_report"
+    DELIVERY_PACKAGE = "delivery_package"
+    ARTIFACTS_MANIFEST = "artifacts_manifest"
+    RUNTIME_STATUS = "runtime_status"
 
 class AssetStatus(str, enum.Enum):
     READY = "ready"
@@ -79,6 +86,8 @@ class JobEventType(str, enum.Enum):
 
     TRANSCRIPTION_STARTED = "transcription_started"
     TRANSCRIPTION_FINISHED = "transcription_finished"
+    DIARIZATION_STARTED = "diarization_started"
+    DIARIZATION_FINISHED = "diarization_finished"
 
     LLM_REQUEST_STARTED = "llm_request_started"
     LLM_REQUEST_FINISHED = "llm_request_finished"
@@ -87,6 +96,9 @@ class JobEventType(str, enum.Enum):
 
     RENDER_STARTED = "render_started"
     RENDER_FINISHED = "render_finished"
+    QA_STARTED = "qa_started"
+    QA_FINISHED = "qa_finished"
+    DELIVERY_PACKAGE_READY = "delivery_package_ready"
 
     JOB_COMPLETED = "job_completed"
     JOB_FAILED = "job_failed"

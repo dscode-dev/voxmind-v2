@@ -24,6 +24,7 @@ yt-dlp = "^2025.3.26"
 faster-whisper = "^1.0.0"
 python-telegram-bot = "^20.7"
 onnxruntime = "^1.17.0"
+pyannote.audio = "^3.3.2"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.2.0"

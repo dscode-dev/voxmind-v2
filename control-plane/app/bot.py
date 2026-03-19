@@ -23,8 +23,6 @@ logger = logging.getLogger(__name__)
 publisher = QueuePublisher()
 registry = JobRegistry()
 
-MIN_CUT_DURATION = 30
-
 
 class VoxmindBot:
 
@@ -168,10 +166,96 @@ Exemplo:
 
             duration = end - start
 
-            if duration < MIN_CUT_DURATION:
+            if duration < settings.min_cut_duration_sec:
                 raise RuntimeError(
-                    f"Cut {index} duration too short ({duration:.2f}s). Minimum is {MIN_CUT_DURATION}s"
+                    f"Cut {index} duration too short ({duration:.2f}s). Minimum is {settings.min_cut_duration_sec}s"
                 )
+
+    def _resolve_video_url(self, data: dict, job_id: str) -> str | None:
+        video_url = data.get("video_url")
+        if isinstance(video_url, str) and video_url.strip():
+            registry.register(job_id, video_url.strip())
+            return video_url.strip()
+
+        return registry.get_video_url(job_id)
+
+    async def _handle_delivery_package(self, update: Update, data: dict):
+        job_id = data.get("job_id", "unknown")
+        delivery_status = data.get("delivery_status", "unknown")
+        clip_count = data.get("clip_count", 0)
+        qa_decision = data.get("qa_decision", "unknown")
+
+        await update.message.reply_text(
+            f"""
+📦 Delivery package recebido
+
+JOB_ID: {job_id}
+Delivery status: {delivery_status}
+QA: {qa_decision}
+Clips: {clip_count}
+
+Esse arquivo é informativo e pode ser consumido pelo ClipFlow Studio.
+"""
+        )
+
+    async def _handle_qa_report(self, update: Update, data: dict):
+        summary = data.get("summary", {})
+        await update.message.reply_text(
+            f"""
+🧪 QA report recebido
+
+Decision: {data.get("decision", "unknown")}
+Approved: {summary.get("approved_clips", 0)}
+Needs review: {summary.get("needs_review_clips", 0)}
+Blocked: {summary.get("blocked_clips", 0)}
+
+Esse arquivo é informativo e não dispara finalização.
+"""
+        )
+
+    async def _handle_finalize_payload(self, update: Update, data: dict):
+        job_id = data.get("job_id")
+
+        if not job_id:
+            await update.message.reply_text("JSON precisa conter job_id.")
+            return
+
+        if "shorts_content" not in data:
+            await update.message.reply_text(
+                "JSON inválido. Campo obrigatório: shorts_content"
+            )
+            return
+
+        try:
+            self._validate_shorts(data)
+        except Exception as e:
+            await update.message.reply_text(f"JSON inválido: {str(e)}")
+            return
+
+        video_url = self._resolve_video_url(data, job_id)
+
+        if not video_url:
+            await update.message.reply_text(
+                "Job ID não encontrado e video_url não foi informado no JSON."
+            )
+            return
+
+        publisher.publish(
+            video_url=video_url,
+            job_id=job_id,
+            pipeline_stage="finalize",
+            manual_response=data,
+        )
+
+        await update.message.reply_text(
+            f"""
+🚀 Finalização iniciada
+
+JOB_ID: {job_id}
+
+Gerando cortes...
+"""
+        )
 
     async def _process_json_document(self, update, context, document):
 
@@ -206,57 +290,15 @@ Exemplo:
 
             return
 
-        job_id = data.get("job_id")
-
-        if not job_id:
-
-            await update.message.reply_text("JSON precisa conter job_id.")
-
+        if "delivery_status" in data and "clips" in data:
+            await self._handle_delivery_package(update, data)
             return
 
-        if "shorts_content" not in data:
-
-            await update.message.reply_text(
-                "JSON inválido. Campo obrigatório: shorts_content"
-            )
-
+        if "decision" in data and "summary" in data and "clips" in data:
+            await self._handle_qa_report(update, data)
             return
 
-        try:
-            self._validate_shorts(data)
-
-        except Exception as e:
-
-            await update.message.reply_text(
-                f"JSON inválido: {str(e)}"
-            )
-
-            return
-
-        video_url = registry.get_video_url(job_id)
-
-        if not video_url:
-
-            await update.message.reply_text("Job ID não encontrado.")
-
-            return
-
-        publisher.publish(
-            video_url=video_url,
-            job_id=job_id,
-            pipeline_stage="finalize",
-            manual_response=data,
-        )
-
-        await update.message.reply_text(
-            f"""
-🚀 Finalização iniciada
-
-JOB_ID: {job_id}
-
-Gerando cortes...
-"""
-        )
+        await self._handle_finalize_payload(update, data)
 
         try:
             os.remove(file_path)
@@ -272,51 +314,15 @@ Gerando cortes...
         except Exception:
             return
 
-        job_id = data.get("job_id")
-
-        if not job_id:
-
-            await update.message.reply_text("JSON precisa conter job_id.")
-
+        if "delivery_status" in data and "clips" in data:
+            await self._handle_delivery_package(update, data)
             return
 
-        if "shorts_content" not in data:
-
-            await update.message.reply_text(
-                "JSON inválido. Campo obrigatório: shorts_content"
-            )
-
+        if "decision" in data and "summary" in data and "clips" in data:
+            await self._handle_qa_report(update, data)
             return
 
-        try:
-            self._validate_shorts(data)
-
-        except Exception as e:
-
-            await update.message.reply_text(
-                f"JSON inválido: {str(e)}"
-            )
-
-            return
-
-        video_url = registry.get_video_url(job_id)
-
-        if not video_url:
-
-            await update.message.reply_text("Job ID não encontrado.")
-
-            return
-
-        publisher.publish(
-            video_url=video_url,
-            job_id=job_id,
-            pipeline_stage="finalize",
-            manual_response=data,
-        )
-
-        await update.message.reply_text(
-            "🚀 Finalização iniciada! Gerando cortes..."
-        )
+        await self._handle_finalize_payload(update, data)
 
     def run(self):
 

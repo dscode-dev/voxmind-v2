@@ -1,5 +1,6 @@
-from typing import List, Dict
+from bisect import bisect_left
 import re
+from typing import Dict, List
 
 
 SENTENCE_ENDINGS = [
@@ -32,63 +33,85 @@ class Chunker:
         target_duration: int = 55,
         max_duration: int = 95,
         overlap: int = 6,
+        boundary_lookback: int = 2,
     ):
         self.min_duration = min_duration
         self.target_duration = target_duration
         self.max_duration = max_duration
         self.overlap = overlap
+        self.boundary_lookback = boundary_lookback
 
     def chunk(self, segments: List[Dict]) -> List[Dict]:
+        if not segments:
+            return []
 
-        chunks = []
-        i = 0
+        starts = [float(segment["start"]) for segment in segments]
+        chunks: List[Dict] = []
+        start_index = 0
+        iteration_count = 0
+        max_iterations = max(len(segments) * 2, 1)
 
-        while i < len(segments):
+        while start_index < len(segments):
+            iteration_count += 1
+            if iteration_count > max_iterations:
+                raise RuntimeError("Chunker exceeded safe iteration budget")
 
-            current_i = i
-            start_time = segments[i]["start"]
-            text_parts = []
-            j = i
+            end_index = self._find_chunk_end(segments, start_index)
+            chunk_segments = segments[start_index : end_index + 1]
+            chunk = self._build_chunk(chunk_segments, start_index, end_index)
 
-            while j < len(segments):
+            if self._is_valid_chunk(chunk):
+                chunks.append(chunk)
 
-                text_parts.append(segments[j]["text"])
-
-                duration = segments[j]["end"] - start_time
-                text_joined = " ".join(text_parts).lower()
-
-                if duration >= self.target_duration and self._is_good_ending(text_joined):
-                    break
-
-                if duration >= self.max_duration:
-                    break
-
-                j += 1
-
-            if j >= len(segments):
-                j = len(segments) - 1
-
-            chunk_segments = segments[i : j + 1]
-
-            chunk = self._build_chunk(chunk_segments)
-
-            if chunk["end"] - chunk["start"] >= self.min_duration:
-                if not self._bad_start(chunk["text"]):
-                    chunks.append(chunk)
-
-            next_i = self._advance_index(segments, j)
-
-            # GARANTIA DE PROGRESSO:
-            # nunca permitir que o índice fique parado ou volte.
-            if next_i <= current_i:
-                i = current_i + 1
-            else:
-                i = next_i
+            next_index = self._advance_index(
+                segment_starts=starts,
+                current_start_index=start_index,
+                chunk_end_time=float(chunk["end"]),
+            )
+            start_index = max(next_index, start_index + 1)
 
         return chunks
 
-    def _is_good_ending(self, text: str) -> bool:
+    def _find_chunk_end(self, segments: List[Dict], start_index: int) -> int:
+        start_time = float(segments[start_index]["start"])
+        index = start_index
+        best_index = start_index
 
+        while index < len(segments):
+            current_duration = float(segments[index]["end"]) - start_time
+            best_index = index
+
+            if current_duration >= self.target_duration and self._is_good_boundary(segments, index):
+                return index
+
+            if current_duration >= self.max_duration:
+                return self._find_last_boundary(segments, start_index, index)
+
+            index += 1
+
+        return best_index
+
+    def _find_last_boundary(
+        self,
+        segments: List[Dict],
+        start_index: int,
+        end_index: int,
+    ) -> int:
+        for index in range(end_index, start_index - 1, -1):
+            if self._is_good_boundary(segments, index):
+                return index
+
+        return end_index
+
+    def _is_good_boundary(self, segments: List[Dict], end_index: int) -> bool:
+        start = max(0, end_index - self.boundary_lookback)
+        tail_text = " ".join(
+            (segments[index].get("text") or "").strip()
+            for index in range(start, end_index + 1)
+        ).lower()
+        return self._is_good_ending(tail_text)
+
+    def _is_good_ending(self, text: str) -> bool:
         for pattern in SENTENCE_ENDINGS:
             if re.search(pattern + r"\s*$", text):
                 return True
@@ -100,7 +123,6 @@ class Chunker:
         return False
 
     def _bad_start(self, text: str) -> bool:
-
         first_words = " ".join(text.split()[:3]).lower()
 
         for pattern in START_AVOID_PATTERNS:
@@ -109,23 +131,57 @@ class Chunker:
 
         return False
 
-    def _advance_index(self, segments: List[Dict], current_index: int) -> int:
+    def _advance_index(
+        self,
+        segment_starts: List[float],
+        current_start_index: int,
+        chunk_end_time: float,
+    ) -> int:
+        target_time = max(segment_starts[current_start_index], chunk_end_time - self.overlap)
 
-        if current_index >= len(segments) - 1:
-            return current_index + 1
+        return bisect_left(
+            segment_starts,
+            target_time,
+            lo=current_start_index + 1,
+        )
 
-        target_time = segments[current_index]["end"] - self.overlap
+    def _is_valid_chunk(self, chunk: Dict) -> bool:
+        duration = float(chunk["end"]) - float(chunk["start"])
+        if duration < self.min_duration:
+            return False
 
-        for i in range(current_index - 1, -1, -1):
-            if segments[i]["start"] <= target_time:
-                return i
+        if self._bad_start(chunk["text"]):
+            return False
 
-        return current_index + 1
+        return True
 
-    def _build_chunk(self, segments: List[Dict]) -> Dict:
+    def _build_chunk(
+        self,
+        segments: List[Dict],
+        start_index: int,
+        end_index: int,
+    ) -> Dict:
+        unique_speakers = sorted(
+            {
+                speaker
+                for speaker in (
+                    segment.get("speaker")
+                    for segment in segments
+                )
+                if speaker
+            }
+        )
 
         return {
-            "start": segments[0]["start"],
-            "end": segments[-1]["end"],
-            "text": " ".join([s["text"] for s in segments]),
+            "start": float(segments[0]["start"]),
+            "end": float(segments[-1]["end"]),
+            "text": " ".join(
+                (segment.get("text") or "").strip()
+                for segment in segments
+            ).strip(),
+            "segment_count": len(segments),
+            "start_segment_index": start_index,
+            "end_segment_index": end_index,
+            "speaker_count": len(unique_speakers),
+            "speakers": unique_speakers,
         }

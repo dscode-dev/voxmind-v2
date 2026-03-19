@@ -5,8 +5,9 @@ from typing import List, Dict
 
 class VideoCutter:
 
-    def __init__(self, work_dir: Path):
+    def __init__(self, work_dir: Path, min_clip_duration_sec: int = 25):
         self.work_dir = work_dir
+        self.min_clip_duration_sec = min_clip_duration_sec
 
     def cut(self, video_path: Path, cuts: List[Dict]) -> List[Path]:
 
@@ -19,7 +20,7 @@ class VideoCutter:
 
             duration = end - start
 
-            if duration < 30:
+            if duration < self.min_clip_duration_sec:
                 continue
 
             output_path = self.work_dir / f"cut_{index:02d}.mp4"

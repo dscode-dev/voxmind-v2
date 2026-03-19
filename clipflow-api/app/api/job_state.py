@@ -52,6 +52,19 @@ def job_state(
             "pipeline_stage": job.pipeline_stage,
             "created_at": job.created_at,
             "source_url": job.source_url,
+            "artifact_keys": {
+                "transcript": job.transcript_storage_key,
+                "transcript_with_speakers": job.transcript_with_speakers_storage_key,
+                "speaker_turns": job.speaker_turns_storage_key,
+                "candidates": job.candidates_storage_key,
+                "prompt": job.prompt_storage_key,
+                "ai_response": job.ai_response_storage_key,
+                "qa_report": job.qa_report_storage_key,
+                "delivery_package": job.delivery_package_storage_key,
+                "artifacts_manifest": job.artifacts_manifest_storage_key,
+                "runtime_status": job.runtime_status_storage_key,
+            },
+            "metadata": job.metadata_json,
         },
         "assets": [
             {
@@ -62,6 +75,7 @@ def job_state(
                 "title": a.title,
                 "description": a.description,
                 "url": a.public_url,
+                "storage_key": a.storage_key,
                 "start": float(a.start_sec),
                 "end": float(a.end_sec),
                 "duration": float(a.duration_sec),

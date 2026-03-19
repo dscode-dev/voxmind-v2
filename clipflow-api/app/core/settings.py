@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     minio_access_key: str = Field(alias="MINIO_ACCESS_KEY")
     minio_secret_key: str = Field(alias="MINIO_SECRET_KEY")
     minio_bucket: str = Field(default="clipflow")
+    worker_artifacts_bucket: str = Field(
+        default="voxmind",
+        alias="WORKER_ARTIFACTS_BUCKET",
+    )
 
 
 settings = Settings()

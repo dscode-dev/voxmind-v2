@@ -79,8 +79,15 @@ class ClipJob(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     merge_enabled: Mapped[bool] = mapped_column(nullable=False, default=True)
 
     transcript_storage_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    transcript_with_speakers_storage_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    speaker_turns_storage_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    candidates_storage_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
     prompt_storage_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
     ai_response_storage_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    qa_report_storage_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    delivery_package_storage_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    artifacts_manifest_storage_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    runtime_status_storage_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 

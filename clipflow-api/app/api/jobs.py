@@ -6,6 +6,8 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.models.clip_job import ClipJob
 from app.models.billing_product import BillingProduct
+from app.models.clip_asset import ClipAsset
+from app.models.enums import ClipAssetType
 from app.models.user import User
 from app.security.auth_middleware import get_current_user
 from app.models.enums import JobStatus
@@ -97,10 +99,20 @@ def job_detail(
         "source_url": job.source_url,
         "pipeline_stage": job.pipeline_stage,
         "created_at": job.created_at,
+        "artifact_keys": {
+            "transcript": job.transcript_storage_key,
+            "transcript_with_speakers": job.transcript_with_speakers_storage_key,
+            "speaker_turns": job.speaker_turns_storage_key,
+            "candidates": job.candidates_storage_key,
+            "prompt": job.prompt_storage_key,
+            "ai_response": job.ai_response_storage_key,
+            "qa_report": job.qa_report_storage_key,
+            "delivery_package": job.delivery_package_storage_key,
+            "artifacts_manifest": job.artifacts_manifest_storage_key,
+            "runtime_status": job.runtime_status_storage_key,
+        },
+        "metadata": job.metadata_json,
     }
-
-
-from app.models.clip_asset import ClipAsset
 
 
 @router.get("/jobs/{job_id}/assets")
@@ -139,3 +151,90 @@ def job_assets(
         }
         for a in assets
     ]
+
+
+@router.get("/jobs/{job_id}/delivery-package")
+def job_delivery_package(
+    job_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+
+    job = (
+        db.query(ClipJob)
+        .filter(
+            ClipJob.id == job_id,
+            ClipJob.user_id == user.id,
+        )
+        .first()
+    )
+
+    if not job:
+        raise HTTPException(status_code=404)
+
+    assets = (
+        db.query(ClipAsset)
+        .filter(ClipAsset.job_id == job.id)
+        .order_by(ClipAsset.order_index)
+        .all()
+    )
+
+    delivery_asset = next(
+        (asset for asset in assets if asset.asset_type == ClipAssetType.DELIVERY_PACKAGE),
+        None,
+    )
+    qa_asset = next(
+        (asset for asset in assets if asset.asset_type == ClipAssetType.QA_REPORT),
+        None,
+    )
+    clips = [
+        asset
+        for asset in assets
+        if asset.asset_type in {ClipAssetType.SHORT_CLIP, ClipAssetType.MERGED_CLIP}
+    ]
+
+    return {
+        "job_id": str(job.id),
+        "status": job.status.value,
+        "pipeline_stage": job.pipeline_stage,
+        "delivery_package": {
+            "storage_key": job.delivery_package_storage_key or (delivery_asset.storage_key if delivery_asset else None),
+            "url": delivery_asset.public_url if delivery_asset else None,
+        },
+        "qa_report": {
+            "storage_key": job.qa_report_storage_key or (qa_asset.storage_key if qa_asset else None),
+            "url": qa_asset.public_url if qa_asset else None,
+        },
+        "artifact_keys": {
+            "transcript": job.transcript_storage_key,
+            "transcript_with_speakers": job.transcript_with_speakers_storage_key,
+            "speaker_turns": job.speaker_turns_storage_key,
+            "candidates": job.candidates_storage_key,
+            "prompt": job.prompt_storage_key,
+            "ai_response": job.ai_response_storage_key,
+            "qa_report": job.qa_report_storage_key,
+            "delivery_package": job.delivery_package_storage_key,
+            "artifacts_manifest": job.artifacts_manifest_storage_key,
+            "runtime_status": job.runtime_status_storage_key,
+        },
+        "clips": [
+            {
+                "id": str(asset.id),
+                "type": asset.asset_type.value,
+                "order": asset.order_index,
+                "title": asset.title,
+                "description": asset.description,
+                "storage_key": asset.storage_key,
+                "url": asset.public_url,
+                "start": float(asset.start_sec),
+                "end": float(asset.end_sec),
+                "duration": float(asset.duration_sec),
+                "merge_group": asset.merge_group,
+                "thumbnail_text": asset.thumbnail_text,
+                "hashtags": asset.hashtags_json,
+                "extra": asset.extra_json,
+            }
+            for asset in clips
+        ],
+        "metadata": job.metadata_json,
+    }
