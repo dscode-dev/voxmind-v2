@@ -16,6 +16,7 @@ from telegram.ext import (
 from .queue_publisher import QueuePublisher
 from .settings import settings
 from .job_registry import JobRegistry
+from .health_server import ControlPlaneHealth
 
 
 logger = logging.getLogger(__name__)
@@ -324,8 +325,14 @@ Gerando cortes...
 
         await self._handle_finalize_payload(update, data)
 
-    def run(self):
+    def run(self, health: ControlPlaneHealth | None = None):
 
         logger.info("Starting Voxmind Telegram Bot")
+        if health:
+            health.mark_ready("polling")
 
-        self.app.run_polling()
+        try:
+            self.app.run_polling()
+        finally:
+            if health:
+                health.mark_not_ready("stopped")
