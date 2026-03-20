@@ -24,7 +24,7 @@ WORKDIR /app
 COPY pyproject.toml poetry.lock* /app/
 
 RUN if [ -n "$POETRY_INSTALL_GROUPS" ]; then \
-        poetry install --only main --with "$POETRY_INSTALL_GROUPS" --no-root; \
+        poetry install --without dev --with "$POETRY_INSTALL_GROUPS" --no-root; \
     else \
         poetry install --only main --no-root; \
     fi \
