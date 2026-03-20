@@ -194,6 +194,19 @@ def run_pipeline(job: dict):
                     speaker_turns_path,
                 )
 
+            diarization_diagnostics_path = str(Path(pipeline.work_dir) / "diarization_diagnostics.json")
+            if _upload_if_exists(
+                storage,
+                diarization_diagnostics_path,
+                f"jobs/{job_id}/diarization_diagnostics.json",
+            ):
+                pipeline.artifacts.mark_remote(
+                    "diarization_diagnostics",
+                    pipeline_stage,
+                    f"jobs/{job_id}/diarization_diagnostics.json",
+                    diarization_diagnostics_path,
+                )
+
             _upload_if_exists(
                 storage,
                 runtime_status_path,

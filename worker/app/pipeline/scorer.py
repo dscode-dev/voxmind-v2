@@ -9,11 +9,15 @@ class Scorer:
         max_candidates_per_window: int = 2,
         min_start_gap: int = 12,
         overlap_iou_threshold: float = 0.55,
+        prefer_thematic_continuity: bool = False,
+        thematic_similarity_threshold: float = 0.14,
     ):
         self.max_candidates = max_candidates
         self.max_candidates_per_window = max_candidates_per_window
         self.min_start_gap = min_start_gap
         self.overlap_iou_threshold = overlap_iou_threshold
+        self.prefer_thematic_continuity = prefer_thematic_continuity
+        self.thematic_similarity_threshold = thematic_similarity_threshold
 
     def score(self, candidates: List[Dict]) -> List[Dict]:
         if not candidates:
@@ -31,6 +35,7 @@ class Scorer:
 
         selected: List[Dict] = []
         selected_per_window: dict[int, int] = {}
+        anchor_candidate: Dict | None = None
 
         for candidate in ranked:
             if len(selected) >= self.max_candidates:
@@ -40,15 +45,23 @@ class Scorer:
             if selected_per_window.get(window_index, 0) >= self.max_candidates_per_window:
                 continue
 
-            if self._should_skip(candidate, selected):
+            if self._should_skip(candidate, selected, anchor_candidate):
                 continue
 
-            selected.append(self._to_output(candidate))
+            output_candidate = self._to_output(candidate)
+            selected.append(output_candidate)
             selected_per_window[window_index] = selected_per_window.get(window_index, 0) + 1
+            if anchor_candidate is None:
+                anchor_candidate = output_candidate
 
         return sorted(selected, key=lambda item: item["start"])
 
-    def _should_skip(self, candidate: Dict, selected: List[Dict]) -> bool:
+    def _should_skip(
+        self,
+        candidate: Dict,
+        selected: List[Dict],
+        anchor_candidate: Dict | None,
+    ) -> bool:
         for existing in selected:
             if abs(float(candidate["start"]) - float(existing["start"])) < self.min_start_gap:
                 return True
@@ -58,6 +71,14 @@ class Scorer:
 
             if self._text_similarity(candidate.get("text", ""), existing.get("text", "")) >= 0.72:
                 return True
+
+        if (
+            self.prefer_thematic_continuity
+            and anchor_candidate is not None
+            and self._topic_similarity(candidate.get("text", ""), anchor_candidate.get("text", ""))
+            < self.thematic_similarity_threshold
+        ):
+            return True
 
         return False
 
@@ -124,3 +145,16 @@ class Scorer:
             for token in "".join(char.lower() if char.isalnum() else " " for char in text).split()
             if len(token) > 2
         }
+
+    def _topic_similarity(self, left_text: str, right_text: str) -> float:
+        left_tokens = self._tokenize(left_text)
+        right_tokens = self._tokenize(right_text)
+        if not left_tokens or not right_tokens:
+            return 0.0
+
+        intersection = len(left_tokens & right_tokens)
+        union = len(left_tokens | right_tokens)
+        if union == 0:
+            return 0.0
+
+        return intersection / union

@@ -160,7 +160,13 @@ class Pipeline:
             return Scorer(max_candidates=8, max_candidates_per_window=1, min_start_gap=18)
 
         if self.clip_mode == "short_serie" and self.video_ratio == "portrait":
-            return Scorer(max_candidates=8, max_candidates_per_window=1, min_start_gap=16)
+            return Scorer(
+                max_candidates=8,
+                max_candidates_per_window=1,
+                min_start_gap=16,
+                prefer_thematic_continuity=True,
+                thematic_similarity_threshold=0.16,
+            )
 
         return Scorer()
 
@@ -447,14 +453,26 @@ para continuar o processamento.
 
     def _apply_diarization(self, video_path: Path, segments: list[dict]) -> list[dict]:
         self._mark_step("diarization", "started")
+        diagnostics = self.diarizer.diagnostics()
 
         if not settings.diarization_enabled:
             merged = self.transcript_merger.merge(segments, [])
+            self._write_json_artifact(
+                "diarization_diagnostics.json",
+                diagnostics,
+                "diarization_diagnostics",
+            )
             self._mark_step("diarization", "skipped", reason="disabled")
             return merged
 
         if not self.diarizer.is_available:
             merged = self.transcript_merger.merge(segments, [])
+            diagnostics = self.diarizer.diagnostics()
+            self._write_json_artifact(
+                "diarization_diagnostics.json",
+                diagnostics,
+                "diarization_diagnostics",
+            )
             self._mark_step(
                 "diarization",
                 "skipped",
@@ -473,10 +491,19 @@ para continuar o processamento.
         )
 
         speaker_turns = self.diarizer.diarize(audio_path)
+        diagnostics = {
+            **self.diarizer.diagnostics(),
+            "speaker_turn_count": len(speaker_turns),
+        }
         diarization_path = self._write_json_artifact(
             "speaker_turns.json",
             speaker_turns,
             "speaker_turns",
+        )
+        self._write_json_artifact(
+            "diarization_diagnostics.json",
+            diagnostics,
+            "diarization_diagnostics",
         )
 
         merged = self.transcript_merger.merge(segments, speaker_turns)
@@ -490,6 +517,7 @@ para continuar o processamento.
             "diarization",
             "completed",
             speaker_turn_count=len(speaker_turns),
+            availability_reason=self.diarizer.availability_reason,
         )
         return merged
 

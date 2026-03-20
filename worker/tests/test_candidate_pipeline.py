@@ -183,3 +183,55 @@ def test_candidate_builder_penalizes_longer_than_preferred_duration():
 
     assert len(candidates) == 2
     assert candidates[0]["duration_penalty"] < candidates[1]["duration_penalty"]
+
+
+def test_scorer_prefers_thematic_continuity_for_short_serie():
+    candidates = [
+        {
+            "candidate_id": "cand_1",
+            "start": 100.0,
+            "end": 147.0,
+            "duration": 47.0,
+            "text": "Larry Fink Black Rock big money Wall Street e poder financeiro global.",
+            "total_score": 18.0,
+            "window_index": 0,
+            "boundary_score": 2.0,
+            "speaker_count": 1,
+            "speakers": ["UNKNOWN"],
+        },
+        {
+            "candidate_id": "cand_2",
+            "start": 280.0,
+            "end": 329.0,
+            "duration": 49.0,
+            "text": "Black Rock poder financeiro global controle politico e big money internacional.",
+            "total_score": 16.0,
+            "window_index": 1,
+            "boundary_score": 2.0,
+            "speaker_count": 1,
+            "speakers": ["UNKNOWN"],
+        },
+        {
+            "candidate_id": "cand_3",
+            "start": 790.0,
+            "end": 842.0,
+            "duration": 52.0,
+            "text": "Van Gogh tiro no peito agonia morte e suicidio com choque verbal.",
+            "total_score": 17.0,
+            "window_index": 2,
+            "boundary_score": 2.0,
+            "speaker_count": 1,
+            "speakers": ["UNKNOWN"],
+        },
+    ]
+
+    scorer = Scorer(
+        max_candidates=5,
+        max_candidates_per_window=1,
+        prefer_thematic_continuity=True,
+        thematic_similarity_threshold=0.16,
+    )
+
+    ranked = scorer.score(candidates)
+
+    assert [candidate["candidate_id"] for candidate in ranked] == ["cand_1", "cand_2"]
