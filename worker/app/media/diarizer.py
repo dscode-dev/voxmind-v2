@@ -30,15 +30,12 @@ class SpeakerDiarizer:
         try:
             pipeline_module = import_module("pyannote.audio")
             pipeline_cls = getattr(pipeline_module, "Pipeline")
-            self._pipeline = pipeline_cls.from_pretrained(
-                model_name,
-                use_auth_token=hf_token,
-            )
+            self._pipeline = self._load_pipeline(pipeline_cls, model_name, hf_token)
             self._availability_reason = "available"
             self._last_run_reason = "ready"
         except Exception as exc:  # pragma: no cover
             self._pipeline = None
-            self._availability_reason = f"unavailable:{exc.__class__.__name__}"
+            self._availability_reason = self._format_exception_reason("unavailable", exc)
             self._last_run_reason = self._availability_reason
 
     @property
@@ -67,7 +64,7 @@ class SpeakerDiarizer:
         try:
             diarization = self._pipeline(str(audio_path))
         except Exception as exc:  # pragma: no cover
-            self._last_run_reason = f"runtime_error:{exc.__class__.__name__}"
+            self._last_run_reason = self._format_exception_reason("runtime_error", exc)
             return []
 
         turns: List[Dict] = []
@@ -83,3 +80,21 @@ class SpeakerDiarizer:
 
         self._last_run_reason = "completed"
         return turns
+
+    def _load_pipeline(self, pipeline_cls, model_name: str, hf_token: str):
+        try:
+            return pipeline_cls.from_pretrained(
+                model_name,
+                token=hf_token,
+            )
+        except TypeError:
+            return pipeline_cls.from_pretrained(
+                model_name,
+                use_auth_token=hf_token,
+            )
+
+    def _format_exception_reason(self, prefix: str, exc: Exception) -> str:
+        message = str(exc).strip().replace("\n", " ")
+        if message:
+            return f"{prefix}:{exc.__class__.__name__}:{message}"
+        return f"{prefix}:{exc.__class__.__name__}"
