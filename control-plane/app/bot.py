@@ -173,6 +173,21 @@ Exemplo:
                     f"Cut {index} duration too short ({duration:.2f}s). Minimum is {settings.min_cut_duration_sec}s"
                 )
 
+    def _sanitize_json_text(self, text: str) -> str:
+        replacements = {
+            "“": '"',
+            "”": '"',
+            "„": '"',
+            "‟": '"',
+            "’": "'",
+            "‘": "'",
+            "´": "'",
+        }
+        sanitized = text
+        for source, target in replacements.items():
+            sanitized = sanitized.replace(source, target)
+        return sanitized
+
     def _resolve_video_url(self, data: dict, job_id: str) -> str | None:
         video_url = data.get("video_url")
         if isinstance(video_url, str) and video_url.strip():
@@ -180,6 +195,45 @@ Exemplo:
             return video_url.strip()
 
         return registry.get_video_url(job_id)
+
+    def _collect_finalize_warnings(self, data: dict) -> list[str]:
+        warnings: list[str] = []
+        shorts = list(data.get("shorts_content") or [])
+        clip_mode = str(data.get("clip_mode") or "").strip()
+
+        generic_title_markers = {
+            "o jogo por trás",
+            "quem realmente manda",
+            "o objetivo final",
+            "o tamanho do poder",
+        }
+
+        for index, cut in enumerate(shorts, start=1):
+            title = str(cut.get("title") or "").strip().lower()
+            hook = str(cut.get("hook") or "").strip()
+
+            if title in generic_title_markers:
+                warnings.append(f"cut_{index}: título genérico")
+
+            if hook and len(hook) < 18:
+                warnings.append(f"cut_{index}: hook muito curto")
+
+        if clip_mode == "short_serie" and len(shorts) >= 2:
+            ordered = sorted(shorts, key=lambda item: float(item.get("start", 0.0)))
+
+            for previous, current in zip(ordered, ordered[1:]):
+                previous_group = previous.get("merge_group")
+                current_group = current.get("merge_group")
+                if previous_group and current_group and previous_group != current_group:
+                    continue
+
+                gap = float(current.get("start", 0.0)) - float(previous.get("end", 0.0))
+                if gap > settings.short_serie_max_gap_sec:
+                    warnings.append(
+                        f"gap grande em short_serie: {gap:.1f}s entre {previous.get('end')} e {current.get('start')}"
+                    )
+
+        return warnings
 
     async def _handle_delivery_package(self, update: Update, data: dict):
         job_id = data.get("job_id", "unknown")
@@ -242,6 +296,13 @@ Esse arquivo é informativo e não dispara finalização.
             )
             return
 
+        warnings = self._collect_finalize_warnings(data)
+        if warnings:
+            await update.message.reply_text(
+                "⚠️ Avisos editoriais detectados antes do finalize:\n- "
+                + "\n- ".join(warnings[:8])
+            )
+
         publisher.publish(
             video_url=video_url,
             job_id=job_id,
@@ -282,7 +343,7 @@ Gerando cortes...
             with open(file_path) as f:
                 text = f.read()
 
-            text = text.replace("“", '"').replace("”", '"')
+            text = self._sanitize_json_text(text)
 
             data = json.loads(text)
 
@@ -309,7 +370,7 @@ Gerando cortes...
 
     async def handle_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-        text = update.message.text.strip()
+        text = self._sanitize_json_text(update.message.text.strip())
 
         try:
             data = json.loads(text)

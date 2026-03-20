@@ -15,6 +15,7 @@ class DeliveryPackageBuilder:
         qa_report: Dict | None,
         automation_report: Dict | None,
         artifacts_manifest: Dict | None,
+        response_validation: Dict | None = None,
     ) -> Dict:
         clips = []
         automation_by_index = {
@@ -53,6 +54,7 @@ class DeliveryPackageBuilder:
             "video_ratio": video_ratio,
             "delivery_status": self._resolve_delivery_status(qa_report),
             "qa_decision": qa_report.get("decision") if qa_report else None,
+            "response_validation": response_validation or {},
             "automation": automation_report,
             "clip_count": len(clips),
             "clips": clips,

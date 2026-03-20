@@ -18,6 +18,8 @@ def build_transcript_context(
     candidates: List[Dict],
     max_chars: int,
     context_padding_sec: int = 8,
+    max_candidates: int = 3,
+    max_segments_per_candidate: int = 6,
 ) -> str:
     full_text = _format_transcript_segments(transcript)
     if len(full_text) <= max_chars:
@@ -29,9 +31,16 @@ def build_transcript_context(
     selected_segments: List[Dict] = []
     seen_ranges: set[tuple[float, float]] = set()
 
-    for candidate in candidates:
+    prioritized_candidates = sorted(
+        candidates,
+        key=lambda item: item.get("total_score", 0.0),
+        reverse=True,
+    )[:max_candidates]
+
+    for candidate in prioritized_candidates:
         start = float(candidate["start"]) - context_padding_sec
         end = float(candidate["end"]) + context_padding_sec
+        included_for_candidate = 0
 
         for segment in transcript:
             segment_start = float(segment["start"])
@@ -46,6 +55,10 @@ def build_transcript_context(
 
             seen_ranges.add(key)
             selected_segments.append(segment)
+            included_for_candidate += 1
+
+            if included_for_candidate >= max_segments_per_candidate:
+                break
 
     selected_segments.sort(key=lambda item: float(item["start"]))
     focused_segments = _limit_transcript_segments(selected_segments)
@@ -60,7 +73,11 @@ def build_transcript_context(
 def build_candidate_context(candidates: List[Dict], max_chars: int) -> str:
     compact_candidates = []
 
-    for candidate in candidates:
+    for candidate in sorted(
+        candidates,
+        key=lambda item: item.get("total_score", 0.0),
+        reverse=True,
+    ):
         compact_candidates.append(
             {
                 "candidate_id": candidate.get("candidate_id"),
@@ -137,4 +154,6 @@ def _limit_transcript_segments(
 def _truncate_text(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
-    return text[: limit - 3].rstrip() + "..."
+    truncated = text[: limit - 3].rstrip()
+    truncated = truncated.rsplit(" ", 1)[0].rstrip(" ,;:")
+    return truncated + "..."

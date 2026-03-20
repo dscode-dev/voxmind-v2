@@ -81,6 +81,14 @@ class Settings(BaseSettings):
         default=12000,
         alias="LLM_MAX_CHARS"
     )
+    prompt_max_candidates: int = Field(
+        default=3,
+        alias="PROMPT_MAX_CANDIDATES"
+    )
+    prompt_max_segments_per_candidate: int = Field(
+        default=6,
+        alias="PROMPT_MAX_SEGMENTS_PER_CANDIDATE"
+    )
 
     # ======================================
     # Whisper ASR
@@ -196,6 +204,10 @@ class Settings(BaseSettings):
     render_min_clip_duration_sec: int = Field(
         default=25,
         alias="RENDER_MIN_CLIP_DURATION_SEC"
+    )
+    short_serie_max_gap_sec: int = Field(
+        default=22,
+        alias="SHORT_SERIE_MAX_GAP_SEC"
     )
 
     # ======================================

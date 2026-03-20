@@ -509,19 +509,23 @@ para continuar o processamento.
         try:
 
             if isinstance(self.manual_response, str):
-                self.manual_response = json.loads(self.manual_response)
+                self.manual_response = json.loads(
+                    self._sanitize_json_text(self.manual_response)
+                )
 
-            text = json.dumps(self.manual_response)
-
-            text = text.replace("“", '"').replace("”", '"')
-
-            self.manual_response = json.loads(text)
+            text = json.dumps(self.manual_response, ensure_ascii=False)
+            self.manual_response = json.loads(self._sanitize_json_text(text))
 
         except Exception:
             raise RuntimeError("Invalid JSON received from AI")
 
         if "shorts_content" not in self.manual_response:
             raise RuntimeError("Invalid response: shorts_content missing")
+
+        response_validation = self._build_response_validation(
+            self.manual_response.get("shorts_content", [])
+        )
+        self.manual_response["_response_validation"] = response_validation
         self._mark_step("validate_ai_response", "completed")
 
         self._log("⬇️ Downloading video from storage...")
@@ -587,6 +591,7 @@ para continuar o processamento.
         automation_report = self._run_auto_review(qa_report, filtered_cuts)
         if qa_report is not None:
             qa_report["automation"] = automation_report
+            qa_report["response_validation"] = self.manual_response.get("_response_validation", {})
         delivery_package = self._build_delivery_package(
             filtered_cuts,
             cut_files,
@@ -630,6 +635,86 @@ para continuar o processamento.
             "runtime_status_path": str(self.runtime.runtime_path),
             "artifacts_manifest_path": str(self.artifacts.manifest_path),
         }
+
+    def _sanitize_json_text(self, text: str) -> str:
+        replacements = {
+            "“": '"',
+            "”": '"',
+            "„": '"',
+            "‟": '"',
+            "’": "'",
+            "‘": "'",
+            "´": "'",
+        }
+
+        sanitized = text
+        for source, target in replacements.items():
+            sanitized = sanitized.replace(source, target)
+
+        return sanitized
+
+    def _build_response_validation(self, cuts: list[dict]) -> dict:
+        warnings: list[str] = []
+        generic_title_markers = {
+            "o jogo por trás",
+            "quem realmente manda",
+            "o objetivo final",
+            "o tamanho do poder",
+        }
+
+        for index, cut in enumerate(cuts, start=1):
+            title = str(cut.get("title") or "").strip().lower()
+            hook = str(cut.get("hook") or "").strip()
+
+            if title in generic_title_markers:
+                warnings.append(f"cut_{index}: generic_title")
+
+            if hook and len(hook) < 18:
+                warnings.append(f"cut_{index}: short_hook")
+
+        continuity_warnings = self._short_serie_continuity_gaps(cuts)
+        warnings.extend(
+            f"continuity_gap:{item['gap_sec']}"
+            for item in continuity_warnings
+        )
+
+        if continuity_warnings:
+            self._mark_step(
+                "validate_ai_response",
+                "warning",
+                continuity_gaps=continuity_warnings,
+            )
+
+        return {
+            "warnings": warnings,
+            "continuity_gaps": continuity_warnings,
+        }
+
+    def _short_serie_continuity_gaps(self, cuts: list[dict]) -> list[dict]:
+        if self.clip_mode != "short_serie" or len(cuts) < 2:
+            return []
+
+        ordered = sorted(cuts, key=lambda item: float(item["start"]))
+        continuity_warnings = []
+
+        for previous, current in zip(ordered, ordered[1:]):
+            previous_group = previous.get("merge_group")
+            current_group = current.get("merge_group")
+
+            if previous_group and current_group and previous_group != current_group:
+                continue
+
+            gap = float(current["start"]) - float(previous["end"])
+            if gap > settings.short_serie_max_gap_sec:
+                continuity_warnings.append(
+                    {
+                        "previous_end": float(previous["end"]),
+                        "current_start": float(current["start"]),
+                        "gap_sec": round(gap, 2),
+                    }
+                )
+
+        return continuity_warnings
 
     def _load_finalize_transcript(self) -> list[dict]:
         transcript_path = self.work_dir / "transcript_with_speakers.json"
@@ -701,6 +786,7 @@ para continuar o processamento.
             qa_report=qa_report,
             automation_report=automation_report,
             artifacts_manifest=self.artifacts.read(),
+            response_validation=self.manual_response.get("_response_validation"),
         )
         self._mark_step(
             "delivery_package",

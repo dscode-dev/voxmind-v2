@@ -1,5 +1,6 @@
 import json
 import math
+import re
 import subprocess
 from pathlib import Path
 from typing import List, Dict, Tuple
@@ -82,7 +83,7 @@ class Transcriber:
 
             for segment in segments:
 
-                text = (segment.text or "").strip()
+                text = self._normalize_text((segment.text or "").strip())
 
                 if not text:
                     continue
@@ -222,3 +223,14 @@ class Transcriber:
                 merged.append(current)
 
         return merged
+
+    def _normalize_text(self, text: str) -> str:
+        if not text:
+            return ""
+
+        normalized = re.sub(r"\s+", " ", text).strip()
+        normalized = re.sub(r"\b(\w+)( \1\b)+", r"\1", normalized, flags=re.IGNORECASE)
+        normalized = re.sub(r"([,.;:?!]){2,}", r"\1", normalized)
+        normalized = re.sub(r"\b(eh|ah|hum|hã|uh)\b", "", normalized, flags=re.IGNORECASE)
+        normalized = re.sub(r"\s+", " ", normalized).strip(" ,")
+        return normalized

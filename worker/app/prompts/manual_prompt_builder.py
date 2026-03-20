@@ -6,11 +6,14 @@ from app.prompts.prompt_context import build_candidate_context, build_transcript
 class ManualPromptBuilder:
 
     def __init__(self, max_context_chars: int | None = None):
+        from app.settings import settings
+
+        self.prompt_max_candidates = settings.prompt_max_candidates
+        self.prompt_max_segments_per_candidate = settings.prompt_max_segments_per_candidate
+
         if max_context_chars is not None:
             self.max_context_chars = max_context_chars
             return
-
-        from app.settings import settings
 
         self.max_context_chars = settings.llm_max_chars
 
@@ -30,6 +33,8 @@ class ManualPromptBuilder:
             transcript=transcript,
             candidates=candidates,
             max_chars=int(self.max_context_chars * 0.72),
+            max_candidates=self.prompt_max_candidates,
+            max_segments_per_candidate=self.prompt_max_segments_per_candidate,
         )
         candidate_context = build_candidate_context(
             candidates=candidates,
@@ -84,6 +89,9 @@ QUALIDADE DO CORTE
 - retenção alta nos primeiros segundos
 - coerência editorial entre hook, title, description e thumbnail
 - diversidade entre os cortes selecionados
+- evite títulos genéricos sem sujeito concreto ou sem tese clara
+- prefira títulos e hooks que mencionem explicitamente o personagem, instituição ou conflito principal
+- quando possível, use uma frase forte real do transcript como base do hook
 
 OUTPUT JSON
 
