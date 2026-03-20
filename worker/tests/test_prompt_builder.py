@@ -1,4 +1,5 @@
 from app.prompts.manual_prompt_builder import ManualPromptBuilder
+from app.pipeline.pipeline import Pipeline
 
 
 def test_manual_prompt_builder_includes_speakers_and_mode_rules():
@@ -96,3 +97,31 @@ def test_manual_prompt_builder_adapts_when_speakers_are_unknown():
     assert "REGRAS SOBRE LOCUTOR" in prompt
     assert "Não invente trocas de locutor." in prompt
     assert "REGRAS ESPECÍFICAS DE LOCUTOR" not in prompt
+
+
+def test_pipeline_parse_manual_response_tolerates_smart_quotes_and_code_fences():
+    pipeline = Pipeline(
+        video_url="https://example.com/video",
+        job_id="job-json-fix",
+        manual_response={},
+    )
+
+    payload = """```json
+{
+“job_id”: “job-json-fix”,
+“shorts_content”: [
+  {
+    “start”: 10.0,
+    “end”: 40.0,
+    “title”: “Teste”,
+    “hook”: “Gancho suficiente para validar”,
+    “merge_group”: “story_1”,
+  }
+],
+}
+```"""
+
+    parsed = pipeline._parse_manual_response(payload)
+
+    assert parsed["job_id"] == "job-json-fix"
+    assert parsed["shorts_content"][0]["title"] == "Teste"

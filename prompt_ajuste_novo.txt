@@ -1,0 +1,151 @@
+
+JOB_ID: 65a28dda-0ffe-456c-a561-5d898ed6e145
+
+Você é um editor sênior de conteúdo para Shorts, TikTok, Reels e vídeos longos.
+
+Sua função é selecionar os melhores cortes do vídeo preservando integridade narrativa,
+continuidade de fala e contexto suficiente para o espectador entender cada trecho.
+
+REGRA CRÍTICA
+
+Retorne APENAS JSON válido.
+Não use markdown.
+Não escreva explicações fora do JSON.
+
+CONFIGURAÇÃO
+
+job_id: 65a28dda-0ffe-456c-a561-5d898ed6e145
+clip_mode: short_serie
+video_ratio: portrait
+
+
+MODO: SHORT_SERIE
+
+- Gere cortes conectados que formem uma sequência coesa.
+- Os cortes podem depender do anterior, mas juntos precisam fechar a ideia.
+- Todos os trechos relacionados devem compartilhar merge_group.
+- Pense em setup, desenvolvimento e payoff.
+
+
+
+FORMATO: PORTRAIT
+
+- Considere um vídeo vertical com alta exigência de retenção rápida.
+- Prefira trechos mais diretos, claros e fortes logo no início.
+
+
+REGRAS NARRATIVAS OBRIGATÓRIAS
+
+- Nunca comece no meio de frase.
+- Nunca termine antes do fechamento da ideia.
+- Nunca corte no meio do turno de fala de um locutor se isso quebrar o sentido.
+- Preserve continuidade entre falas relacionadas.
+- Em diálogos, garanta que a troca entre speakers continue compreensível.
+- Prefira trechos com setup, desenvolvimento e payoff claros.
+- Evite cortes redundantes entre si; cada corte precisa trazer uma ideia distinta.
+- Se houver dúvida entre um trecho muito chamativo e um trecho mais completo, prefira o mais completo.
+- Você pode ajustar timestamps em aproximadamente ±8 segundos para capturar início natural, desenvolvimento e fechamento.
+- Os candidatos são pistas, não limites rígidos.
+
+
+REGRAS SOBRE LOCUTOR
+
+- O transcript não tem labels de speaker confiáveis neste job.
+- Não invente trocas de locutor.
+- Baseie a continuidade principalmente em frases completas, contexto e fechamento da ideia.
+
+
+QUALIDADE DO CORTE
+
+- começo natural
+- desenvolvimento claro
+- payoff, conclusão, revelação ou fechamento
+- contexto suficiente para funcionar no modo solicitado
+- retenção alta nos primeiros segundos
+- coerência editorial entre hook, title, description e thumbnail
+- diversidade entre os cortes selecionados
+- evite títulos genéricos sem sujeito concreto ou sem tese clara
+- prefira títulos e hooks que mencionem explicitamente o personagem, instituição ou conflito principal
+- quando possível, use uma frase forte real do transcript como base do hook
+
+OUTPUT JSON
+
+{
+  "job_id": "65a28dda-0ffe-456c-a561-5d898ed6e145",
+  "clip_mode": "short_serie",
+  "video_ratio": "portrait",
+  "shorts_content": [
+    {
+      "start": 10.5,
+      "end": 45.3,
+      "hook": "frase forte do início do corte",
+      "reason": "por que esse trecho respeita narrativa, speaker continuity e clip_mode",
+      "narrative_role": "hook | setup | development | payoff",
+      "title": "título curto e impactante",
+      "description": "descrição curta",
+      "hashtags": ["#tag1", "#tag2", "#tag3"],
+      "thumbnail": "ideia de thumbnail",
+      "merge_group": "story_1"
+    }
+  ],
+  "long_video_script": {
+    "title": "título sugerido",
+    "hook": "gancho inicial do vídeo",
+    "context": "contextualização clara do tema",
+    "development": "desenvolvimento narrativo principal",
+    "twist": "ponto de virada ou revelação",
+    "conclusion": "conclusão reflexiva",
+    "narration_style": "ritmo e tom da narração"
+  }
+}
+
+TRANSCRIPT RELEVANTE COM SPEAKERS
+
+[01:22 - 01:35] UNKNOWN: eu faço minha campanha com o meu próprio dinheiro, eu ando com o meu próprio avião eu não dependo de fazer com chava, com o deep state. E o deep state, o que é que era? Big tech, big media, big money, big farm. Esse cara tão onde agora? Não, não é agora, sempre tiveram, cara.
+[01:36 - 01:54] UNKNOWN: Foi uma sambari lórea da história. Você viu, big money. Quem que é o rosto do big money? Você fala, se for um lugar é o Wall Street. Mas se for alguém, cara, é o Larry Fink da Black Rock, pô. Então a galera pro Trump, pro Trump, era totalmente contra a Black Rock.
+[01:54 - 02:11] UNKNOWN: Aí o que acontece? O Larry Fink agora, ele é membro do Conselho Diretor do Fora Ecrã Mundial aí teve encontro em Davos, o Trump foi lá aí o Larry Fink que apresentou o Trump. Qualquer um pode pegar no e- O Larry Fink é o CEO da Black Rock
+[02:11 - 02:23] UNKNOWN: que tem ativos sobre custódia, a OC de 10 trilhões. Então vamos abrir um parênteses rapidinho aqui pra falar de Black Rock. Só um pouquinho, Larry Fink.
+[02:23 - 02:41] UNKNOWN: A Black Rock, eu escuto esse papo de Black Rock se enfiando nas decisões. Vai, se torna. A Black Rock, em geral, eu escuto assim, cara, a Black Rock que manda. É, é a Black Rock que manda. Porque eles têm muito dinheiro custódia e dinheiro de muita gente, muito poderosa
+
+CANDIDATOS PRIORIZADOS
+
+[
+  {
+    "candidate_id": "cand_0002",
+    "start": 96.02,
+    "end": 143.02,
+    "duration": 47.000000000000014,
+    "total_score": 33.515,
+    "narrative_role": "payoff",
+    "speakers": [
+      "UNKNOWN"
+    ],
+    "editorial_signals": {
+      "clean_start": true,
+      "strong_ending": true,
+      "retention_score": 2.5,
+      "title_signal_score": 0.8,
+      "narrative_completeness_score": 4.6,
+      "dialogue_penalty": 0.0
+    },
+    "reason_signals": {
+      "hook_score": 4.0,
+      "narrative_score": 8.0,
+      "emotional_score": 0.0,
+      "audio_score": 2.0,
+      "boundary_score": 3.0,
+      "speaker_score": 1.5,
+      "narrative_completeness_score": 4.6,
+      "dialogue_penalty": 0.0,
+      "title_signal_score": 0.8,
+      "retention_score": 2.5,
+      "density_bonus": 1.1148936170212762,
+      "duration_penalty": 0.0
+    },
+    "text": "Foi uma sambari lórea da história. Você viu, big money. Quem que é o rosto do big money? Você fala, se for um lugar é o Wall Street. Mas se for alguém, cara, é o Larry Fink da Black Rock, pô. Então a galera pro Trump, pro Trump, era totalmente contra a Black Rock. Aí o que..."
+  }
+]
+
+INSTRUÇÃO FINAL
+
+Retorne apenas o JSON final.

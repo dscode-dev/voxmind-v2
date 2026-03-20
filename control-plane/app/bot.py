@@ -4,6 +4,7 @@ import uuid
 import os
 import tempfile
 import asyncio
+import re
 
 from telegram import Update
 from telegram.ext import (
@@ -182,11 +183,33 @@ Exemplo:
             "’": "'",
             "‘": "'",
             "´": "'",
+            "\ufeff": "",
         }
         sanitized = text
         for source, target in replacements.items():
             sanitized = sanitized.replace(source, target)
+        sanitized = sanitized.strip()
+        if sanitized.startswith("```"):
+            sanitized = re.sub(r"^```(?:json)?\s*", "", sanitized, flags=re.IGNORECASE)
+            sanitized = re.sub(r"\s*```$", "", sanitized)
+
+        # Tolerate common manual-LLM artifacts like trailing commas.
+        sanitized = re.sub(r",(\s*[}\]])", r"\1", sanitized)
         return sanitized
+
+    def _parse_json_payload(self, text: str) -> dict:
+        sanitized = self._sanitize_json_text(text)
+
+        try:
+            return json.loads(sanitized)
+        except json.JSONDecodeError:
+            start = sanitized.find("{")
+            end = sanitized.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                extracted = sanitized[start : end + 1]
+                extracted = re.sub(r",(\s*[}\]])", r"\1", extracted)
+                return json.loads(extracted)
+            raise
 
     def _resolve_video_url(self, data: dict, job_id: str) -> str | None:
         video_url = data.get("video_url")
@@ -343,9 +366,7 @@ Gerando cortes...
             with open(file_path) as f:
                 text = f.read()
 
-            text = self._sanitize_json_text(text)
-
-            data = json.loads(text)
+            data = self._parse_json_payload(text)
 
         except Exception:
 
@@ -370,10 +391,8 @@ Gerando cortes...
 
     async def handle_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-        text = self._sanitize_json_text(update.message.text.strip())
-
         try:
-            data = json.loads(text)
+            data = self._parse_json_payload(update.message.text.strip())
         except Exception:
             return
 

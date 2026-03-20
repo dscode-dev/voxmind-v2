@@ -1,5 +1,6 @@
 import json
 import shutil
+import re
 from pathlib import Path
 
 from app.media.audio_extractor import AudioExtractor
@@ -537,12 +538,10 @@ para continuar o processamento.
         try:
 
             if isinstance(self.manual_response, str):
-                self.manual_response = json.loads(
-                    self._sanitize_json_text(self.manual_response)
-                )
+                self.manual_response = self._parse_manual_response(self.manual_response)
 
             text = json.dumps(self.manual_response, ensure_ascii=False)
-            self.manual_response = json.loads(self._sanitize_json_text(text))
+            self.manual_response = self._parse_manual_response(text)
 
         except Exception:
             raise RuntimeError("Invalid JSON received from AI")
@@ -673,13 +672,34 @@ para continuar o processamento.
             "’": "'",
             "‘": "'",
             "´": "'",
+            "\ufeff": "",
         }
 
         sanitized = text
         for source, target in replacements.items():
             sanitized = sanitized.replace(source, target)
 
+        sanitized = sanitized.strip()
+        if sanitized.startswith("```"):
+            sanitized = re.sub(r"^```(?:json)?\s*", "", sanitized, flags=re.IGNORECASE)
+            sanitized = re.sub(r"\s*```$", "", sanitized)
+
+        sanitized = re.sub(r",(\s*[}\]])", r"\1", sanitized)
         return sanitized
+
+    def _parse_manual_response(self, text: str) -> dict:
+        sanitized = self._sanitize_json_text(text)
+
+        try:
+            return json.loads(sanitized)
+        except json.JSONDecodeError:
+            start = sanitized.find("{")
+            end = sanitized.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                extracted = sanitized[start : end + 1]
+                extracted = re.sub(r",(\s*[}\]])", r"\1", extracted)
+                return json.loads(extracted)
+            raise
 
     def _build_response_validation(self, cuts: list[dict]) -> dict:
         warnings: list[str] = []
@@ -841,7 +861,7 @@ para continuar o processamento.
         self._mark_step(
             "auto_review",
             "completed",
-            status=report.get("status"),
+            review_status=report.get("status"),
             readiness_score=report.get("readiness_score"),
         )
         return report
