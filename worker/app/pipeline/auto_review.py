@@ -180,6 +180,7 @@ class AutoReviewPolicy:
         issue_codes = {issue.get("code") for issue in qa_clip.get("issues", [])}
         return bool(
             {"starts_mid_segment", "ends_mid_segment"} & warning_codes
+            or {"generic_title", "speaker_labels_unavailable", "weak_hook"} & warning_codes
             or {"render_duration_mismatch", "too_many_speakers"} & issue_codes
         )
 

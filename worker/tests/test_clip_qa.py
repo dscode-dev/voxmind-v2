@@ -57,3 +57,33 @@ def test_clip_qa_blocks_invalid_render_duration(tmp_path):
     assert report["decision"] == "blocked"
     assert report["clips"][0]["decision"] == "blocked"
     assert report["clips"][0]["score"] <= 60
+
+
+def test_clip_qa_penalizes_generic_editorial_metadata(tmp_path):
+    clip_file = tmp_path / "cut_01.mp4"
+    clip_file.write_bytes(b"fake")
+
+    qa = StubClipQA()
+    report = qa.evaluate(
+        requested_cuts=[
+            {
+                "start": 0.0,
+                "end": 40.0,
+                "hook": "Porque eles têm muito dinheiro...",
+                "title": "Por que eles mandam?",
+                "description": "Explicacao final.",
+                "thumbnail": "texto 'DINHEIRO = PODER' com efeito glow",
+                "hashtags": ["#dinheiro"],
+            }
+        ],
+        rendered_files=[clip_file],
+        transcript_segments=[
+            {"start": 0.0, "end": 40.0, "speaker": "UNKNOWN"},
+        ],
+    )
+
+    warnings = set(report["clips"][0]["warnings"])
+    assert "generic_title" in warnings
+    assert "generic_thumbnail" in warnings
+    assert "speaker_labels_unavailable" in warnings
+    assert report["clips"][0]["score"] < 100

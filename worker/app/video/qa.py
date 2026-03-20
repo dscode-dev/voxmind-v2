@@ -4,6 +4,20 @@ from typing import Dict, List
 
 
 class ClipQA:
+    GENERIC_TITLE_MARKERS = {
+        "quem manda de verdade?",
+        "por que eles mandam?",
+        "o jogo por trás",
+        "quem realmente manda",
+        "o objetivo final",
+        "o tamanho do poder",
+    }
+
+    GENERIC_THUMBNAIL_MARKERS = {
+        "quem manda?",
+        "dinheiro = poder",
+        "quem é ele?",
+    }
 
     def __init__(
         self,
@@ -87,16 +101,26 @@ class ClipQA:
 
         if not requested_cut.get("hook"):
             warnings.append("missing_hook")
+        elif self._is_weak_hook(str(requested_cut.get("hook", ""))):
+            warnings.append("weak_hook")
         if not requested_cut.get("title"):
             warnings.append("missing_title")
+        elif self._is_generic_title(str(requested_cut.get("title", ""))):
+            warnings.append("generic_title")
         if not requested_cut.get("description"):
             warnings.append("missing_description")
+        if self._has_sparse_hashtags(requested_cut):
+            warnings.append("sparse_hashtags")
+        if self._is_generic_thumbnail(str(requested_cut.get("thumbnail", ""))):
+            warnings.append("generic_thumbnail")
 
         speakers = self._speakers_in_range(
             transcript_segments,
             requested_start,
             requested_end,
         )
+        if transcript_segments and (not speakers or speakers == ["UNKNOWN"]):
+            warnings.append("speaker_labels_unavailable")
         if len(speakers) > self.max_speakers_per_clip:
             issues.append({"severity": "review", "code": "too_many_speakers"})
 
@@ -158,6 +182,16 @@ class ClipQA:
         for warning in warnings:
             if warning in {"starts_mid_segment", "ends_mid_segment"}:
                 score -= 8
+            elif warning == "generic_title":
+                score -= 8
+            elif warning == "speaker_labels_unavailable":
+                score -= 6
+            elif warning == "weak_hook":
+                score -= 5
+            elif warning == "generic_thumbnail":
+                score -= 4
+            elif warning == "sparse_hashtags":
+                score -= 3
             elif warning == "missing_hook":
                 score -= 4
             elif warning in {"missing_title", "missing_description"}:
@@ -225,3 +259,31 @@ class ClipQA:
             if start < timestamp < end:
                 return True
         return False
+
+    def _is_generic_title(self, title: str) -> bool:
+        normalized = title.strip().lower()
+        return normalized in self.GENERIC_TITLE_MARKERS
+
+    def _is_generic_thumbnail(self, thumbnail: str) -> bool:
+        normalized = thumbnail.strip().lower().replace("texto", "").strip(" '\"")
+        return any(marker in normalized for marker in self.GENERIC_THUMBNAIL_MARKERS)
+
+    def _has_sparse_hashtags(self, requested_cut: Dict) -> bool:
+        hashtags = requested_cut.get("hashtags") or []
+        if not isinstance(hashtags, list):
+            return True
+        return len([tag for tag in hashtags if str(tag).strip()]) < 3
+
+    def _is_weak_hook(self, hook: str) -> bool:
+        text = hook.strip()
+        if len(text) < 24:
+            return True
+        normalized = text.lower()
+        weak_starts = (
+            "porque ",
+            "então ",
+            "aí ",
+            "e o ",
+            "mas ",
+        )
+        return normalized.startswith(weak_starts) and len(text) < 48
