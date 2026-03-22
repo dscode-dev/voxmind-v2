@@ -10,6 +10,8 @@ class ManualPromptBuilder:
 
         self.prompt_max_candidates = settings.prompt_max_candidates
         self.prompt_max_segments_per_candidate = settings.prompt_max_segments_per_candidate
+        self.render_min_clip_duration_sec = settings.render_min_clip_duration_sec
+        self.qa_max_clip_duration_sec = settings.qa_max_clip_duration_sec
 
         if max_context_chars is not None:
             self.max_context_chars = max_context_chars
@@ -64,6 +66,8 @@ video_ratio: {video_ratio}
 {self._build_mode_instructions(clip_mode)}
 
 {self._build_ratio_instructions(video_ratio)}
+
+{self._build_duration_rules(clip_mode, video_ratio)}
 
 REGRAS NARRATIVAS OBRIGATÓRIAS
 
@@ -201,4 +205,35 @@ FORMATO: PORTRAIT
 
 - Considere um vídeo vertical com alta exigência de retenção rápida.
 - Prefira trechos mais diretos, claros e fortes logo no início.
+"""
+
+    def _build_duration_rules(self, clip_mode: str, video_ratio: str) -> str:
+        min_duration = self.render_min_clip_duration_sec
+        max_duration = self.qa_max_clip_duration_sec
+
+        if clip_mode == "short_serie" and video_ratio == "portrait":
+            return f"""
+REGRAS DE DURAÇÃO
+
+- Cada corte deve ter no mínimo {min_duration} segundos.
+- Para este modo, prefira cortes entre 26 e 35 segundos.
+- Não retorne cortes com menos de {min_duration} segundos.
+- Só ultrapasse 35 segundos se isso for necessário para fechar a ideia.
+- Nunca exceda {max_duration} segundos.
+"""
+
+        if clip_mode == "short":
+            return f"""
+REGRAS DE DURAÇÃO
+
+- Cada corte deve ter no mínimo {min_duration} segundos.
+- Prefira cortes entre 28 e 45 segundos.
+- Nunca exceda {max_duration} segundos.
+"""
+
+        return f"""
+REGRAS DE DURAÇÃO
+
+- Cada corte deve ter no mínimo {min_duration} segundos.
+- Nunca exceda {max_duration} segundos.
 """
