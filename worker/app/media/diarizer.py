@@ -1,4 +1,5 @@
 from importlib import import_module
+import inspect
 from pathlib import Path
 from typing import Dict, List
 
@@ -82,16 +83,22 @@ class SpeakerDiarizer:
         return turns
 
     def _load_pipeline(self, pipeline_cls, model_name: str, hf_token: str):
-        try:
+        signature = inspect.signature(pipeline_cls.from_pretrained)
+        parameter_names = set(signature.parameters.keys())
+
+        if "token" in parameter_names:
             return pipeline_cls.from_pretrained(
                 model_name,
                 token=hf_token,
             )
-        except TypeError:
+
+        if "use_auth_token" in parameter_names:
             return pipeline_cls.from_pretrained(
                 model_name,
                 use_auth_token=hf_token,
             )
+
+        return pipeline_cls.from_pretrained(model_name)
 
     def _format_exception_reason(self, prefix: str, exc: Exception) -> str:
         message = str(exc).strip().replace("\n", " ")
