@@ -27,6 +27,7 @@ onnxruntime = "^1.17.0"
 
 [tool.poetry.group.diarization.dependencies]
 "pyannote.audio" = "^3.3.2"
+huggingface-hub = "<1.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.2.0"

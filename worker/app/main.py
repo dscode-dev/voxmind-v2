@@ -212,11 +212,25 @@ def run_pipeline(job: dict):
                 runtime_status_path,
                 f"jobs/{job_id}/runtime_status.json",
             )
+            if runtime_status_path:
+                pipeline.artifacts.mark_remote(
+                    "runtime_status",
+                    pipeline_stage,
+                    f"jobs/{job_id}/runtime_status.json",
+                    runtime_status_path,
+                )
             _upload_if_exists(
                 storage,
                 artifacts_manifest_path,
                 f"jobs/{job_id}/artifacts_manifest.json",
             )
+            if artifacts_manifest_path:
+                pipeline.artifacts.mark_remote(
+                    "artifacts_manifest",
+                    pipeline_stage,
+                    f"jobs/{job_id}/artifacts_manifest.json",
+                    artifacts_manifest_path,
+                )
 
             logger.info(
                 f"{job_id} prepare stage uploaded to MinIO",
@@ -309,11 +323,25 @@ def run_pipeline(job: dict):
                 result.get("runtime_status_path"),
                 f"jobs/{job_id}/runtime_status.json",
             )
+            if result.get("runtime_status_path"):
+                pipeline.artifacts.mark_remote(
+                    "runtime_status",
+                    pipeline_stage,
+                    f"jobs/{job_id}/runtime_status.json",
+                    result.get("runtime_status_path"),
+                )
             _upload_if_exists(
                 storage,
                 result.get("artifacts_manifest_path"),
                 f"jobs/{job_id}/artifacts_manifest.json",
             )
+            if result.get("artifacts_manifest_path"):
+                pipeline.artifacts.mark_remote(
+                    "artifacts_manifest",
+                    pipeline_stage,
+                    f"jobs/{job_id}/artifacts_manifest.json",
+                    result.get("artifacts_manifest_path"),
+                )
 
             logger.info(
                 f"{job_id} finalize stage uploaded to MinIO",
