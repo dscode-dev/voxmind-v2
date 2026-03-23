@@ -103,6 +103,28 @@ class SpeakerDiarizer:
 
     def _format_exception_reason(self, prefix: str, exc: Exception) -> str:
         message = str(exc).strip().replace("\n", " ")
+        details: List[str] = []
+
         if message:
-            return f"{prefix}:{exc.__class__.__name__}:{message}"
+            details.append(message)
+
+        if not details:
+            details.append(repr(exc).replace("\n", " "))
+
+        if exc.__cause__ is not None:
+            cause_message = str(exc.__cause__).strip().replace("\n", " ")
+            if cause_message:
+                details.append(f"cause={exc.__cause__.__class__.__name__}:{cause_message}")
+            else:
+                details.append(f"cause={repr(exc.__cause__).replace(chr(10), ' ')}")
+
+        if exc.__context__ is not None and exc.__context__ is not exc.__cause__:
+            context_message = str(exc.__context__).strip().replace("\n", " ")
+            if context_message:
+                details.append(f"context={exc.__context__.__class__.__name__}:{context_message}")
+            else:
+                details.append(f"context={repr(exc.__context__).replace(chr(10), ' ')}")
+
+        if details:
+            return f"{prefix}:{exc.__class__.__name__}:{' | '.join(details)}"
         return f"{prefix}:{exc.__class__.__name__}"
