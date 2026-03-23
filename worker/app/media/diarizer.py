@@ -31,6 +31,10 @@ class SpeakerDiarizer:
             pipeline_module = import_module("pyannote.audio")
             pipeline_cls = getattr(pipeline_module, "Pipeline")
             self._pipeline = self._load_pipeline(pipeline_cls, model_name, hf_token)
+            if self._pipeline is None:
+                raise RuntimeError(
+                    "pipeline_not_loaded; verify Hugging Face token and accept gated model terms"
+                )
             self._availability_reason = "available"
             self._last_run_reason = "ready"
         except Exception as exc:  # pragma: no cover
