@@ -1,5 +1,4 @@
 import json
-import shutil
 import re
 from pathlib import Path
 
@@ -293,13 +292,6 @@ ERROR:
                 "runtime_status_path": str(self.runtime.runtime_path),
                 "artifacts_manifest_path": str(self.artifacts.manifest_path),
             }
-
-        finally:
-
-            if self.work_dir.exists() and (
-                not self.failed or not settings.keep_workdir_on_failure
-            ):
-                shutil.rmtree(self.work_dir, ignore_errors=True)
 
     # ==================================================
     # STAGE 1 - PREPARE
