@@ -46,10 +46,13 @@ class JobCreator:
             client.V1EnvVar(name="PIPELINE_MODE", value="v2"),
             client.V1EnvVar(name="JOB_ID", value=job_id),
             client.V1EnvVar(name="LOG_LEVEL", value=settings.log_level),
-
-            # Whisper cache
-            client.V1EnvVar(name="HF_HOME", value="/tmp/huggingface"),
-            client.V1EnvVar(name="TRANSFORMERS_CACHE", value="/tmp/huggingface"),
+            client.V1EnvVar(name="HF_HOME", value="/cache"),
+            client.V1EnvVar(name="TRANSFORMERS_CACHE", value="/cache"),
+            client.V1EnvVar(name="HF_HUB_CACHE", value="/cache/huggingface/hub"),
+            client.V1EnvVar(name="TORCH_HOME", value="/cache/torch"),
+            client.V1EnvVar(name="MPLCONFIGDIR", value="/tmp/matplotlib"),
+            client.V1EnvVar(name="XDG_CACHE_HOME", value="/tmp/.cache"),
+            client.V1EnvVar(name="XDG_CONFIG_HOME", value="/tmp/.config"),
         ]
 
         if manual_response:
@@ -86,7 +89,15 @@ class JobCreator:
                 client.V1VolumeMount(
                     name="workdir",
                     mount_path="/work"
-                )
+                ),
+                client.V1VolumeMount(
+                    name="tmp",
+                    mount_path="/tmp",
+                ),
+                client.V1VolumeMount(
+                    name="cache",
+                    mount_path="/cache",
+                ),
             ],
         )
 
@@ -97,7 +108,15 @@ class JobCreator:
                 client.V1Volume(
                     name="workdir",
                     empty_dir=client.V1EmptyDirVolumeSource()
-                )
+                ),
+                client.V1Volume(
+                    name="tmp",
+                    empty_dir=client.V1EmptyDirVolumeSource(),
+                ),
+                client.V1Volume(
+                    name="cache",
+                    empty_dir=client.V1EmptyDirVolumeSource(),
+                ),
             ],
         )
 
