@@ -586,14 +586,16 @@ para continuar o processamento.
         self._mark_step("download_video", "completed", video_path=str(video_path))
 
         transcript_segments = self._load_finalize_transcript()
-
-        self._log("🎬 Generating cuts...")
-        self._mark_step("render_cuts", "started")
-
         cuts = self.manual_response.get("shorts_content", [])
 
         if not cuts:
             raise RuntimeError("shorts_content is empty")
+
+        cuts = self._normalize_cuts_to_transcript(cuts, transcript_segments)
+        self.manual_response["shorts_content"] = cuts
+
+        self._log("🎬 Generating cuts...")
+        self._mark_step("render_cuts", "started")
 
         filtered_cuts = []
 
@@ -812,6 +814,86 @@ para continuar o processamento.
             return data
 
         return []
+
+    def _normalize_cuts_to_transcript(
+        self,
+        cuts: list[dict],
+        transcript_segments: list[dict],
+    ) -> list[dict]:
+        if not cuts or not transcript_segments:
+            return cuts
+
+        normalized: list[dict] = []
+        tolerance = settings.render_boundary_snap_tolerance_sec
+
+        for cut in cuts:
+            try:
+                start = float(cut["start"])
+                end = float(cut["end"])
+            except Exception:
+                normalized.append(cut)
+                continue
+
+            if end <= start:
+                normalized.append(cut)
+                continue
+
+            start_segment = self._find_segment_covering(transcript_segments, start)
+            end_segment = self._find_segment_covering(transcript_segments, end)
+
+            snapped_start = start
+            snapped_end = end
+
+            if start_segment is not None:
+                segment_start = float(start_segment.get("start", start))
+                if (start - segment_start) <= tolerance:
+                    snapped_start = segment_start
+
+            if end_segment is not None:
+                segment_end = float(end_segment.get("end", end))
+                if (segment_end - end) <= tolerance:
+                    snapped_end = segment_end
+
+            if snapped_end - snapped_start < settings.render_min_clip_duration_sec:
+                snapped_end = self._extend_end_to_min_duration(
+                    transcript_segments,
+                    snapped_start,
+                    snapped_end,
+                )
+
+            normalized_cut = {
+                **cut,
+                "start": round(snapped_start, 2),
+                "end": round(snapped_end, 2),
+            }
+            normalized.append(normalized_cut)
+
+        return normalized
+
+    def _find_segment_covering(self, transcript_segments: list[dict], timestamp: float) -> dict | None:
+        for segment in transcript_segments:
+            start = float(segment.get("start", 0.0))
+            end = float(segment.get("end", 0.0))
+            if start <= timestamp <= end:
+                return segment
+        return None
+
+    def _extend_end_to_min_duration(
+        self,
+        transcript_segments: list[dict],
+        start: float,
+        current_end: float,
+    ) -> float:
+        min_end = start + settings.render_min_clip_duration_sec
+        extended_end = current_end
+
+        for segment in transcript_segments:
+            segment_end = float(segment.get("end", 0.0))
+            if segment_end >= min_end:
+                extended_end = segment_end
+                break
+
+        return extended_end
 
     def _run_clip_qa(
         self,

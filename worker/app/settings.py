@@ -205,6 +205,10 @@ class Settings(BaseSettings):
         default=25,
         alias="RENDER_MIN_CLIP_DURATION_SEC"
     )
+    render_boundary_snap_tolerance_sec: float = Field(
+        default=8.0,
+        alias="RENDER_BOUNDARY_SNAP_TOLERANCE_SEC"
+    )
     short_serie_max_gap_sec: int = Field(
         default=22,
         alias="SHORT_SERIE_MAX_GAP_SEC"
