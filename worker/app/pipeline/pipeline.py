@@ -458,6 +458,15 @@ para continuar o processamento.
 
         if not settings.diarization_enabled:
             merged = self.transcript_merger.merge(segments, [])
+            unknown_segment_count = sum(
+                1 for segment in merged if segment.get("speaker", "UNKNOWN") == "UNKNOWN"
+            )
+            diagnostics = {
+                **diagnostics,
+                "speaker_turn_count": 0,
+                "segment_count": len(merged),
+                "unknown_segment_count": unknown_segment_count,
+            }
             self._write_json_artifact(
                 "diarization_diagnostics.json",
                 diagnostics,
@@ -469,6 +478,15 @@ para continuar o processamento.
         if not self.diarizer.is_available:
             merged = self.transcript_merger.merge(segments, [])
             diagnostics = self.diarizer.diagnostics()
+            unknown_segment_count = sum(
+                1 for segment in merged if segment.get("speaker", "UNKNOWN") == "UNKNOWN"
+            )
+            diagnostics = {
+                **diagnostics,
+                "speaker_turn_count": 0,
+                "segment_count": len(merged),
+                "unknown_segment_count": unknown_segment_count,
+            }
             self._write_json_artifact(
                 "diarization_diagnostics.json",
                 diagnostics,
@@ -492,9 +510,15 @@ para continuar o processamento.
         )
 
         speaker_turns = self.diarizer.diarize(audio_path)
+        merged = self.transcript_merger.merge(segments, speaker_turns)
+        unknown_segment_count = sum(
+            1 for segment in merged if segment.get("speaker", "UNKNOWN") == "UNKNOWN"
+        )
         diagnostics = {
             **self.diarizer.diagnostics(),
             "speaker_turn_count": len(speaker_turns),
+            "segment_count": len(merged),
+            "unknown_segment_count": unknown_segment_count,
         }
         diarization_path = self._write_json_artifact(
             "speaker_turns.json",
@@ -507,7 +531,6 @@ para continuar o processamento.
             "diarization_diagnostics",
         )
 
-        merged = self.transcript_merger.merge(segments, speaker_turns)
         self.artifacts.mark_local(
             "speaker_turns",
             settings.pipeline_stage,
@@ -518,6 +541,7 @@ para continuar o processamento.
             "diarization",
             "completed",
             speaker_turn_count=len(speaker_turns),
+            unknown_segment_count=unknown_segment_count,
             availability_reason=self.diarizer.availability_reason,
         )
         return merged
