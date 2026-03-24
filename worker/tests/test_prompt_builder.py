@@ -32,6 +32,13 @@ def test_manual_prompt_builder_includes_speakers_and_mode_rules():
     assert "SPEAKER_02" in prompt
     assert "MODO: SHORT_SERIE" in prompt
     assert "TRANSCRIPT RELEVANTE COM SPEAKERS" in prompt
+    assert '"safe_start"' in prompt
+    assert '"safe_end"' in prompt
+    assert '"speaker_focus"' in prompt
+    assert '"transition_after"' in prompt
+    assert '"on_screen_text"' in prompt
+    assert '"caption_style"' in prompt
+    assert '"emphasis_words"' in prompt
 
 
 def test_manual_prompt_builder_respects_context_budget():

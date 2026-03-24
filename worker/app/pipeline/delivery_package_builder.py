@@ -34,6 +34,8 @@ class DeliveryPackageBuilder:
                     "local_path": str(cut_file),
                     "start": float(cut.get("start", 0.0)),
                     "end": float(cut.get("end", 0.0)),
+                    "safe_start": float(cut.get("safe_start", cut.get("start", 0.0))),
+                    "safe_end": float(cut.get("safe_end", cut.get("end", 0.0))),
                     "duration": max(
                         0.0,
                         float(cut.get("end", 0.0)) - float(cut.get("start", 0.0)),
@@ -44,6 +46,11 @@ class DeliveryPackageBuilder:
                     "hashtags": cut.get("hashtags", []),
                     "thumbnail": cut.get("thumbnail"),
                     "merge_group": cut.get("merge_group"),
+                    "speaker_focus": cut.get("speaker_focus"),
+                    "transition_after": cut.get("transition_after"),
+                    "on_screen_text": cut.get("on_screen_text"),
+                    "caption_style": cut.get("caption_style"),
+                    "emphasis_words": cut.get("emphasis_words", []),
                     "automation": automation_by_index.get(clip_index),
                 }
             )

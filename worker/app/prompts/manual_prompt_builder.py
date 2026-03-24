@@ -107,6 +107,8 @@ OUTPUT JSON
     {{
       "start": 10.5,
       "end": 45.3,
+      "safe_start": 10.5,
+      "safe_end": 45.3,
       "hook": "frase forte do início do corte",
       "reason": "por que esse trecho respeita narrativa, speaker continuity e clip_mode",
       "narrative_role": "hook | setup | development | payoff",
@@ -114,7 +116,12 @@ OUTPUT JSON
       "description": "descrição curta",
       "hashtags": ["#tag1", "#tag2", "#tag3"],
       "thumbnail": "ideia de thumbnail",
-      "merge_group": "story_1"
+      "merge_group": "story_1",
+      "speaker_focus": "SPEAKER_01 | SPEAKER_02 | null",
+      "transition_after": "hard_cut | punch_in | whoosh | fade | none",
+      "on_screen_text": "texto principal na tela",
+      "caption_style": "bold_kinetic | clean_subtitles | minimal | dramatic",
+      "emphasis_words": ["palavra1", "palavra2"]
     }}
   ],
   "long_video_script": {{
@@ -139,6 +146,7 @@ CANDIDATOS PRIORIZADOS
 INSTRUÇÃO FINAL
 
 Retorne apenas o JSON final.
+Se algum campo novo não se aplicar, retorne null, string vazia ou lista vazia.
 """
 
     def _build_speaker_guidance(self, has_named_speakers: bool) -> str:

@@ -865,6 +865,8 @@ para continuar o processamento.
                 **cut,
                 "start": round(snapped_start, 2),
                 "end": round(snapped_end, 2),
+                "safe_start": round(snapped_start, 2),
+                "safe_end": round(snapped_end, 2),
             }
             normalized.append(normalized_cut)
 
