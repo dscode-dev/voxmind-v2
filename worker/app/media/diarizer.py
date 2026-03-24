@@ -35,6 +35,7 @@ class SpeakerDiarizer:
                 raise RuntimeError(
                     "pipeline_not_loaded; verify Hugging Face token and accept gated model terms"
                 )
+            self._force_cpu()
             self._availability_reason = "available"
             self._last_run_reason = "ready"
         except Exception as exc:  # pragma: no cover
@@ -100,6 +101,15 @@ class SpeakerDiarizer:
                 model_name,
                 use_auth_token=hf_token,
             )
+
+    def _force_cpu(self) -> None:
+        if self._pipeline is None:
+            return
+
+        torch_module = import_module("torch")
+        cpu_device = torch_module.device("cpu")
+        if hasattr(self._pipeline, "to"):
+            self._pipeline.to(cpu_device)
 
     def _format_exception_reason(self, prefix: str, exc: Exception) -> str:
         message = str(exc).strip().replace("\n", " ")
