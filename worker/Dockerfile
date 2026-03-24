@@ -1,6 +1,8 @@
 FROM python:3.11-slim AS builder
 
 ARG POETRY_INSTALL_GROUPS=""
+ARG TORCH_VERSION="2.5.1"
+ARG TORCHAUDIO_VERSION="2.5.1"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -29,6 +31,15 @@ RUN if [ -n "$POETRY_INSTALL_GROUPS" ]; then \
         poetry install --only main --no-root; \
     fi \
     && rm -rf /tmp/poetry-cache
+
+# Force CPU-only torch stack for diarization builds so pyannote does not pull CUDA runtime.
+RUN if echo "$POETRY_INSTALL_GROUPS" | grep -Eq '(^|,| )diarization($|,| )'; then \
+        pip uninstall -y torch torchaudio torchvision torchtext || true; \
+        pip install --no-cache-dir \
+            --index-url https://download.pytorch.org/whl/cpu \
+            "torch==${TORCH_VERSION}" \
+            "torchaudio==${TORCHAUDIO_VERSION}"; \
+    fi
 
 FROM python:3.11-slim AS runtime
 
