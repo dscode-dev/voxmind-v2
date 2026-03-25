@@ -154,6 +154,10 @@ class Settings(BaseSettings):
         default="pyannote/speaker-diarization-3.1",
         alias="DIARIZATION_MODEL_NAME"
     )
+    diarization_device: str = Field(
+        default="cpu",
+        alias="DIARIZATION_DEVICE"
+    )
 
     diarization_hf_token: str | None = Field(
         default=None,

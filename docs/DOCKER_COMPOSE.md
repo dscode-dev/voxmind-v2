@@ -78,6 +78,11 @@ Config padrão recomendada:
 - `ASR_CPU_THREADS=12`
 
 A diarização continua habilitada, mas o `SpeakerDiarizer` segue forçando CPU no pipeline atual por estabilidade.
+A diarização no Compose agora pode rodar na GPU também:
+
+- `DIARIZATION_DEVICE=cuda`
+
+Se a GPU não estiver disponível no container, o pipeline faz fallback para `cpu`.
 
 ## Logs úteis
 

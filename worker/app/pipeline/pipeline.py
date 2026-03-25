@@ -79,6 +79,7 @@ class Pipeline:
         self.diarizer = SpeakerDiarizer(
             enabled=settings.diarization_enabled,
             model_name=settings.diarization_model_name,
+            device=settings.diarization_device,
             hf_token=settings.diarization_hf_token,
         )
         self.transcript_merger = TranscriptSpeakerMerger(

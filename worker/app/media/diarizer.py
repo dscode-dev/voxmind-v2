@@ -9,14 +9,17 @@ class SpeakerDiarizer:
         self,
         enabled: bool,
         model_name: str,
+        device: str = "cpu",
         hf_token: str | None = None,
     ):
         self.enabled = enabled
         self.model_name = model_name
+        self.device = device
         self.hf_token = hf_token
         self._pipeline = None
         self._availability_reason = "disabled"
         self._last_run_reason = "not_started"
+        self._resolved_device = "cpu"
 
         if not enabled:
             self._last_run_reason = "disabled"
@@ -35,7 +38,7 @@ class SpeakerDiarizer:
                 raise RuntimeError(
                     "pipeline_not_loaded; verify Hugging Face token and accept gated model terms"
                 )
-            self._force_cpu()
+            self._set_device()
             self._availability_reason = "available"
             self._last_run_reason = "ready"
         except Exception as exc:  # pragma: no cover
@@ -55,6 +58,8 @@ class SpeakerDiarizer:
         return {
             "enabled": self.enabled,
             "model_name": self.model_name,
+            "requested_device": self.device,
+            "resolved_device": self._resolved_device,
             "token_present": bool(self.hf_token),
             "available": self.is_available,
             "availability_reason": self.availability_reason,
@@ -102,14 +107,20 @@ class SpeakerDiarizer:
                 use_auth_token=hf_token,
             )
 
-    def _force_cpu(self) -> None:
+    def _set_device(self) -> None:
         if self._pipeline is None:
             return
 
         torch_module = import_module("torch")
-        cpu_device = torch_module.device("cpu")
+        requested = str(self.device or "cpu").strip().lower()
+        resolved = "cpu"
+        if requested == "cuda" and bool(getattr(torch_module.cuda, "is_available", lambda: False)()):
+            resolved = "cuda"
+
+        target_device = torch_module.device(resolved)
         if hasattr(self._pipeline, "to"):
-            self._pipeline.to(cpu_device)
+            self._pipeline.to(target_device)
+        self._resolved_device = resolved
 
     def _format_exception_reason(self, prefix: str, exc: Exception) -> str:
         message = str(exc).strip().replace("\n", " ")
