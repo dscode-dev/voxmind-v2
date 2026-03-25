@@ -220,7 +220,7 @@ services:
       clipflow-api:
         condition: service_started
     env_file:
-      - ./clipflow-studio/.env
+      - .env
     ports:
       - "${CLIPFLOW_STUDIO_PORT:-3000}:3000"
 
