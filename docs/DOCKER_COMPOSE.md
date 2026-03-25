@@ -70,13 +70,7 @@ docker build \
 
 docker build -t clipflow-control-plane:latest ./control-plane
 
-docker build \
-  --build-arg VITE_CLIPFLOW_API_BASE=http://localhost:8010 \
-  --build-arg VITE_CLIPFLOW_WITH_CREDENTIALS=true \
-  --build-arg VITE_CLIPFLOW_BASENAME=/ \
-  --build-arg VITE_CLIPFLOW_SSE_ENABLED=true \
-  -t clipflow-studio:latest \
-  ./clipflow-studio
+docker build -t clipflow-studio:latest ./clipflow-studio
 ```
 
 Se preferir tags próprias, ajuste no `.env.compose`:
@@ -85,6 +79,31 @@ Se preferir tags próprias, ajuste no `.env.compose`:
 - `CLIPFLOW_STUDIO_IMAGE`
 - `VOXMIND_WORKER_IMAGE`
 - `VOXMIND_CONTROL_PLANE_IMAGE`
+
+## Config do ClipFlow Studio via `.env`
+
+O `clipflow-studio` agora lê config de runtime via `docker-compose`, sem depender de rebuild para trocar endpoint.
+
+Crie ou edite:
+
+```text
+clipflow-studio/.env
+```
+
+Exemplo:
+
+```bash
+VITE_CLIPFLOW_API_BASE=http://localhost:8010
+VITE_CLIPFLOW_WITH_CREDENTIALS=true
+VITE_CLIPFLOW_BASENAME=/
+VITE_CLIPFLOW_SSE_ENABLED=true
+```
+
+Depois basta reiniciar o serviço do Studio:
+
+```bash
+docker compose --env-file .env.compose up -d clipflow-studio
+```
 
 ## Subida
 

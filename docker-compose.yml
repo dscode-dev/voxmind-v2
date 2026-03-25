@@ -219,6 +219,8 @@ services:
     depends_on:
       clipflow-api:
         condition: service_started
+    env_file:
+      - ./clipflow-studio/.env
     ports:
       - "${CLIPFLOW_STUDIO_PORT:-3000}:3000"
 
