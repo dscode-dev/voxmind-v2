@@ -8,15 +8,19 @@ from app.media.diarizer import SpeakerDiarizer
 from app.media.transcriber import Transcriber
 from app.media.transcript_merger import TranscriptSpeakerMerger
 from app.video.cutter import VideoCutter
+from app.video.final_renderer import FinalVideoRenderer
 from app.video.qa import ClipQA
 
 from app.pipeline.chunker import Chunker
 from app.pipeline.auto_review import AutoReviewPolicy
 from app.pipeline.candidate_builder import CandidateBuilder
 from app.pipeline.delivery_package_builder import DeliveryPackageBuilder
+from app.pipeline.publish_package_builder import PublishPackageBuilder
+from app.pipeline.subtitle_builder import SubtitleBuilder
 from app.pipeline.scorer import Scorer
 from app.prompts.manual_prompt_builder import ManualPromptBuilder
 from app.pipeline.hook_detector import HookDetector
+from app.pipeline.render_plan_builder import RenderPlanBuilder
 from app.pipeline.audio_peak_detector import AudioPeakDetector
 from app.pipeline.story_shift_detector import StoryShiftDetector
 
@@ -82,6 +86,9 @@ class Pipeline:
         self.builder = self._build_candidate_builder()
         self.scorer = self._build_scorer()
         self.delivery_package_builder = DeliveryPackageBuilder()
+        self.publish_package_builder = PublishPackageBuilder()
+        self.subtitle_builder = SubtitleBuilder()
+        self.render_plan_builder = RenderPlanBuilder()
         self.auto_review_policy = AutoReviewPolicy(
             enabled=settings.auto_review_enabled,
             ready_score_threshold=settings.auto_review_ready_score_threshold,
@@ -96,6 +103,7 @@ class Pipeline:
             self.work_dir,
             min_clip_duration_sec=settings.render_min_clip_duration_sec,
         )
+        self.final_renderer = FinalVideoRenderer(self.work_dir)
         self.clip_qa = ClipQA(
             min_duration_sec=settings.qa_min_clip_duration_sec,
             max_duration_sec=settings.qa_max_clip_duration_sec,
@@ -637,11 +645,27 @@ para continuar o processamento.
         if qa_report is not None:
             qa_report["automation"] = automation_report
             qa_report["response_validation"] = self.manual_response.get("_response_validation", {})
+        render_plan = self._build_render_plan(filtered_cuts, qa_report)
+        subtitle_path = self._build_final_reel_subtitles(
+            filtered_cuts,
+            transcript_segments,
+        )
+        final_reel_path = self._render_final_reel(cut_files, render_plan, subtitle_path)
+        publish_package = self._build_publish_package(
+            filtered_cuts,
+            final_reel_path,
+            subtitle_path,
+            qa_report,
+            automation_report,
+        )
         delivery_package = self._build_delivery_package(
             filtered_cuts,
             cut_files,
+            final_reel_path,
+            subtitle_path,
             qa_report,
             automation_report,
+            render_plan,
         )
 
         self._mark_step("send_cuts", "started")
@@ -659,6 +683,16 @@ para continuar o processamento.
                 caption=f"QA report for JOB_ID: {self.job_id}",
             )
 
+        render_plan_path = self._write_json_artifact(
+            "render_plan.json",
+            render_plan,
+            "render_plan",
+        )
+        self.telegram.send_document(
+            str(render_plan_path),
+            caption=f"Render plan for JOB_ID: {self.job_id}",
+        )
+
         delivery_package_path = self._write_json_artifact(
             "delivery_package.json",
             delivery_package,
@@ -668,6 +702,39 @@ para continuar o processamento.
             str(delivery_package_path),
             caption=f"Delivery package for JOB_ID: {self.job_id}",
         )
+
+        publish_package_path = self._write_json_artifact(
+            "publish_package.json",
+            publish_package,
+            "publish_package",
+        )
+        self.telegram.send_document(
+            str(publish_package_path),
+            caption=f"Publish package for JOB_ID: {self.job_id}",
+        )
+
+        if final_reel_path is not None and final_reel_path.exists():
+            self.artifacts.mark_local(
+                "final_reel",
+                settings.pipeline_stage,
+                final_reel_path,
+                artifact_type="video",
+            )
+            self.telegram.send_video(
+                str(final_reel_path),
+                caption=f"Final reel for JOB_ID: {self.job_id}",
+            )
+        if subtitle_path is not None and subtitle_path.exists():
+            self.artifacts.mark_local(
+                "final_reel_subtitles",
+                settings.pipeline_stage,
+                subtitle_path,
+                artifact_type="text",
+            )
+            self.telegram.send_document(
+                str(subtitle_path),
+                caption=f"Final reel subtitles for JOB_ID: {self.job_id}",
+            )
         self._mark_step("send_cuts", "completed")
         self._mark_step("finalize", "completed")
 
@@ -675,8 +742,12 @@ para continuar o processamento.
             "status": "success",
             "job_id": self.job_id,
             "cut_files": cut_files,
+            "final_reel_path": str(final_reel_path) if final_reel_path is not None else None,
+            "subtitle_path": str(subtitle_path) if subtitle_path is not None else None,
             "qa_report_path": str(self.work_dir / "qa_report.json") if qa_report is not None else None,
+            "render_plan_path": str(render_plan_path),
             "delivery_package_path": str(delivery_package_path),
+            "publish_package_path": str(publish_package_path),
             "runtime_status_path": str(self.runtime.runtime_path),
             "artifacts_manifest_path": str(self.artifacts.manifest_path),
         }
@@ -920,8 +991,11 @@ para continuar o processamento.
         self,
         filtered_cuts: list[dict],
         cut_files: list[Path],
+        final_reel_path: Path | None,
+        subtitle_path: Path | None,
         qa_report: dict | None,
         automation_report: dict | None,
+        render_plan: dict | None,
     ) -> dict:
         self._mark_step("delivery_package", "started")
         package = self.delivery_package_builder.build(
@@ -930,9 +1004,12 @@ para continuar o processamento.
             video_ratio=self.video_ratio,
             cuts=filtered_cuts,
             cut_files=cut_files,
+            final_reel_path=final_reel_path,
+            subtitle_path=subtitle_path,
             long_video_script=self.manual_response.get("long_video_script"),
             qa_report=qa_report,
             automation_report=automation_report,
+            render_plan=render_plan,
             artifacts_manifest=self.artifacts.read(),
             response_validation=self.manual_response.get("_response_validation"),
         )
@@ -943,6 +1020,91 @@ para continuar o processamento.
             delivery_status=package.get("delivery_status"),
         )
         return package
+
+    def _build_publish_package(
+        self,
+        filtered_cuts: list[dict],
+        final_reel_path: Path | None,
+        subtitle_path: Path | None,
+        qa_report: dict | None,
+        automation_report: dict | None,
+    ) -> dict:
+        self._mark_step("publish_package", "started")
+        package = self.publish_package_builder.build(
+            job_id=self.job_id,
+            clip_mode=self.clip_mode,
+            video_ratio=self.video_ratio,
+            cuts=filtered_cuts,
+            final_reel_path=final_reel_path,
+            subtitle_path=subtitle_path,
+            qa_report=qa_report,
+            automation_report=automation_report,
+        )
+        self._mark_step(
+            "publish_package",
+            "completed",
+            publish_status=package.get("publish_status"),
+        )
+        return package
+
+    def _build_final_reel_subtitles(
+        self,
+        filtered_cuts: list[dict],
+        transcript_segments: list[dict],
+    ) -> Path | None:
+        self._mark_step("final_reel_subtitles", "started")
+        output_path = self.work_dir / "final_reel.srt"
+        subtitle_path = self.subtitle_builder.build_final_reel_srt(
+            cuts=filtered_cuts,
+            transcript_segments=transcript_segments,
+            output_path=output_path,
+        )
+        if subtitle_path is None:
+            self._mark_step("final_reel_subtitles", "skipped", reason="no_subtitle_entries")
+            return None
+
+        self._mark_step("final_reel_subtitles", "completed", output_path=str(subtitle_path))
+        return subtitle_path
+
+    def _build_render_plan(
+        self,
+        filtered_cuts: list[dict],
+        qa_report: dict | None,
+    ) -> dict:
+        self._mark_step("render_plan", "started")
+        plan = self.render_plan_builder.build(
+            job_id=self.job_id,
+            clip_mode=self.clip_mode,
+            video_ratio=self.video_ratio,
+            cuts=filtered_cuts,
+            qa_report=qa_report,
+        )
+        self._mark_step("render_plan", "completed", clip_count=len(plan.get("clips", [])))
+        return plan
+
+    def _render_final_reel(
+        self,
+        cut_files: list[Path],
+        render_plan: dict,
+        subtitle_path: Path | None = None,
+    ) -> Path | None:
+        self._mark_step("final_reel", "started")
+        try:
+            output = self.final_renderer.render(
+                cut_files=cut_files,
+                render_plan=render_plan,
+                subtitle_path=subtitle_path,
+            )
+        except Exception as exc:
+            self._mark_step("final_reel", "failed", error=str(exc))
+            return None
+
+        if output is None:
+            self._mark_step("final_reel", "skipped", reason="no_cut_files")
+            return None
+
+        self._mark_step("final_reel", "completed", output_path=str(output))
+        return output
 
     def _run_auto_review(
         self,

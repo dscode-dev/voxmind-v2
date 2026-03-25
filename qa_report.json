@@ -1,0 +1,174 @@
+{
+  "decision": "approved",
+  "summary": {
+    "total_clips": 4,
+    "approved_clips": 4,
+    "needs_review_clips": 0,
+    "blocked_clips": 0,
+    "average_score": 91
+  },
+  "clips": [
+    {
+      "clip_index": 1,
+      "file_name": "cut_01.mp4",
+      "decision": "approved",
+      "score": 92,
+      "requested": {
+        "start": 82.0,
+        "end": 114.02,
+        "duration": 32.019999999999996
+      },
+      "rendered_duration": 32.056356,
+      "speakers": [
+        "SPEAKER_02"
+      ],
+      "issues": [],
+      "warnings": [
+        "starts_mid_segment"
+      ]
+    },
+    {
+      "clip_index": 2,
+      "file_name": "cut_02.mp4",
+      "decision": "approved",
+      "score": 92,
+      "requested": {
+        "start": 110.0,
+        "end": 143.02,
+        "duration": 33.02000000000001
+      },
+      "rendered_duration": 33.056356,
+      "speakers": [
+        "SPEAKER_00",
+        "SPEAKER_02"
+      ],
+      "issues": [],
+      "warnings": [
+        "starts_mid_segment"
+      ]
+    },
+    {
+      "clip_index": 3,
+      "file_name": "cut_03.mp4",
+      "decision": "approved",
+      "score": 92,
+      "requested": {
+        "start": 131.02,
+        "end": 166.0,
+        "duration": 34.97999999999999
+      },
+      "rendered_duration": 35.023023,
+      "speakers": [
+        "SPEAKER_00",
+        "SPEAKER_02"
+      ],
+      "issues": [],
+      "warnings": [
+        "ends_mid_segment"
+      ]
+    },
+    {
+      "clip_index": 4,
+      "file_name": "cut_04.mp4",
+      "decision": "approved",
+      "score": 88,
+      "requested": {
+        "start": 161.02,
+        "end": 196.0,
+        "duration": 34.97999999999999
+      },
+      "rendered_duration": 35.023023,
+      "speakers": [
+        "SPEAKER_00",
+        "SPEAKER_02"
+      ],
+      "issues": [],
+      "warnings": [
+        "generic_thumbnail",
+        "ends_mid_segment"
+      ]
+    }
+  ],
+  "automation": {
+    "enabled": true,
+    "status": "needs_human_review",
+    "readiness_score": 91,
+    "recommended_action": "human_review_required",
+    "fast_track_eligible": false,
+    "suggested_bulk_action": "review_priority_clips_first",
+    "review_required": true,
+    "auto_publish_eligible": false,
+    "reasons": [
+      "too_many_review_clips"
+    ],
+    "recovery_plan": {
+      "severity": "medium",
+      "recommended_path": "human_review_required",
+      "blocked_files": [],
+      "reason_codes": [
+        "too_many_review_clips"
+      ],
+      "next_steps": [
+        "review_priority_clips_first",
+        "spot_check_speaker_boundaries",
+        "approve_or_request_adjustments"
+      ]
+    },
+    "summary": {
+      "total_clips": 4,
+      "auto_ready_clips": 0,
+      "needs_human_review_clips": 4,
+      "blocked_clips": 0
+    },
+    "clips": [
+      {
+        "clip_index": 1,
+        "file_name": "cut_01.mp4",
+        "status": "needs_human_review",
+        "score": 92,
+        "recommended_action": "manual_clip_review",
+        "suggested_review_decision": "manual_review",
+        "reasons": [
+          "speaker_turn_boundary_risk"
+        ]
+      },
+      {
+        "clip_index": 2,
+        "file_name": "cut_02.mp4",
+        "status": "needs_human_review",
+        "score": 92,
+        "recommended_action": "manual_clip_review",
+        "suggested_review_decision": "manual_review",
+        "reasons": [
+          "speaker_turn_boundary_risk"
+        ]
+      },
+      {
+        "clip_index": 3,
+        "file_name": "cut_03.mp4",
+        "status": "needs_human_review",
+        "score": 92,
+        "recommended_action": "manual_clip_review",
+        "suggested_review_decision": "manual_review",
+        "reasons": [
+          "speaker_turn_boundary_risk"
+        ]
+      },
+      {
+        "clip_index": 4,
+        "file_name": "cut_04.mp4",
+        "status": "needs_human_review",
+        "score": 88,
+        "recommended_action": "manual_clip_review",
+        "suggested_review_decision": "manual_review",
+        "reasons": [
+          "speaker_turn_boundary_risk"
+        ]
+      }
+    ]
+  },
+  "response_validation": {
+    "warnings": [],
+    "continuity_gaps": []
+  }
+}

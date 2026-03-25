@@ -11,9 +11,12 @@ class DeliveryPackageBuilder:
         video_ratio: str,
         cuts: List[Dict],
         cut_files: List[Path],
+        final_reel_path: Path | None,
+        subtitle_path: Path | None,
         long_video_script: Dict | None,
         qa_report: Dict | None,
         automation_report: Dict | None,
+        render_plan: Dict | None,
         artifacts_manifest: Dict | None,
         response_validation: Dict | None = None,
     ) -> Dict:
@@ -65,7 +68,12 @@ class DeliveryPackageBuilder:
             "automation": automation_report,
             "clip_count": len(clips),
             "clips": clips,
+            "final_assets": {
+                "final_reel": self._final_reel_payload(final_reel_path),
+                "subtitles": self._subtitle_payload(subtitle_path),
+            },
             "long_video_script": long_video_script,
+            "render_plan": render_plan or {},
             "artifacts_manifest": artifacts_manifest or {},
         }
 
@@ -79,3 +87,33 @@ class DeliveryPackageBuilder:
         if decision == "needs_review":
             return "needs_review"
         return "ready"
+
+    def _final_reel_payload(self, final_reel_path: Path | None) -> Dict:
+        if final_reel_path is None:
+            return {
+                "status": "not_generated",
+                "file_name": None,
+                "local_path": None,
+            }
+
+        return {
+            "status": "generated" if final_reel_path.exists() else "missing",
+            "file_name": final_reel_path.name,
+            "local_path": str(final_reel_path),
+        }
+
+    def _subtitle_payload(self, subtitle_path: Path | None) -> Dict:
+        if subtitle_path is None:
+            return {
+                "status": "not_generated",
+                "file_name": None,
+                "local_path": None,
+                "format": "srt",
+            }
+
+        return {
+            "status": "generated" if subtitle_path.exists() else "missing",
+            "file_name": subtitle_path.name,
+            "local_path": str(subtitle_path),
+            "format": "srt",
+        }

@@ -276,8 +276,12 @@ def run_pipeline(job: dict):
 
             # salva cortes
             cut_files = result.get("cut_files", [])
+            final_reel_path = result.get("final_reel_path")
+            subtitle_path = result.get("subtitle_path")
             qa_report_path = result.get("qa_report_path")
+            render_plan_path = result.get("render_plan_path")
             delivery_package_path = result.get("delivery_package_path")
+            publish_package_path = result.get("publish_package_path")
 
             for file_path in cut_files:
                 path_obj = Path(file_path)
@@ -296,6 +300,30 @@ def run_pipeline(job: dict):
 
             if _upload_if_exists(
                 storage,
+                final_reel_path,
+                f"jobs/{job_id}/final_reel.mp4",
+            ):
+                pipeline.artifacts.mark_remote(
+                    "final_reel",
+                    pipeline_stage,
+                    f"jobs/{job_id}/final_reel.mp4",
+                    final_reel_path,
+                )
+
+            if _upload_if_exists(
+                storage,
+                subtitle_path,
+                f"jobs/{job_id}/final_reel.srt",
+            ):
+                pipeline.artifacts.mark_remote(
+                    "final_reel_subtitles",
+                    pipeline_stage,
+                    f"jobs/{job_id}/final_reel.srt",
+                    subtitle_path,
+                )
+
+            if _upload_if_exists(
+                storage,
                 qa_report_path,
                 f"jobs/{job_id}/qa_report.json",
             ):
@@ -308,6 +336,18 @@ def run_pipeline(job: dict):
 
             if _upload_if_exists(
                 storage,
+                render_plan_path,
+                f"jobs/{job_id}/render_plan.json",
+            ):
+                pipeline.artifacts.mark_remote(
+                    "render_plan",
+                    pipeline_stage,
+                    f"jobs/{job_id}/render_plan.json",
+                    render_plan_path,
+                )
+
+            if _upload_if_exists(
+                storage,
                 delivery_package_path,
                 f"jobs/{job_id}/delivery_package.json",
             ):
@@ -316,6 +356,18 @@ def run_pipeline(job: dict):
                     pipeline_stage,
                     f"jobs/{job_id}/delivery_package.json",
                     delivery_package_path,
+                )
+
+            if _upload_if_exists(
+                storage,
+                publish_package_path,
+                f"jobs/{job_id}/publish_package.json",
+            ):
+                pipeline.artifacts.mark_remote(
+                    "publish_package",
+                    pipeline_stage,
+                    f"jobs/{job_id}/publish_package.json",
+                    publish_package_path,
                 )
 
             _upload_if_exists(
