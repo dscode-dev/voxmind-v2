@@ -80,7 +80,7 @@ class FinalVideoRenderer:
         if not prepared_files:
             raise RuntimeError("No prepared clips to assemble")
 
-        prepared_files, prepared_durations, transition_plans = self._prepend_cold_open(
+        prepared_files, prepared_durations, transition_plans, cold_open_inserted = self._prepend_cold_open(
             prepared_files=prepared_files,
             prepared_durations=prepared_durations,
             render_plan=render_plan,
@@ -97,6 +97,10 @@ class FinalVideoRenderer:
             in {"fade", "whoosh", "punch_in"}
             for index in range(1, len(prepared_files))
         )
+
+        if cold_open_inserted:
+            self._concat_prepared_files(prepared_files, output_path)
+            return
 
         if len(prepared_files) == 1 or not use_fade:
             self._concat_prepared_files(prepared_files, output_path)
@@ -441,9 +445,9 @@ class FinalVideoRenderer:
         prepared_files: List[Path],
         prepared_durations: List[float],
         render_plan: Dict,
-    ) -> tuple[List[Path], List[float], List[Dict]]:
+    ) -> tuple[List[Path], List[float], List[Dict], bool]:
         if not prepared_files:
-            return prepared_files, prepared_durations, []
+            return prepared_files, prepared_durations, [], False
 
         clips_plan = {
             int(item.get("clip_index", 0)): item
@@ -461,18 +465,18 @@ class FinalVideoRenderer:
         )
         cold_open = (first_clip_plan or {}).get("cold_open") or {}
         if not cold_open.get("enabled"):
-            return prepared_files, prepared_durations, transition_plans
+            return prepared_files, prepared_durations, transition_plans, False
 
         duration_sec = max(0.8, float(cold_open.get("duration_sec", 2.0) or 2.0))
         relative_start_sec = max(0.0, float(cold_open.get("relative_start_sec", 0.0) or 0.0))
         source_clip_index = int(cold_open.get("source_clip_index", 1) or 1)
         source_idx = max(0, source_clip_index - 1)
         if source_idx >= len(prepared_files):
-            return prepared_files, prepared_durations, transition_plans
+            return prepared_files, prepared_durations, transition_plans, False
 
         source_duration = prepared_durations[source_idx] if prepared_durations else 0.0
         if source_duration <= 0.0 or relative_start_sec >= source_duration:
-            return prepared_files, prepared_durations, transition_plans
+            return prepared_files, prepared_durations, transition_plans, False
 
         actual_duration = min(duration_sec, max(0.8, source_duration - relative_start_sec))
         teaser_path = self.render_dir / "prepared_00_hook.mp4"
@@ -485,6 +489,10 @@ class FinalVideoRenderer:
             str(actual_duration),
             "-i",
             str(prepared_files[source_idx]),
+            "-vf",
+            f"fade=t=out:st={max(0.0, actual_duration - 0.18):.2f}:d=0.18",
+            "-af",
+            f"afade=t=out:st={max(0.0, actual_duration - 0.18):.2f}:d=0.18",
             "-c:v",
             "libx264",
             "-preset",
@@ -505,17 +513,41 @@ class FinalVideoRenderer:
             stderr=subprocess.DEVNULL,
         )
 
-        return (
-            [teaser_path, *prepared_files],
-            [actual_duration, *prepared_durations],
-            [
-                {
-                    "transition_after": str(cold_open.get("transition_after") or "fade"),
-                    "transition_duration_ms": int(cold_open.get("transition_duration_ms") or 180),
-                },
-                *transition_plans,
-            ],
+        intro_main_path = self.render_dir / "prepared_01_intro_main.mp4"
+        intro_main_command = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(prepared_files[0]),
+            "-vf",
+            "fade=t=in:st=0:d=0.18",
+            "-af",
+            "afade=t=in:st=0:d=0.18",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "fast",
+            "-crf",
+            "22",
+            "-c:a",
+            "aac",
+            "-movflags",
+            "+faststart",
+            str(intro_main_path),
+        ]
+        subprocess.run(
+            intro_main_command,
+            check=True,
+            cwd=str(self.render_dir),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
+
+        prepared_files = [teaser_path, intro_main_path, *prepared_files[1:]]
+        prepared_durations = [actual_duration, *prepared_durations]
+        transition_plans = [{} for _ in range(len(prepared_files))]
+
+        return prepared_files, prepared_durations, transition_plans, True
 
     def _subtitle_filter(self, subtitle_path: Path) -> str:
         subtitle_file = str(subtitle_path).replace("\\", "\\\\").replace(":", "\\:")
