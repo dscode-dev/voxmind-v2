@@ -1,0 +1,247 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: voxmind-redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_EXPOSE_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    container_name: voxmind-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD};
+      mc mb -p local/${MINIO_BUCKET} || true;
+      mc mb -p local/${CLIPFLOW_MINIO_BUCKET} || true;
+      exit 0;
+      "
+    restart: "no"
+
+  clipflow-postgres:
+    image: postgres:16-alpine
+    container_name: clipflow-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "${POSTGRES_EXPOSE_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  clipflow-api:
+    build:
+      context: ./clipflow-api
+      dockerfile: Dockerfile
+    container_name: clipflow-api
+    restart: unless-stopped
+    depends_on:
+      clipflow-postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@clipflow-postgres:5432/${POSTGRES_DB}
+      DATABASE_POOL_SIZE: ${DATABASE_POOL_SIZE}
+      DATABASE_MAX_OVERFLOW: ${DATABASE_MAX_OVERFLOW}
+      JWT_SECRET: ${JWT_SECRET}
+      COOKIE_SECURE: ${COOKIE_SECURE}
+      COOKIE_SAMESITE: ${COOKIE_SAMESITE}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS}
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
+      DEFAULT_ADMIN_PHONE_NUMBER: ${DEFAULT_ADMIN_PHONE_NUMBER}
+      DEFAULT_ADMIN_FULL_NAME: ${DEFAULT_ADMIN_FULL_NAME}
+      DEFAULT_ADMIN_CREDITS: ${DEFAULT_ADMIN_CREDITS}
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      MINIO_SECURE: "false"
+      MINIO_BUCKET: ${CLIPFLOW_MINIO_BUCKET}
+      WORKER_ARTIFACTS_BUCKET: ${MINIO_BUCKET}
+      SIGNED_ASSET_URL_EXPIRY_SEC: ${SIGNED_ASSET_URL_EXPIRY_SEC}
+    ports:
+      - "${CLIPFLOW_API_PORT:-8010}:8000"
+    command: >
+      /bin/sh -c "
+      alembic upgrade head &&
+      uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers
+      "
+
+  voxmind-worker:
+    build:
+      context: ./worker
+      dockerfile: ${WORKER_DOCKERFILE:-Dockerfile.gpu}
+      args:
+        POETRY_INSTALL_GROUPS: ${WORKER_POETRY_INSTALL_GROUPS:-diarization}
+        TORCH_FLAVOR: ${WORKER_TORCH_FLAVOR:-gpu}
+    container_name: voxmind-worker
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      clipflow-api:
+        condition: service_started
+    environment:
+      WORKER_MODE: queue
+      LOG_LEVEL: ${WORKER_LOG_LEVEL}
+      VIDEO_URL: ""
+      PIPELINE_STAGE: prepare
+      WORK_DIR: /work
+      ASR_MODEL_SIZE: ${ASR_MODEL_SIZE}
+      ASR_DEVICE: ${ASR_DEVICE}
+      ASR_COMPUTE_TYPE: ${ASR_COMPUTE_TYPE}
+      ASR_CPU_THREADS: ${ASR_CPU_THREADS}
+      ASR_BEAM_SIZE: ${ASR_BEAM_SIZE}
+      ASR_VAD_FILTER: ${ASR_VAD_FILTER}
+      ASR_SEGMENT_DURATION_SEC: ${ASR_SEGMENT_DURATION_SEC}
+      ASR_PARALLEL_WORKERS: ${ASR_PARALLEL_WORKERS}
+      ASR_MAX_MERGED_SEGMENT_DURATION_SEC: ${ASR_MAX_MERGED_SEGMENT_DURATION_SEC}
+      DIARIZATION_ENABLED: ${DIARIZATION_ENABLED}
+      DIARIZATION_MODEL_NAME: ${DIARIZATION_MODEL_NAME}
+      DIARIZATION_HF_TOKEN: ${DIARIZATION_HF_TOKEN}
+      DIARIZATION_MIN_OVERLAP_SEC: ${DIARIZATION_MIN_OVERLAP_SEC}
+      RENDER_MIN_CLIP_DURATION_SEC: ${RENDER_MIN_CLIP_DURATION_SEC}
+      RENDER_BOUNDARY_SNAP_TOLERANCE_SEC: ${RENDER_BOUNDARY_SNAP_TOLERANCE_SEC}
+      QA_ENABLED: ${QA_ENABLED}
+      AUTO_REVIEW_ENABLED: ${AUTO_REVIEW_ENABLED}
+      AUTO_REVIEW_READY_SCORE_THRESHOLD: ${AUTO_REVIEW_READY_SCORE_THRESHOLD}
+      AUTO_REVIEW_BLOCKED_SCORE_THRESHOLD: ${AUTO_REVIEW_BLOCKED_SCORE_THRESHOLD}
+      AUTO_REVIEW_MAX_REVIEW_CLIPS: ${AUTO_REVIEW_MAX_REVIEW_CLIPS}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
+      TELEGRAM_DISABLE_NOTIFICATIONS: ${TELEGRAM_DISABLE_NOTIFICATIONS}
+      TELEGRAM_TIMEOUT_SEC: ${TELEGRAM_TIMEOUT_SEC}
+      TELEGRAM_UPLOAD_TIMEOUT_SEC: ${TELEGRAM_UPLOAD_TIMEOUT_SEC}
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: ${MINIO_BUCKET}
+      HF_HOME: /cache
+      TRANSFORMERS_CACHE: /cache
+      HF_HUB_CACHE: /cache/huggingface/hub
+      TORCH_HOME: /cache/torch
+      PYANNOTE_CACHE: /cache/pyannote
+      SPEECHBRAIN_CACHE_DIR: /cache/speechbrain
+      XDG_CACHE_HOME: /tmp/.cache
+      XDG_CONFIG_HOME: /tmp/.config
+      MPLCONFIGDIR: /tmp/matplotlib
+      HOME: /tmp/home
+      CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES}
+      CLIPFLOW_API_ENABLED: ${CLIPFLOW_API_ENABLED}
+      CLIPFLOW_API_BASE_URL: http://clipflow-api:8000
+      CLIPFLOW_API_TIMEOUT_SEC: ${CLIPFLOW_API_TIMEOUT_SEC}
+      CLIPFLOW_API_INTERNAL_TOKEN: ${INTERNAL_API_TOKEN}
+      VOXMIND_REDIS_HOST: redis
+      VOXMIND_REDIS_PORT: 6379
+      VOXMIND_REDIS_QUEUE: ${VOXMIND_REDIS_QUEUE}
+    volumes:
+      - worker_work:/work
+      - worker_cache:/cache
+      - worker_tmp:/tmp
+      - ./worker/assets:/app/assets:ro
+    gpus: all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  voxmind-control-plane:
+    build:
+      context: ./control-plane
+      dockerfile: Dockerfile
+    container_name: voxmind-control-plane
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      ENV: docker
+      LOG_LEVEL: ${CONTROL_PLANE_LOG_LEVEL}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: ${MINIO_BUCKET}
+      VOXMIND_REDIS_HOST: redis
+      VOXMIND_REDIS_PORT: 6379
+      VOXMIND_REDIS_QUEUE: ${VOXMIND_REDIS_QUEUE}
+      MIN_CUT_DURATION_SEC: ${MIN_CUT_DURATION_SEC}
+      SHORT_SERIE_MAX_GAP_SEC: ${SHORT_SERIE_MAX_GAP_SEC}
+      HEALTH_HOST: 0.0.0.0
+      HEALTH_PORT: 8000
+      WORKER_JOB_IMAGE: local-compose-worker
+    ports:
+      - "${CONTROL_PLANE_PORT:-8000}:8000"
+    volumes:
+      - control_plane_tmp:/tmp
+
+  clipflow-studio:
+    build:
+      context: ./clipflow-studio
+      dockerfile: Dockerfile
+      args:
+        VITE_CLIPFLOW_API_BASE: ${VITE_CLIPFLOW_API_BASE}
+        VITE_CLIPFLOW_WITH_CREDENTIALS: ${VITE_CLIPFLOW_WITH_CREDENTIALS}
+        VITE_CLIPFLOW_BASENAME: ${VITE_CLIPFLOW_BASENAME}
+        VITE_CLIPFLOW_SSE_ENABLED: ${VITE_CLIPFLOW_SSE_ENABLED}
+    container_name: clipflow-studio
+    restart: unless-stopped
+    depends_on:
+      clipflow-api:
+        condition: service_started
+    ports:
+      - "${CLIPFLOW_STUDIO_PORT:-3000}:3000"
+
+volumes:
+  redis_data:
+  minio_data:
+  postgres_data:
+  worker_work:
+  worker_cache:
+  worker_tmp:
+  control_plane_tmp:

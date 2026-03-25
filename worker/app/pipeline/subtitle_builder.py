@@ -1,4 +1,5 @@
 from pathlib import Path
+import textwrap
 from typing import Dict, List
 
 
@@ -89,10 +90,10 @@ class SubtitleBuilder:
         text = str(segment.get("text") or "").strip()
         if not text:
             return ""
-        speaker = str(segment.get("speaker") or "").strip()
-        if speaker and speaker != "UNKNOWN":
-            return f"{speaker}: {text}"
-        return text
+        wrapped = textwrap.wrap(text, width=34, break_long_words=False, break_on_hyphens=False)
+        if not wrapped:
+            return ""
+        return "\n".join(wrapped[:2])
 
     def _merge_adjacent_entries(self, entries: List[Dict]) -> List[Dict]:
         if not entries:

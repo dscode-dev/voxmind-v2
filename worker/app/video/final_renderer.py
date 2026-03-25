@@ -47,6 +47,17 @@ class FinalVideoRenderer:
             output_path=final_output,
         )
 
+        soundtrack = render_plan.get("soundtrack") or {}
+        if soundtrack.get("status") == "selected" and soundtrack.get("local_path"):
+            mixed_output = self.work_dir / "final_reel_mixed.mp4"
+            self._mix_soundtrack(
+                input_path=final_output,
+                soundtrack_path=Path(str(soundtrack["local_path"])),
+                volume=float(soundtrack.get("mix_volume", 0.12) or 0.12),
+                output_path=mixed_output,
+            )
+            mixed_output.replace(final_output)
+
         if subtitle_path is not None and subtitle_path.exists():
             burned_output = self.work_dir / "final_reel_burned.mp4"
             self._burn_subtitles(
@@ -110,7 +121,7 @@ class FinalVideoRenderer:
             out_video = f"[v{index}]"
             out_audio = f"[a{index}]"
 
-            if transition == "fade" and fade_sec > 0:
+            if transition in {"fade", "whoosh", "punch_in"} and fade_sec > 0:
                 offset = max(0.0, elapsed - fade_sec)
                 filter_parts.append(
                     f"{current_video}{next_video}"
@@ -401,14 +412,60 @@ class FinalVideoRenderer:
         subtitle_file = str(subtitle_path).replace("\\", "\\\\").replace(":", "\\:")
         style = (
             "FontName=Arial,"
-            "FontSize=18,"
+            "FontSize=10,"
             "PrimaryColour=&H00FFFFFF,"
             "OutlineColour=&H80000000,"
-            "BackColour=&H50000000,"
-            "BorderStyle=3,"
+            "BackColour=&H30000000,"
+            "BorderStyle=1,"
             "Outline=1,"
             "Shadow=0,"
-            "MarginV=48,"
+            "MarginV=24,"
             "Alignment=2"
         )
         return f"subtitles='{subtitle_file}':force_style='{style}'"
+
+    def _mix_soundtrack(
+        self,
+        *,
+        input_path: Path,
+        soundtrack_path: Path,
+        volume: float,
+        output_path: Path,
+    ) -> None:
+        if not soundtrack_path.exists():
+            return
+
+        volume = max(0.03, min(volume, 0.22))
+        command = [
+            "ffmpeg",
+            "-y",
+            "-stream_loop",
+            "-1",
+            "-i",
+            str(soundtrack_path),
+            "-i",
+            str(input_path),
+            "-filter_complex",
+            (
+                f"[0:a]volume={volume},afade=t=in:st=0:d=1.2,afade=t=out:st=28:d=1.6[bed];"
+                "[1:a][bed]amix=inputs=2:duration=first:dropout_transition=2[aout]"
+            ),
+            "-map",
+            "1:v",
+            "-map",
+            "[aout]",
+            "-c:v",
+            "copy",
+            "-c:a",
+            "aac",
+            "-movflags",
+            "+faststart",
+            str(output_path),
+        ]
+        subprocess.run(
+            command,
+            check=True,
+            cwd=str(self.render_dir),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )

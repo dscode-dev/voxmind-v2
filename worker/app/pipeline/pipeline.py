@@ -16,6 +16,7 @@ from app.pipeline.auto_review import AutoReviewPolicy
 from app.pipeline.candidate_builder import CandidateBuilder
 from app.pipeline.delivery_package_builder import DeliveryPackageBuilder
 from app.pipeline.publish_package_builder import PublishPackageBuilder
+from app.pipeline.soundtrack_selector import SoundtrackSelector
 from app.pipeline.subtitle_builder import SubtitleBuilder
 from app.pipeline.scorer import Scorer
 from app.prompts.manual_prompt_builder import ManualPromptBuilder
@@ -65,7 +66,9 @@ class Pipeline:
 
         self.transcriber = Transcriber(
             model_size=settings.asr_model_size,
+            device=settings.asr_device,
             compute_type=settings.asr_compute_type,
+            cpu_threads=settings.asr_cpu_threads,
             language=settings.asr_language,
             beam_size=settings.asr_beam_size,
             vad_filter=settings.asr_vad_filter,
@@ -87,6 +90,7 @@ class Pipeline:
         self.scorer = self._build_scorer()
         self.delivery_package_builder = DeliveryPackageBuilder()
         self.publish_package_builder = PublishPackageBuilder()
+        self.soundtrack_selector = SoundtrackSelector()
         self.subtitle_builder = SubtitleBuilder()
         self.render_plan_builder = RenderPlanBuilder()
         self.auto_review_policy = AutoReviewPolicy(
@@ -941,7 +945,7 @@ para continuar o processamento.
             }
             normalized.append(normalized_cut)
 
-        return normalized
+        return self._remove_adjacent_overlap(normalized, transcript_segments)
 
     def _find_segment_covering(self, transcript_segments: list[dict], timestamp: float) -> dict | None:
         for segment in transcript_segments:
@@ -967,6 +971,52 @@ para continuar o processamento.
                 break
 
         return extended_end
+
+    def _remove_adjacent_overlap(
+        self,
+        cuts: list[dict],
+        transcript_segments: list[dict],
+    ) -> list[dict]:
+        if len(cuts) < 2:
+            return cuts
+
+        adjusted: list[dict] = []
+        previous_end = 0.0
+
+        for index, cut in enumerate(cuts):
+            current = dict(cut)
+            start = float(current.get("start", 0.0))
+            end = float(current.get("end", 0.0))
+
+            if index > 0 and start < previous_end:
+                deduped_start = self._find_next_segment_start(transcript_segments, previous_end) or previous_end
+                start = max(start, deduped_start)
+                if end - start < settings.render_min_clip_duration_sec:
+                    end = self._extend_end_to_min_duration(
+                        transcript_segments,
+                        start,
+                        end,
+                    )
+
+            current["start"] = round(start, 2)
+            current["end"] = round(end, 2)
+            current["safe_start"] = round(start, 2)
+            current["safe_end"] = round(end, 2)
+            adjusted.append(current)
+            previous_end = end
+
+        return adjusted
+
+    def _find_next_segment_start(
+        self,
+        transcript_segments: list[dict],
+        timestamp: float,
+    ) -> float | None:
+        for segment in transcript_segments:
+            segment_start = float(segment.get("start", 0.0))
+            if segment_start >= timestamp:
+                return segment_start
+        return None
 
     def _run_clip_qa(
         self,
@@ -1072,11 +1122,16 @@ para continuar o processamento.
         qa_report: dict | None,
     ) -> dict:
         self._mark_step("render_plan", "started")
+        soundtrack = self.soundtrack_selector.select(
+            cuts=filtered_cuts,
+            long_video_script=self.manual_response.get("long_video_script"),
+        )
         plan = self.render_plan_builder.build(
             job_id=self.job_id,
             clip_mode=self.clip_mode,
             video_ratio=self.video_ratio,
             cuts=filtered_cuts,
+            soundtrack=soundtrack,
             qa_report=qa_report,
         )
         self._mark_step("render_plan", "completed", clip_count=len(plan.get("clips", [])))

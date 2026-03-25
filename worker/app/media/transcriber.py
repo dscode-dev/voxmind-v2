@@ -13,7 +13,9 @@ class Transcriber:
     def __init__(
         self,
         model_size: str,
+        device: str,
         compute_type: str,
+        cpu_threads: int,
         language: str,
         beam_size: int,
         vad_filter: bool,
@@ -24,8 +26,9 @@ class Transcriber:
 
         self.model = WhisperModel(
             model_size,
+            device=device,
             compute_type=compute_type,
-            cpu_threads=4,
+            cpu_threads=cpu_threads,
             num_workers=parallel_workers,
         )
 

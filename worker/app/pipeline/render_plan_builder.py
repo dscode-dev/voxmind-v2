@@ -14,6 +14,7 @@ class RenderPlanBuilder:
         clip_mode: str,
         video_ratio: str,
         cuts: List[Dict],
+        soundtrack: Dict | None = None,
         qa_report: Dict | None = None,
     ) -> Dict:
         qa_by_index = {
@@ -55,6 +56,7 @@ class RenderPlanBuilder:
             "video_ratio": video_ratio,
             "render_intent": "social_ready_short_form",
             "global_style": self._global_style(video_ratio),
+            "soundtrack": soundtrack or {},
             "clips": clips,
         }
 

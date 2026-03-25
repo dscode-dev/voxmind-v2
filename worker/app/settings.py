@@ -108,6 +108,14 @@ class Settings(BaseSettings):
         default="int8",
         alias="ASR_COMPUTE_TYPE"
     )
+    asr_device: str = Field(
+        default="cpu",
+        alias="ASR_DEVICE"
+    )
+    asr_cpu_threads: int = Field(
+        default=4,
+        alias="ASR_CPU_THREADS"
+    )
 
     asr_beam_size: int = Field(
         default=1,
