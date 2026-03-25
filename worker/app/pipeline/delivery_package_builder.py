@@ -13,6 +13,7 @@ class DeliveryPackageBuilder:
         cut_files: List[Path],
         final_reel_path: Path | None,
         subtitle_path: Path | None,
+        post_payload: Dict | None,
         long_video_script: Dict | None,
         qa_report: Dict | None,
         automation_report: Dict | None,
@@ -43,17 +44,9 @@ class DeliveryPackageBuilder:
                         0.0,
                         float(cut.get("end", 0.0)) - float(cut.get("start", 0.0)),
                     ),
-                    "title": cut.get("title"),
-                    "description": cut.get("description"),
-                    "hook": cut.get("hook"),
-                    "hashtags": cut.get("hashtags", []),
-                    "thumbnail": cut.get("thumbnail"),
                     "merge_group": cut.get("merge_group"),
                     "speaker_focus": cut.get("speaker_focus"),
                     "transition_after": cut.get("transition_after"),
-                    "on_screen_text": cut.get("on_screen_text"),
-                    "caption_style": cut.get("caption_style"),
-                    "emphasis_words": cut.get("emphasis_words", []),
                     "automation": automation_by_index.get(clip_index),
                 }
             )
@@ -66,6 +59,7 @@ class DeliveryPackageBuilder:
             "qa_decision": qa_report.get("decision") if qa_report else None,
             "response_validation": response_validation or {},
             "automation": automation_report,
+            "post": post_payload or {},
             "clip_count": len(clips),
             "clips": clips,
             "final_assets": {

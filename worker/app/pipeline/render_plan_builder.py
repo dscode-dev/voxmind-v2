@@ -16,6 +16,7 @@ class RenderPlanBuilder:
         clip_mode: str,
         video_ratio: str,
         cuts: List[Dict],
+        post_payload: Dict | None = None,
         transcript_segments: List[Dict] | None = None,
         soundtrack: Dict | None = None,
         qa_report: Dict | None = None,
@@ -35,6 +36,8 @@ class RenderPlanBuilder:
             cold_open = self._cold_open_for_clip(
                 clip_index=index,
                 cut=cut,
+                cuts=cuts,
+                post_payload=post_payload or {},
                 transcript_segments=transcript_segments or [],
             )
             clips.append(
@@ -132,27 +135,30 @@ class RenderPlanBuilder:
         *,
         clip_index: int,
         cut: Dict,
+        cuts: List[Dict],
+        post_payload: Dict,
         transcript_segments: List[Dict],
     ) -> Dict:
         if clip_index != 1:
             return {"enabled": False}
 
-        hook_text = str(cut.get("hook") or "").strip()
+        hook_text = str(post_payload.get("hook") or cut.get("hook") or "").strip()
         if not hook_text:
-            return {"enabled": False}
-
-        clip_start = float(cut.get("safe_start", cut.get("start", 0.0)) or 0.0)
-        clip_end = float(cut.get("safe_end", cut.get("end", 0.0)) or 0.0)
-        if clip_end <= clip_start:
             return {"enabled": False}
 
         best_segment = self._find_best_hook_segment(
             hook_text=hook_text,
-            clip_start=clip_start,
-            clip_end=clip_end,
+            cuts=cuts,
             transcript_segments=transcript_segments,
         )
         if best_segment is None:
+            return {"enabled": False}
+
+        source_clip_index = int(best_segment.get("_clip_index", 1) or 1)
+        source_cut = cuts[source_clip_index - 1] if 0 < source_clip_index <= len(cuts) else cut
+        clip_start = float(source_cut.get("safe_start", source_cut.get("start", 0.0)) or 0.0)
+        clip_end = float(source_cut.get("safe_end", source_cut.get("end", 0.0)) or 0.0)
+        if clip_end <= clip_start:
             return {"enabled": False}
 
         segment_start = float(best_segment.get("start", clip_start))
@@ -166,17 +172,19 @@ class RenderPlanBuilder:
 
         return {
             "enabled": True,
+            "source_clip_index": source_clip_index,
             "duration_sec": round(preview_duration, 2),
             "relative_start_sec": round(preview_start, 2),
             "source_text": str(best_segment.get("text") or "").strip(),
+            "transition_after": "fade",
+            "transition_duration_ms": 180,
         }
 
     def _find_best_hook_segment(
         self,
         *,
         hook_text: str,
-        clip_start: float,
-        clip_end: float,
+        cuts: List[Dict],
         transcript_segments: List[Dict],
     ) -> Dict | None:
         hook_tokens = set(self._tokenize(hook_text))
@@ -186,24 +194,33 @@ class RenderPlanBuilder:
         best_segment = None
         best_score = 0.0
 
-        for segment in transcript_segments:
-            segment_start = float(segment.get("start", 0.0))
-            segment_end = float(segment.get("end", 0.0))
-            if segment_end < clip_start or segment_start > clip_end:
+        for cut_index, cut in enumerate(cuts, start=1):
+            clip_start = float(cut.get("safe_start", cut.get("start", 0.0)) or 0.0)
+            clip_end = float(cut.get("safe_end", cut.get("end", 0.0)) or 0.0)
+            if clip_end <= clip_start:
                 continue
 
-            segment_tokens = set(self._tokenize(str(segment.get("text") or "")))
-            if not segment_tokens:
-                continue
+            for segment in transcript_segments:
+                segment_start = float(segment.get("start", 0.0))
+                segment_end = float(segment.get("end", 0.0))
+                if segment_end < clip_start or segment_start > clip_end:
+                    continue
 
-            overlap = hook_tokens & segment_tokens
-            if not overlap:
-                continue
+                segment_tokens = set(self._tokenize(str(segment.get("text") or "")))
+                if not segment_tokens:
+                    continue
 
-            score = len(overlap) / max(1, len(hook_tokens))
-            if score > best_score:
-                best_score = score
-                best_segment = segment
+                overlap = hook_tokens & segment_tokens
+                if not overlap:
+                    continue
+
+                score = len(overlap) / max(1, len(hook_tokens))
+                if score > best_score:
+                    best_score = score
+                    best_segment = {
+                        **segment,
+                        "_clip_index": cut_index,
+                    }
 
         return best_segment
 

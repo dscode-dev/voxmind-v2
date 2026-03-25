@@ -578,8 +578,14 @@ para continuar o processamento.
         if "shorts_content" not in self.manual_response:
             raise RuntimeError("Invalid response: shorts_content missing")
 
+        self.manual_response["post"] = self._normalize_post_payload(
+            self.manual_response.get("post"),
+            self.manual_response.get("shorts_content", []),
+        )
+
         response_validation = self._build_response_validation(
-            self.manual_response.get("shorts_content", [])
+            self.manual_response.get("shorts_content", []),
+            self.manual_response.get("post", {}),
         )
         self.manual_response["_response_validation"] = response_validation
         self._mark_step("validate_ai_response", "completed")
@@ -675,27 +681,15 @@ para continuar o processamento.
 
         self._mark_step("send_cuts", "started")
         for path in cut_files:
-            self.telegram.send_video(path)
+            self.telegram.send_video(path, caption=f"Corte {Path(path).name} - JOB_ID: {self.job_id}")
 
         if qa_report is not None:
-            qa_report_path = self._write_json_artifact(
-                "qa_report.json",
-                qa_report,
-                "qa_report",
-            )
-            self.telegram.send_document(
-                str(qa_report_path),
-                caption=f"QA report for JOB_ID: {self.job_id}",
-            )
+            qa_report_path = self._write_json_artifact("qa_report.json", qa_report, "qa_report")
 
         render_plan_path = self._write_json_artifact(
             "render_plan.json",
             render_plan,
             "render_plan",
-        )
-        self.telegram.send_document(
-            str(render_plan_path),
-            caption=f"Render plan for JOB_ID: {self.job_id}",
         )
 
         delivery_package_path = self._write_json_artifact(
@@ -703,19 +697,11 @@ para continuar o processamento.
             delivery_package,
             "delivery_package",
         )
-        self.telegram.send_document(
-            str(delivery_package_path),
-            caption=f"Delivery package for JOB_ID: {self.job_id}",
-        )
 
         publish_package_path = self._write_json_artifact(
             "publish_package.json",
             publish_package,
             "publish_package",
-        )
-        self.telegram.send_document(
-            str(publish_package_path),
-            caption=f"Publish package for JOB_ID: {self.job_id}",
         )
 
         if final_reel_path is not None and final_reel_path.exists():
@@ -727,7 +713,7 @@ para continuar o processamento.
             )
             self.telegram.send_video(
                 str(final_reel_path),
-                caption=f"Final reel for JOB_ID: {self.job_id}",
+                caption=str(publish_package.get("telegram_caption") or f"Final reel for JOB_ID: {self.job_id}"),
             )
         if subtitle_path is not None and subtitle_path.exists():
             self.artifacts.mark_local(
@@ -736,10 +722,9 @@ para continuar o processamento.
                 subtitle_path,
                 artifact_type="text",
             )
-            self.telegram.send_document(
-                str(subtitle_path),
-                caption=f"Final reel subtitles for JOB_ID: {self.job_id}",
-            )
+        self.telegram.send_message(
+            self._build_publish_message(publish_package)
+        )
         self._mark_step("send_cuts", "completed")
         self._mark_step("finalize", "completed")
 
@@ -756,6 +741,88 @@ para continuar o processamento.
             "runtime_status_path": str(self.runtime.runtime_path),
             "artifacts_manifest_path": str(self.artifacts.manifest_path),
         }
+
+    def _normalize_post_payload(self, post_payload: dict | None, cuts: list[dict]) -> dict:
+        payload = dict(post_payload or {})
+        first_cut = cuts[0] if cuts else {}
+
+        normalized_hashtags = []
+        for item in payload.get("hashtags") or first_cut.get("hashtags") or []:
+            tag = str(item).strip()
+            if not tag:
+                continue
+            normalized_hashtags.append(tag if tag.startswith("#") else f"#{tag}")
+
+        if not str(payload.get("title") or "").strip():
+            payload["title"] = first_cut.get("title")
+        if not str(payload.get("hook") or "").strip():
+            payload["hook"] = first_cut.get("hook")
+        if not str(payload.get("description") or "").strip():
+            payload["description"] = first_cut.get("description")
+        if not payload.get("hashtags"):
+            payload["hashtags"] = normalized_hashtags
+        if not str(payload.get("thumbnail") or "").strip():
+            payload["thumbnail"] = first_cut.get("thumbnail")
+        if not str(payload.get("speaker_focus") or "").strip():
+            payload["speaker_focus"] = first_cut.get("speaker_focus")
+        return payload
+
+    def _build_response_validation(self, cuts: list[dict], post_payload: dict | None = None) -> dict:
+        warnings: list[str] = []
+        post_payload = post_payload or {}
+        generic_title_markers = {
+            "o jogo por trás",
+            "quem realmente manda",
+            "o objetivo final",
+            "o tamanho do poder",
+        }
+
+        global_title = str(post_payload.get("title") or "").strip().lower()
+        global_hook = str(post_payload.get("hook") or "").strip()
+
+        if global_title in generic_title_markers:
+            warnings.append("post: generic_title")
+
+        if global_hook and len(global_hook) < 18:
+            warnings.append("post: short_hook")
+
+        for index, cut in enumerate(cuts, start=1):
+            start = float(cut.get("start", 0.0) or 0.0)
+            end = float(cut.get("end", 0.0) or 0.0)
+            if end <= start:
+                warnings.append(f"cut_{index}: invalid_range")
+
+        continuity_warnings = self._short_serie_continuity_gaps(cuts)
+        warnings.extend(
+            f"continuity_gap:{item['gap_sec']}"
+            for item in continuity_warnings
+        )
+
+        if continuity_warnings:
+            self._mark_step(
+                "validate_ai_response",
+                "warning",
+                continuity_gaps=continuity_warnings,
+            )
+
+        return {
+            "warnings": warnings,
+            "continuity_gaps": continuity_warnings,
+        }
+
+    def _build_publish_message(self, publish_package: dict) -> str:
+        title = str(publish_package.get("primary_title") or "Video pronto").strip()
+        hook = str(publish_package.get("primary_hook") or "").strip()
+        description = str(publish_package.get("description") or "").strip()
+        hashtags = " ".join(publish_package.get("hashtags") or [])
+        lines = [f"🎯 PUBLICAÇÃO PRONTA", f"JOB_ID: {self.job_id}", "", title]
+        if hook:
+            lines.append(hook)
+        if description:
+            lines.extend(["", description])
+        if hashtags:
+            lines.extend(["", hashtags])
+        return "\n".join(line for line in lines if line is not None)
 
     def _sanitize_json_text(self, text: str) -> str:
         replacements = {
@@ -794,43 +861,6 @@ para continuar o processamento.
                 extracted = re.sub(r",(\s*[}\]])", r"\1", extracted)
                 return json.loads(extracted)
             raise
-
-    def _build_response_validation(self, cuts: list[dict]) -> dict:
-        warnings: list[str] = []
-        generic_title_markers = {
-            "o jogo por trás",
-            "quem realmente manda",
-            "o objetivo final",
-            "o tamanho do poder",
-        }
-
-        for index, cut in enumerate(cuts, start=1):
-            title = str(cut.get("title") or "").strip().lower()
-            hook = str(cut.get("hook") or "").strip()
-
-            if title in generic_title_markers:
-                warnings.append(f"cut_{index}: generic_title")
-
-            if hook and len(hook) < 18:
-                warnings.append(f"cut_{index}: short_hook")
-
-        continuity_warnings = self._short_serie_continuity_gaps(cuts)
-        warnings.extend(
-            f"continuity_gap:{item['gap_sec']}"
-            for item in continuity_warnings
-        )
-
-        if continuity_warnings:
-            self._mark_step(
-                "validate_ai_response",
-                "warning",
-                continuity_gaps=continuity_warnings,
-            )
-
-        return {
-            "warnings": warnings,
-            "continuity_gaps": continuity_warnings,
-        }
 
     def _short_serie_continuity_gaps(self, cuts: list[dict]) -> list[dict]:
         if self.clip_mode != "short_serie" or len(cuts) < 2:
@@ -1057,6 +1087,7 @@ para continuar o processamento.
             cut_files=cut_files,
             final_reel_path=final_reel_path,
             subtitle_path=subtitle_path,
+            post_payload=self.manual_response.get("post"),
             long_video_script=self.manual_response.get("long_video_script"),
             qa_report=qa_report,
             automation_report=automation_report,
@@ -1086,6 +1117,7 @@ para continuar o processamento.
             clip_mode=self.clip_mode,
             video_ratio=self.video_ratio,
             cuts=filtered_cuts,
+            post_payload=self.manual_response.get("post"),
             final_reel_path=final_reel_path,
             subtitle_path=subtitle_path,
             qa_report=qa_report,
@@ -1133,6 +1165,7 @@ para continuar o processamento.
             clip_mode=self.clip_mode,
             video_ratio=self.video_ratio,
             cuts=filtered_cuts,
+            post_payload=self.manual_response.get("post"),
             transcript_segments=transcript_segments,
             soundtrack=soundtrack,
             qa_report=qa_report,

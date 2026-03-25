@@ -1,76 +1,14 @@
-FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+ARG BASE_IMAGE=clipflow-worker-base:latest
+FROM ${BASE_IMAGE}
 
-ARG POETRY_INSTALL_GROUPS="diarization"
-ARG TORCH_VERSION="2.5.1"
-ARG TORCHAUDIO_VERSION="2.5.1"
-ARG POETRY_VERSION="2.0.1"
-ARG PYTHON_VERSION="3.11"
-ARG TORCH_FLAVOR="gpu"
-
-ENV DEBIAN_FRONTEND=noninteractive \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
-    POETRY_VIRTUALENVS_CREATE=false \
-    POETRY_NO_INTERACTION=1 \
-    POETRY_CACHE_DIR=/tmp/poetry-cache \
-    NVIDIA_VISIBLE_DEVICES=all \
-    NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
-
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        software-properties-common \
-        curl \
-        git \
-        ffmpeg \
-        build-essential && \
-    add-apt-repository ppa:deadsnakes/ppa && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends \
-        python${PYTHON_VERSION} \
-        python${PYTHON_VERSION}-dev \
-        python${PYTHON_VERSION}-venv \
-        python3-distutils && \
-    rm -rf /var/lib/apt/lists/*
-
-RUN update-alternatives --install /usr/bin/python python /usr/bin/python${PYTHON_VERSION} 1 && \
-    curl -sS https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py && \
-    python /tmp/get-pip.py && \
-    python -m pip install --no-cache-dir --upgrade pip setuptools wheel && \
-    python -m pip install --no-cache-dir "poetry==${POETRY_VERSION}" && \
-    rm -f /tmp/get-pip.py
-
-RUN useradd -m -u 1000 appuser
+USER root
 
 WORKDIR /app
 
-COPY pyproject.toml poetry.lock* /app/
-
-RUN if [ -n "$POETRY_INSTALL_GROUPS" ]; then \
-        poetry install --without dev --with "$POETRY_INSTALL_GROUPS" --no-root; \
-    else \
-        poetry install --only main --no-root; \
-    fi && \
-    rm -rf /tmp/poetry-cache
-
-RUN if echo "$POETRY_INSTALL_GROUPS" | grep -Eq '(^|,| )diarization($|,| )'; then \
-        python -m pip uninstall -y torch torchaudio torchvision torchtext || true; \
-        if [ "$TORCH_FLAVOR" = "gpu" ]; then \
-            python -m pip install --no-cache-dir \
-                --index-url https://download.pytorch.org/whl/cu124 \
-                "torch==${TORCH_VERSION}" \
-                "torchaudio==${TORCHAUDIO_VERSION}"; \
-        else \
-            python -m pip install --no-cache-dir \
-                --index-url https://download.pytorch.org/whl/cpu \
-                "torch==${TORCH_VERSION}" \
-                "torchaudio==${TORCHAUDIO_VERSION}"; \
-        fi; \
-    fi
-
 COPY app /app/app
+COPY assets /app/assets
 
-RUN chown -R appuser:appuser /app
+RUN chown -R appuser:appuser /app/app /app/assets
 
 USER appuser
 

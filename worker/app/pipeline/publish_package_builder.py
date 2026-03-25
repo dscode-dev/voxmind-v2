@@ -11,26 +11,34 @@ class PublishPackageBuilder:
         clip_mode: str,
         video_ratio: str,
         cuts: List[Dict],
+        post_payload: Dict | None,
         final_reel_path: Path | None,
         subtitle_path: Path | None,
         qa_report: Dict | None,
         automation_report: Dict | None,
     ) -> Dict:
         primary_clip = cuts[0] if cuts else {}
-        ordered_hashtags = self._collect_hashtags(cuts)
+        post_payload = post_payload or {}
+        ordered_hashtags = self._collect_hashtags(cuts, post_payload)
+        primary_title = str(post_payload.get("title") or primary_clip.get("title") or "").strip()
+        primary_hook = str(post_payload.get("hook") or primary_clip.get("hook") or "").strip()
+        description = str(post_payload.get("description") or primary_clip.get("description") or "").strip()
+        thumbnail_text = str(post_payload.get("thumbnail") or primary_clip.get("thumbnail") or "").strip()
+        speaker_focus = str(post_payload.get("speaker_focus") or primary_clip.get("speaker_focus") or "").strip()
 
         return {
             "job_id": job_id,
             "clip_mode": clip_mode,
             "video_ratio": video_ratio,
             "publish_status": self._publish_status(qa_report, final_reel_path),
-            "primary_hook": primary_clip.get("hook"),
-            "primary_title": primary_clip.get("title"),
-            "thumbnail_text": primary_clip.get("thumbnail"),
-            "speaker_focus": primary_clip.get("speaker_focus"),
-            "caption_text": self._build_caption_text(primary_clip, ordered_hashtags),
+            "primary_hook": primary_hook,
+            "primary_title": primary_title,
+            "description": description,
+            "thumbnail_text": thumbnail_text,
+            "speaker_focus": speaker_focus or None,
+            "caption_text": self._build_caption_text(primary_title, primary_hook, description, ordered_hashtags),
             "hashtags": ordered_hashtags,
-            "telegram_caption": self._build_telegram_caption(primary_clip, ordered_hashtags),
+            "telegram_caption": self._build_telegram_caption(primary_title, primary_hook, description, ordered_hashtags),
             "final_reel": self._final_reel_payload(final_reel_path),
             "subtitles": self._subtitle_payload(subtitle_path),
             "automation": automation_report or {},
@@ -50,11 +58,13 @@ class PublishPackageBuilder:
             return "needs_review"
         return "ready"
 
-    def _collect_hashtags(self, cuts: List[Dict]) -> List[str]:
+    def _collect_hashtags(self, cuts: List[Dict], post_payload: Dict) -> List[str]:
         seen: set[str] = set()
         ordered: List[str] = []
-        for cut in cuts:
-            for item in cut.get("hashtags") or []:
+        sources = [post_payload.get("hashtags") or []]
+        sources.extend(cut.get("hashtags") or [] for cut in cuts)
+        for source in sources:
+            for item in source:
                 tag = str(item).strip()
                 if not tag:
                     continue
@@ -66,11 +76,8 @@ class PublishPackageBuilder:
                 ordered.append(normalized)
         return ordered
 
-    def _build_caption_text(self, primary_clip: Dict, hashtags: List[str]) -> str:
+    def _build_caption_text(self, title: str, hook: str, description: str, hashtags: List[str]) -> str:
         parts: List[str] = []
-        title = str(primary_clip.get("title") or "").strip()
-        description = str(primary_clip.get("description") or "").strip()
-        hook = str(primary_clip.get("hook") or "").strip()
 
         if title:
             parts.append(title)
@@ -84,16 +91,12 @@ class PublishPackageBuilder:
 
         return "\n\n".join(part for part in parts if part)
 
-    def _build_telegram_caption(self, primary_clip: Dict, hashtags: List[str]) -> str:
-        title = str(primary_clip.get("title") or "Corte pronto").strip()
-        hook = str(primary_clip.get("hook") or "").strip()
-        speaker_focus = str(primary_clip.get("speaker_focus") or "").strip()
-
-        lines = [title]
+    def _build_telegram_caption(self, title: str, hook: str, description: str, hashtags: List[str]) -> str:
+        lines = [title or "Video pronto"]
         if hook:
             lines.append(hook)
-        if speaker_focus:
-            lines.append(f"Speaker focus: {speaker_focus}")
+        if description:
+            lines.append(description)
         if hashtags:
             lines.append(" ".join(hashtags[:5]))
 

@@ -71,17 +71,20 @@ Return ONLY valid JSON in this format:
   "job_id": "{job_id}",
   "clip_mode": "{clip_mode}",
   "video_ratio": "{video_ratio}",
+  "post": {{
+    "title": "main final video title",
+    "hook": "main hook used in the cold open",
+    "description": "final posting description",
+    "hashtags": ["#tag1", "#tag2", "#tag3"],
+    "thumbnail": "thumbnail idea",
+    "speaker_focus": "SPEAKER_01 | SPEAKER_02 | null"
+  }},
   "shorts_content": [
     {{
       "start": 10.5,
       "end": 45.3,
-      "hook": "strong hook at the beginning",
       "reason": "why this cut is good and respects speaker continuity and requested mode",
       "narrative_role": "hook | setup | development | payoff",
-      "title": "short impactful title",
-      "description": "short description",
-      "hashtags": ["#tag1", "#tag2", "#tag3"],
-      "thumbnail": "thumbnail idea",
       "merge_group": "story_1"
     }}
   ]

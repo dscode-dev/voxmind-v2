@@ -80,7 +80,7 @@ class FinalVideoRenderer:
         if not prepared_files:
             raise RuntimeError("No prepared clips to assemble")
 
-        prepared_files, prepared_durations, prepared_plan_indices = self._prepend_cold_open(
+        prepared_files, prepared_durations, transition_plans = self._prepend_cold_open(
             prepared_files=prepared_files,
             prepared_durations=prepared_durations,
             render_plan=render_plan,
@@ -93,7 +93,7 @@ class FinalVideoRenderer:
         }
 
         use_fade = any(
-            str(clips_plan.get(prepared_plan_indices[index - 1], {}).get("transition_after") or "")
+            str((transition_plans[index - 1] or {}).get("transition_after") or "")
             in {"fade", "whoosh", "punch_in"}
             for index in range(1, len(prepared_files))
         )
@@ -118,8 +118,7 @@ class FinalVideoRenderer:
         elapsed = prepared_durations[0]
 
         for index in range(1, len(prepared_files)):
-            previous_plan_index = prepared_plan_indices[index - 1]
-            clip_plan = clips_plan.get(previous_plan_index, {})
+            clip_plan = transition_plans[index - 1] or {}
             transition = str(clip_plan.get("transition_after") or "hard_cut")
             duration_ms = int(clip_plan.get("transition_duration_ms") or 0)
             fade_sec = max(0.12, duration_ms / 1000.0) if transition == "fade" and duration_ms > 0 else 0.0
@@ -442,11 +441,19 @@ class FinalVideoRenderer:
         prepared_files: List[Path],
         prepared_durations: List[float],
         render_plan: Dict,
-    ) -> tuple[List[Path], List[float], List[int]]:
+    ) -> tuple[List[Path], List[float], List[Dict]]:
         if not prepared_files:
             return prepared_files, prepared_durations, []
 
-        prepared_plan_indices = list(range(1, len(prepared_files) + 1))
+        clips_plan = {
+            int(item.get("clip_index", 0)): item
+            for item in render_plan.get("clips", [])
+            if item.get("clip_index")
+        }
+        transition_plans = [
+            clips_plan.get(index, {})
+            for index in range(1, len(prepared_files) + 1)
+        ]
 
         first_clip_plan = next(
             (item for item in render_plan.get("clips", []) if int(item.get("clip_index", 0)) == 1),
@@ -454,15 +461,20 @@ class FinalVideoRenderer:
         )
         cold_open = (first_clip_plan or {}).get("cold_open") or {}
         if not cold_open.get("enabled"):
-            return prepared_files, prepared_durations, prepared_plan_indices
+            return prepared_files, prepared_durations, transition_plans
 
         duration_sec = max(0.8, float(cold_open.get("duration_sec", 2.0) or 2.0))
         relative_start_sec = max(0.0, float(cold_open.get("relative_start_sec", 0.0) or 0.0))
-        first_duration = prepared_durations[0] if prepared_durations else 0.0
-        if first_duration <= 0.0 or relative_start_sec >= first_duration:
-            return prepared_files, prepared_durations, prepared_plan_indices
+        source_clip_index = int(cold_open.get("source_clip_index", 1) or 1)
+        source_idx = max(0, source_clip_index - 1)
+        if source_idx >= len(prepared_files):
+            return prepared_files, prepared_durations, transition_plans
 
-        actual_duration = min(duration_sec, max(0.8, first_duration - relative_start_sec))
+        source_duration = prepared_durations[source_idx] if prepared_durations else 0.0
+        if source_duration <= 0.0 or relative_start_sec >= source_duration:
+            return prepared_files, prepared_durations, transition_plans
+
+        actual_duration = min(duration_sec, max(0.8, source_duration - relative_start_sec))
         teaser_path = self.render_dir / "prepared_00_hook.mp4"
         command = [
             "ffmpeg",
@@ -472,7 +484,7 @@ class FinalVideoRenderer:
             "-t",
             str(actual_duration),
             "-i",
-            str(prepared_files[0]),
+            str(prepared_files[source_idx]),
             "-c:v",
             "libx264",
             "-preset",
@@ -496,7 +508,13 @@ class FinalVideoRenderer:
         return (
             [teaser_path, *prepared_files],
             [actual_duration, *prepared_durations],
-            [1, *prepared_plan_indices],
+            [
+                {
+                    "transition_after": str(cold_open.get("transition_after") or "fade"),
+                    "transition_duration_ms": int(cold_open.get("transition_duration_ms") or 180),
+                },
+                *transition_plans,
+            ],
         )
 
     def _subtitle_filter(self, subtitle_path: Path) -> str:

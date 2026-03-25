@@ -62,15 +62,49 @@ Exemplos:
 docker build -t clipflow-api:latest ./clipflow-api
 
 docker build \
-  -f worker/Dockerfile.gpu \
+  -f worker/Dockerfile.gpu.base \
   --build-arg POETRY_INSTALL_GROUPS=diarization \
   --build-arg TORCH_FLAVOR=gpu \
+  -t clipflow-worker-base:latest \
+  ./worker
+
+docker build \
+  -f worker/Dockerfile.gpu \
+  --build-arg BASE_IMAGE=clipflow-worker-base:latest \
   -t clipflow-worker:latest \
   ./worker
 
 docker build -t clipflow-control-plane:latest ./control-plane
 
 docker build -t clipflow-studio:latest ./clipflow-studio
+```
+
+## Build incremental do worker
+
+Agora o worker foi dividido em duas imagens:
+
+- `worker/Dockerfile.gpu.base`
+  - instala Python, Poetry, ffmpeg, pyannote, torch e o stack pesado
+- `worker/Dockerfile.gpu`
+  - só copia `app/` e `assets/` por cima da base pronta
+
+Fluxo recomendado:
+
+```bash
+# Rebuild pesado: só quando mudar pyproject, Poetry groups, torch ou dependências de sistema
+docker build \
+  -f worker/Dockerfile.gpu.base \
+  --build-arg POETRY_INSTALL_GROUPS=diarization \
+  --build-arg TORCH_FLAVOR=gpu \
+  -t clipflow-worker-base:latest \
+  ./worker
+
+# Rebuild leve: quando mudar código Python, renderer, pipeline, prompts ou assets
+docker build \
+  -f worker/Dockerfile.gpu \
+  --build-arg BASE_IMAGE=clipflow-worker-base:latest \
+  -t clipflow-worker:latest \
+  ./worker
 ```
 
 Se preferir tags próprias, ajuste no `.env.compose`:
