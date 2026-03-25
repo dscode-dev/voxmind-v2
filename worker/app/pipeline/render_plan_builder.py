@@ -1,8 +1,10 @@
+import re
 from typing import Dict, List
 
 
 DEFAULT_TRANSITION = "hard_cut"
 DEFAULT_CAPTION_STYLE = "clean_subtitles"
+DEFAULT_COLD_OPEN_DURATION_SEC = 2.0
 
 
 class RenderPlanBuilder:
@@ -14,6 +16,7 @@ class RenderPlanBuilder:
         clip_mode: str,
         video_ratio: str,
         cuts: List[Dict],
+        transcript_segments: List[Dict] | None = None,
         soundtrack: Dict | None = None,
         qa_report: Dict | None = None,
     ) -> Dict:
@@ -29,6 +32,11 @@ class RenderPlanBuilder:
             qa_clip = qa_by_index.get(index, {})
             start = float(cut.get("start", 0.0))
             end = float(cut.get("end", 0.0))
+            cold_open = self._cold_open_for_clip(
+                clip_index=index,
+                cut=cut,
+                transcript_segments=transcript_segments or [],
+            )
             clips.append(
                 {
                     "clip_index": index,
@@ -41,11 +49,13 @@ class RenderPlanBuilder:
                     "transition_after": self._normalized_transition(cut.get("transition_after")),
                     "transition_duration_ms": self._transition_duration_ms(cut.get("transition_after")),
                     "caption_style": cut.get("caption_style") or DEFAULT_CAPTION_STYLE,
+                    "overlay_enabled": False,
                     "on_screen_text": cut.get("on_screen_text") or "",
                     "emphasis_words": cut.get("emphasis_words", []),
                     "text_timing": self._text_timing(cut),
                     "hook": cut.get("hook"),
                     "title": cut.get("title"),
+                    "cold_open": cold_open,
                     "review_hints": self._review_hints(qa_clip),
                 }
             )
@@ -116,3 +126,86 @@ class RenderPlanBuilder:
             hints.append("refresh_thumbnail_copy")
 
         return hints
+
+    def _cold_open_for_clip(
+        self,
+        *,
+        clip_index: int,
+        cut: Dict,
+        transcript_segments: List[Dict],
+    ) -> Dict:
+        if clip_index != 1:
+            return {"enabled": False}
+
+        hook_text = str(cut.get("hook") or "").strip()
+        if not hook_text:
+            return {"enabled": False}
+
+        clip_start = float(cut.get("safe_start", cut.get("start", 0.0)) or 0.0)
+        clip_end = float(cut.get("safe_end", cut.get("end", 0.0)) or 0.0)
+        if clip_end <= clip_start:
+            return {"enabled": False}
+
+        best_segment = self._find_best_hook_segment(
+            hook_text=hook_text,
+            clip_start=clip_start,
+            clip_end=clip_end,
+            transcript_segments=transcript_segments,
+        )
+        if best_segment is None:
+            return {"enabled": False}
+
+        segment_start = float(best_segment.get("start", clip_start))
+        segment_end = float(best_segment.get("end", clip_end))
+        preview_start = max(0.0, segment_start - clip_start)
+        preview_duration = min(
+            DEFAULT_COLD_OPEN_DURATION_SEC,
+            max(0.8, segment_end - segment_start),
+            max(0.8, clip_end - clip_start - preview_start),
+        )
+
+        return {
+            "enabled": True,
+            "duration_sec": round(preview_duration, 2),
+            "relative_start_sec": round(preview_start, 2),
+            "source_text": str(best_segment.get("text") or "").strip(),
+        }
+
+    def _find_best_hook_segment(
+        self,
+        *,
+        hook_text: str,
+        clip_start: float,
+        clip_end: float,
+        transcript_segments: List[Dict],
+    ) -> Dict | None:
+        hook_tokens = set(self._tokenize(hook_text))
+        if not hook_tokens:
+            return None
+
+        best_segment = None
+        best_score = 0.0
+
+        for segment in transcript_segments:
+            segment_start = float(segment.get("start", 0.0))
+            segment_end = float(segment.get("end", 0.0))
+            if segment_end < clip_start or segment_start > clip_end:
+                continue
+
+            segment_tokens = set(self._tokenize(str(segment.get("text") or "")))
+            if not segment_tokens:
+                continue
+
+            overlap = hook_tokens & segment_tokens
+            if not overlap:
+                continue
+
+            score = len(overlap) / max(1, len(hook_tokens))
+            if score > best_score:
+                best_score = score
+                best_segment = segment
+
+        return best_segment
+
+    def _tokenize(self, text: str) -> List[str]:
+        return re.findall(r"\w+", text.lower())

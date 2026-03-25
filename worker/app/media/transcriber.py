@@ -23,15 +23,12 @@ class Transcriber:
         parallel_workers: int = 2,
         max_merged_segment_duration_sec: int = 18,
     ):
-
-        self.model = WhisperModel(
-            model_size,
-            device=device,
-            compute_type=compute_type,
-            cpu_threads=cpu_threads,
-            num_workers=parallel_workers,
-        )
-
+        self.model_size = model_size
+        self.device = device
+        self.compute_type = compute_type
+        self.cpu_threads = cpu_threads
+        self.parallel_workers = parallel_workers
+        self.model = None
         self.language = language
         self.beam_size = beam_size
         self.vad_filter = vad_filter
@@ -39,6 +36,7 @@ class Transcriber:
         self.max_merged_segment_duration_sec = max_merged_segment_duration_sec
 
     def transcribe(self, video_path: Path) -> List[Dict]:
+        self._ensure_model()
 
         audio_dir = video_path.parent / "audio_chunks"
         transcript_dir = video_path.parent / "transcripts"
@@ -111,6 +109,18 @@ class Transcriber:
         all_segments.sort(key=lambda s: s["start"])
 
         return self._merge_small_gaps(all_segments)
+
+    def _ensure_model(self) -> None:
+        if self.model is not None:
+            return
+
+        self.model = WhisperModel(
+            self.model_size,
+            device=self.device,
+            compute_type=self.compute_type,
+            cpu_threads=self.cpu_threads,
+            num_workers=self.parallel_workers,
+        )
 
     def _probe_duration(self, video_path: Path) -> float:
 

@@ -20,6 +20,7 @@ class SpeakerDiarizer:
         self._availability_reason = "disabled"
         self._last_run_reason = "not_started"
         self._resolved_device = "cpu"
+        self._load_attempted = False
 
         if not enabled:
             self._last_run_reason = "disabled"
@@ -30,31 +31,18 @@ class SpeakerDiarizer:
             self._last_run_reason = "missing_hf_token"
             return
 
-        try:
-            pipeline_module = import_module("pyannote.audio")
-            pipeline_cls = getattr(pipeline_module, "Pipeline")
-            self._pipeline = self._load_pipeline(pipeline_cls, model_name, hf_token)
-            if self._pipeline is None:
-                raise RuntimeError(
-                    "pipeline_not_loaded; verify Hugging Face token and accept gated model terms"
-                )
-            self._set_device()
-            self._availability_reason = "available"
-            self._last_run_reason = "ready"
-        except Exception as exc:  # pragma: no cover
-            self._pipeline = None
-            self._availability_reason = self._format_exception_reason("unavailable", exc)
-            self._last_run_reason = self._availability_reason
-
     @property
     def availability_reason(self) -> str:
+        self._ensure_pipeline_loaded()
         return self._availability_reason
 
     @property
     def is_available(self) -> bool:
+        self._ensure_pipeline_loaded()
         return self._pipeline is not None
 
     def diagnostics(self) -> Dict:
+        self._ensure_pipeline_loaded()
         return {
             "enabled": self.enabled,
             "model_name": self.model_name,
@@ -67,6 +55,7 @@ class SpeakerDiarizer:
         }
 
     def diarize(self, audio_path: Path) -> List[Dict]:
+        self._ensure_pipeline_loaded()
         if not self.is_available:
             self._last_run_reason = self._availability_reason
             return []
@@ -90,6 +79,27 @@ class SpeakerDiarizer:
 
         self._last_run_reason = "completed"
         return turns
+
+    def _ensure_pipeline_loaded(self) -> None:
+        if self._load_attempted or not self.enabled or not self.hf_token:
+            return
+
+        self._load_attempted = True
+        try:
+            pipeline_module = import_module("pyannote.audio")
+            pipeline_cls = getattr(pipeline_module, "Pipeline")
+            self._pipeline = self._load_pipeline(pipeline_cls, self.model_name, self.hf_token)
+            if self._pipeline is None:
+                raise RuntimeError(
+                    "pipeline_not_loaded; verify Hugging Face token and accept gated model terms"
+                )
+            self._set_device()
+            self._availability_reason = "available"
+            self._last_run_reason = "ready"
+        except Exception as exc:  # pragma: no cover
+            self._pipeline = None
+            self._availability_reason = self._format_exception_reason("unavailable", exc)
+            self._last_run_reason = self._availability_reason
 
     def _load_pipeline(self, pipeline_cls, model_name: str, hf_token: str):
         try:

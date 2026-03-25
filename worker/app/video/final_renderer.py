@@ -80,6 +80,12 @@ class FinalVideoRenderer:
         if not prepared_files:
             raise RuntimeError("No prepared clips to assemble")
 
+        prepared_files, prepared_durations, prepared_plan_indices = self._prepend_cold_open(
+            prepared_files=prepared_files,
+            prepared_durations=prepared_durations,
+            render_plan=render_plan,
+        )
+
         clips_plan = {
             int(item.get("clip_index", 0)): item
             for item in render_plan.get("clips", [])
@@ -87,7 +93,8 @@ class FinalVideoRenderer:
         }
 
         use_fade = any(
-            str(clips_plan.get(index, {}).get("transition_after") or "") == "fade"
+            str(clips_plan.get(prepared_plan_indices[index - 1], {}).get("transition_after") or "")
+            in {"fade", "whoosh", "punch_in"}
             for index in range(1, len(prepared_files))
         )
 
@@ -111,10 +118,13 @@ class FinalVideoRenderer:
         elapsed = prepared_durations[0]
 
         for index in range(1, len(prepared_files)):
-            clip_plan = clips_plan.get(index, {})
+            previous_plan_index = prepared_plan_indices[index - 1]
+            clip_plan = clips_plan.get(previous_plan_index, {})
             transition = str(clip_plan.get("transition_after") or "hard_cut")
             duration_ms = int(clip_plan.get("transition_duration_ms") or 0)
             fade_sec = max(0.12, duration_ms / 1000.0) if transition == "fade" and duration_ms > 0 else 0.0
+            if transition in {"whoosh", "punch_in"} and duration_ms > 0:
+                fade_sec = max(0.12, duration_ms / 1000.0)
 
             next_video = video_labels[index]
             next_audio = audio_labels[index]
@@ -216,6 +226,24 @@ class FinalVideoRenderer:
         output_path: Path,
         clip_plan: Dict,
     ) -> None:
+        if not bool(clip_plan.get("overlay_enabled", False)):
+            command = [
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(input_path),
+                "-c",
+                "copy",
+                str(output_path),
+            ]
+            subprocess.run(
+                command,
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return
+
         on_screen_text = str(clip_plan.get("on_screen_text") or "").strip()
         if not on_screen_text:
             command = [
@@ -406,6 +434,69 @@ class FinalVideoRenderer:
             cwd=str(self.render_dir),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+        )
+
+    def _prepend_cold_open(
+        self,
+        *,
+        prepared_files: List[Path],
+        prepared_durations: List[float],
+        render_plan: Dict,
+    ) -> tuple[List[Path], List[float], List[int]]:
+        if not prepared_files:
+            return prepared_files, prepared_durations, []
+
+        prepared_plan_indices = list(range(1, len(prepared_files) + 1))
+
+        first_clip_plan = next(
+            (item for item in render_plan.get("clips", []) if int(item.get("clip_index", 0)) == 1),
+            None,
+        )
+        cold_open = (first_clip_plan or {}).get("cold_open") or {}
+        if not cold_open.get("enabled"):
+            return prepared_files, prepared_durations, prepared_plan_indices
+
+        duration_sec = max(0.8, float(cold_open.get("duration_sec", 2.0) or 2.0))
+        relative_start_sec = max(0.0, float(cold_open.get("relative_start_sec", 0.0) or 0.0))
+        first_duration = prepared_durations[0] if prepared_durations else 0.0
+        if first_duration <= 0.0 or relative_start_sec >= first_duration:
+            return prepared_files, prepared_durations, prepared_plan_indices
+
+        actual_duration = min(duration_sec, max(0.8, first_duration - relative_start_sec))
+        teaser_path = self.render_dir / "prepared_00_hook.mp4"
+        command = [
+            "ffmpeg",
+            "-y",
+            "-ss",
+            str(relative_start_sec),
+            "-t",
+            str(actual_duration),
+            "-i",
+            str(prepared_files[0]),
+            "-c:v",
+            "libx264",
+            "-preset",
+            "fast",
+            "-crf",
+            "22",
+            "-c:a",
+            "aac",
+            "-movflags",
+            "+faststart",
+            str(teaser_path),
+        ]
+        subprocess.run(
+            command,
+            check=True,
+            cwd=str(self.render_dir),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+        return (
+            [teaser_path, *prepared_files],
+            [actual_duration, *prepared_durations],
+            [1, *prepared_plan_indices],
         )
 
     def _subtitle_filter(self, subtitle_path: Path) -> str:

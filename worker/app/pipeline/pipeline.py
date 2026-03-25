@@ -650,7 +650,7 @@ para continuar o processamento.
         if qa_report is not None:
             qa_report["automation"] = automation_report
             qa_report["response_validation"] = self.manual_response.get("_response_validation", {})
-        render_plan = self._build_render_plan(filtered_cuts, qa_report)
+        render_plan = self._build_render_plan(filtered_cuts, transcript_segments, qa_report)
         subtitle_path = self._build_final_reel_subtitles(
             filtered_cuts,
             transcript_segments,
@@ -1120,6 +1120,7 @@ para continuar o processamento.
     def _build_render_plan(
         self,
         filtered_cuts: list[dict],
+        transcript_segments: list[dict],
         qa_report: dict | None,
     ) -> dict:
         self._mark_step("render_plan", "started")
@@ -1132,6 +1133,7 @@ para continuar o processamento.
             clip_mode=self.clip_mode,
             video_ratio=self.video_ratio,
             cuts=filtered_cuts,
+            transcript_segments=transcript_segments,
             soundtrack=soundtrack,
             qa_report=qa_report,
         )
