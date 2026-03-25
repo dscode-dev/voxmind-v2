@@ -105,6 +105,7 @@ services:
   voxmind-worker:
     image: ${VOXMIND_WORKER_IMAGE}
     container_name: voxmind-worker
+    user: "0:0"
     restart: unless-stopped
     depends_on:
       redis:
@@ -184,6 +185,7 @@ services:
   voxmind-control-plane:
     image: ${VOXMIND_CONTROL_PLANE_IMAGE}
     container_name: voxmind-control-plane
+    user: "0:0"
     restart: unless-stopped
     depends_on:
       redis:

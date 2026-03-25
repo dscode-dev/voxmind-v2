@@ -148,6 +148,7 @@ docker compose --env-file .env.compose logs -f clipflow-api
 - `clipflow-api` executa `alembic upgrade head` ao subir.
 - `minio-init` cria os buckets automaticamente.
 - o worker usa volumes persistentes para `/work` e `/cache`.
+- no modo Docker Compose, `voxmind-worker` e `voxmind-control-plane` sobem como `root` para evitar erro de permissão em volumes nomeados (`/cache`, `/work`, `/tmp`) durante ASR/diarização/cache.
 - o pipeline final gera:
   - `render_plan.json`
   - `delivery_package.json`
