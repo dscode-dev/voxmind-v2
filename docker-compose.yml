@@ -65,9 +65,7 @@ services:
       retries: 20
 
   clipflow-api:
-    build:
-      context: ./clipflow-api
-      dockerfile: Dockerfile
+    image: ${CLIPFLOW_API_IMAGE}
     container_name: clipflow-api
     restart: unless-stopped
     depends_on:
@@ -105,12 +103,7 @@ services:
       "
 
   voxmind-worker:
-    build:
-      context: ./worker
-      dockerfile: ${WORKER_DOCKERFILE:-Dockerfile.gpu}
-      args:
-        POETRY_INSTALL_GROUPS: ${WORKER_POETRY_INSTALL_GROUPS:-diarization}
-        TORCH_FLAVOR: ${WORKER_TORCH_FLAVOR:-gpu}
+    image: ${VOXMIND_WORKER_IMAGE}
     container_name: voxmind-worker
     restart: unless-stopped
     depends_on:
@@ -189,9 +182,7 @@ services:
               capabilities: [gpu]
 
   voxmind-control-plane:
-    build:
-      context: ./control-plane
-      dockerfile: Dockerfile
+    image: ${VOXMIND_CONTROL_PLANE_IMAGE}
     container_name: voxmind-control-plane
     restart: unless-stopped
     depends_on:
@@ -215,21 +206,14 @@ services:
       SHORT_SERIE_MAX_GAP_SEC: ${SHORT_SERIE_MAX_GAP_SEC}
       HEALTH_HOST: 0.0.0.0
       HEALTH_PORT: 8000
-      WORKER_JOB_IMAGE: local-compose-worker
+      WORKER_JOB_IMAGE: ${VOXMIND_WORKER_IMAGE}
     ports:
       - "${CONTROL_PLANE_PORT:-8000}:8000"
     volumes:
       - control_plane_tmp:/tmp
 
   clipflow-studio:
-    build:
-      context: ./clipflow-studio
-      dockerfile: Dockerfile
-      args:
-        VITE_CLIPFLOW_API_BASE: ${VITE_CLIPFLOW_API_BASE}
-        VITE_CLIPFLOW_WITH_CREDENTIALS: ${VITE_CLIPFLOW_WITH_CREDENTIALS}
-        VITE_CLIPFLOW_BASENAME: ${VITE_CLIPFLOW_BASENAME}
-        VITE_CLIPFLOW_SSE_ENABLED: ${VITE_CLIPFLOW_SSE_ENABLED}
+    image: ${CLIPFLOW_STUDIO_IMAGE}
     container_name: clipflow-studio
     restart: unless-stopped
     depends_on:

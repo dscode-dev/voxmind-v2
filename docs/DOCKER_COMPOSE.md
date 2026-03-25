@@ -1,6 +1,7 @@
 # VoxMind / ClipFlow no Docker Compose
 
 Esta stack roda sem Kubernetes e foi pensada para um servidor Linux com Docker, Docker Compose e GPU NVIDIA.
+O Compose foi ajustado para usar imagens prontas, sem `docker compose build`.
 
 ## Serviços
 
@@ -53,10 +54,42 @@ Nomes suportados:
 - `political_tension_bed.mp3`
 - `generic_bed.mp3`
 
+## Build das imagens individualmente
+
+Exemplos:
+
+```bash
+docker build -t clipflow-api:latest ./clipflow-api
+
+docker build \
+  -f worker/Dockerfile.gpu \
+  --build-arg POETRY_INSTALL_GROUPS=diarization \
+  --build-arg TORCH_FLAVOR=gpu \
+  -t clipflow-worker:latest \
+  ./worker
+
+docker build -t clipflow-control-plane:latest ./control-plane
+
+docker build \
+  --build-arg VITE_CLIPFLOW_API_BASE=http://localhost:8010 \
+  --build-arg VITE_CLIPFLOW_WITH_CREDENTIALS=true \
+  --build-arg VITE_CLIPFLOW_BASENAME=/ \
+  --build-arg VITE_CLIPFLOW_SSE_ENABLED=true \
+  -t clipflow-studio:latest \
+  ./clipflow-studio
+```
+
+Se preferir tags próprias, ajuste no `.env.compose`:
+
+- `CLIPFLOW_API_IMAGE`
+- `CLIPFLOW_STUDIO_IMAGE`
+- `VOXMIND_WORKER_IMAGE`
+- `VOXMIND_CONTROL_PLANE_IMAGE`
+
 ## Subida
 
 ```bash
-docker compose --env-file .env.compose up -d --build
+docker compose --env-file .env.compose up -d
 ```
 
 ## Endpoints
@@ -77,7 +110,6 @@ Config padrão recomendada:
 - `ASR_PARALLEL_WORKERS=4`
 - `ASR_CPU_THREADS=12`
 
-A diarização continua habilitada, mas o `SpeakerDiarizer` segue forçando CPU no pipeline atual por estabilidade.
 A diarização no Compose agora pode rodar na GPU também:
 
 - `DIARIZATION_DEVICE=cuda`
