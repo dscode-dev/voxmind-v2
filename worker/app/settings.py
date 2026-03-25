@@ -221,6 +221,14 @@ class Settings(BaseSettings):
         default=8.0,
         alias="RENDER_BOUNDARY_SNAP_TOLERANCE_SEC"
     )
+    render_sequence_bridge_max_gap_sec: float = Field(
+        default=10.0,
+        alias="RENDER_SEQUENCE_BRIDGE_MAX_GAP_SEC"
+    )
+    render_final_closure_extension_max_sec: float = Field(
+        default=14.0,
+        alias="RENDER_FINAL_CLOSURE_EXTENSION_MAX_SEC"
+    )
     short_serie_max_gap_sec: int = Field(
         default=22,
         alias="SHORT_SERIE_MAX_GAP_SEC"

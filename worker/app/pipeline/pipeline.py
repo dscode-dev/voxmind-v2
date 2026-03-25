@@ -976,7 +976,8 @@ para continuar o processamento.
             }
             normalized.append(normalized_cut)
 
-        return self._remove_adjacent_overlap(normalized, transcript_segments)
+        adjusted = self._remove_adjacent_overlap(normalized, transcript_segments)
+        return self._improve_sequence_continuity(adjusted, transcript_segments)
 
     def _find_segment_covering(self, transcript_segments: list[dict], timestamp: float) -> dict | None:
         for segment in transcript_segments:
@@ -1048,6 +1049,147 @@ para continuar o processamento.
             if segment_start >= timestamp:
                 return segment_start
         return None
+
+    def _improve_sequence_continuity(
+        self,
+        cuts: list[dict],
+        transcript_segments: list[dict],
+    ) -> list[dict]:
+        if not cuts or not transcript_segments:
+            return cuts
+
+        adjusted = [dict(cut) for cut in cuts]
+        bridge_gap_limit = float(settings.render_sequence_bridge_max_gap_sec)
+        max_duration = float(settings.qa_max_clip_duration_sec)
+
+        for index in range(len(adjusted) - 1):
+            current = adjusted[index]
+            nxt = adjusted[index + 1]
+
+            if not self._cuts_share_sequence_context(current, nxt):
+                continue
+
+            current_start = float(current.get("start", 0.0))
+            current_end = float(current.get("end", 0.0))
+            next_start = float(nxt.get("start", 0.0))
+            gap = next_start - current_end
+
+            if gap <= 0 or gap > bridge_gap_limit:
+                continue
+
+            if not self._cut_needs_context_bridge(nxt, transcript_segments):
+                continue
+
+            bridged_end = min(next_start, current_start + max_duration)
+            if bridged_end <= current_end:
+                continue
+
+            current["end"] = round(bridged_end, 2)
+            current["safe_end"] = round(bridged_end, 2)
+
+        last = adjusted[-1]
+        last_start = float(last.get("start", 0.0))
+        last_end = float(last.get("end", 0.0))
+        extended_end = self._extend_last_cut_for_closure(
+            transcript_segments,
+            start=last_start,
+            current_end=last_end,
+        )
+        if extended_end > last_end:
+            last["end"] = round(extended_end, 2)
+            last["safe_end"] = round(extended_end, 2)
+
+        return adjusted
+
+    def _cuts_share_sequence_context(self, left: dict, right: dict) -> bool:
+        if self.clip_mode == "short_serie":
+            return True
+
+        left_group = str(left.get("merge_group") or "").strip()
+        right_group = str(right.get("merge_group") or "").strip()
+        return bool(left_group and left_group == right_group)
+
+    def _cut_needs_context_bridge(
+        self,
+        cut: dict,
+        transcript_segments: list[dict],
+    ) -> bool:
+        segment = self._find_segment_covering(
+            transcript_segments,
+            float(cut.get("start", 0.0)),
+        )
+        if segment is None:
+            return False
+
+        text = str(segment.get("text") or "").strip().lower()
+        if not text:
+            return False
+
+        if re.match(r"^(e|mas|ent[aã]o|porque|por isso|s[oó] que|a[ií])\b", text):
+            return True
+
+        if text.startswith(("ele ", "ela ", "isso ", "essa ", "esse ", "aí ", "daí ")):
+            return True
+
+        return False
+
+    def _extend_last_cut_for_closure(
+        self,
+        transcript_segments: list[dict],
+        *,
+        start: float,
+        current_end: float,
+    ) -> float:
+        if self._has_strong_closing_near_timestamp(transcript_segments, current_end):
+            return current_end
+
+        max_duration = float(settings.qa_max_clip_duration_sec)
+        max_extension = float(settings.render_final_closure_extension_max_sec)
+        max_end = min(start + max_duration, current_end + max_extension)
+
+        extension_candidate = current_end
+        for segment in transcript_segments:
+            segment_start = float(segment.get("start", 0.0))
+            segment_end = float(segment.get("end", 0.0))
+            if segment_end <= current_end or segment_start < current_end:
+                continue
+            if segment_end > max_end:
+                break
+
+            extension_candidate = segment_end
+            if self._segment_has_strong_ending(segment):
+                return segment_end
+
+        return extension_candidate
+
+    def _has_strong_closing_near_timestamp(
+        self,
+        transcript_segments: list[dict],
+        timestamp: float,
+    ) -> bool:
+        segment = self._find_segment_covering(transcript_segments, timestamp)
+        if segment is None:
+            for item in transcript_segments:
+                if float(item.get("end", 0.0)) >= timestamp:
+                    segment = item
+                    break
+        return self._segment_has_strong_ending(segment) if segment is not None else False
+
+    def _segment_has_strong_ending(self, segment: dict | None) -> bool:
+        if not segment:
+            return False
+
+        text = str(segment.get("text") or "").strip().lower()
+        if not text:
+            return False
+
+        if re.search(r"[.!?]\s*$", text):
+            return True
+
+        if re.search(r"\b(no final|por isso|por conta disso|a verdade|ou seja|entendeu)\b", text):
+            return True
+
+        return False
 
     def _run_clip_qa(
         self,

@@ -1,6 +1,11 @@
 from typing import Dict, List
 
-from app.prompts.prompt_context import build_candidate_context, build_transcript_context
+from app.prompts.prompt_context import (
+    build_candidate_context,
+    build_candidate_neighborhood_context,
+    build_timeline_context,
+    build_transcript_context,
+)
 
 
 class ManualPromptBuilder:
@@ -34,13 +39,23 @@ class ManualPromptBuilder:
         transcript_context = build_transcript_context(
             transcript=transcript,
             candidates=candidates,
-            max_chars=int(self.max_context_chars * 0.72),
+            max_chars=int(self.max_context_chars * 0.38),
             max_candidates=self.prompt_max_candidates,
             max_segments_per_candidate=self.prompt_max_segments_per_candidate,
         )
+        timeline_context = build_timeline_context(
+            transcript=transcript,
+            max_chars=int(self.max_context_chars * 0.22),
+        )
+        neighborhood_context = build_candidate_neighborhood_context(
+            transcript=transcript,
+            candidates=candidates,
+            max_chars=int(self.max_context_chars * 0.14),
+            max_candidates=self.prompt_max_candidates,
+        )
         candidate_context = build_candidate_context(
             candidates=candidates,
-            max_chars=int(self.max_context_chars * 0.28),
+            max_chars=int(self.max_context_chars * 0.16),
         )
 
         return f"""
@@ -81,6 +96,9 @@ REGRAS NARRATIVAS OBRIGATÓRIAS
 - Se houver dúvida entre um trecho muito chamativo e um trecho mais completo, prefira o mais completo.
 - Você pode ajustar timestamps em aproximadamente ±8 segundos para capturar início natural, desenvolvimento e fechamento.
 - Os candidatos são pistas, não limites rígidos.
+- Pense que os cortes serão montados em um único vídeo final, não publicados isoladamente.
+- Preserve ponte de contexto entre cortes consecutivos da mesma história.
+- O último corte deve fechar o assunto com uma conclusão clara, payoff ou fechamento verbal forte.
 
 {self._build_speaker_guidance(has_named_speakers)}
 
@@ -103,6 +121,17 @@ OUTPUT JSON
   "job_id": "{job_id}",
   "clip_mode": "{clip_mode}",
   "video_ratio": "{video_ratio}",
+  "story_map": {{
+    "core_topic": "assunto central do vídeo",
+    "central_conflict": "qual tensão ou pergunta move a narrativa",
+    "hook_strategy": "por que o hook escolhido é o melhor para abrir o vídeo final",
+    "sequence_logic": [
+      "como o corte 1 prepara o terreno",
+      "como o corte 2 desenvolve a ideia",
+      "como o corte final fecha o assunto"
+    ],
+    "final_payoff": "qual frase, revelação ou conclusão deve encerrar o vídeo"
+  }},
   "post": {{
     "title": "título principal do vídeo final",
     "hook": "gancho principal do vídeo final; será usado na abertura teaser",
@@ -139,6 +168,14 @@ TRANSCRIPT RELEVANTE COM SPEAKERS
 
 {transcript_context}
 
+TIMELINE GERAL DO VÍDEO
+
+{timeline_context}
+
+VIZINHANÇA DOS CANDIDATOS
+
+{neighborhood_context}
+
 CANDIDATOS PRIORIZADOS
 
 {candidate_context}
@@ -146,6 +183,7 @@ CANDIDATOS PRIORIZADOS
 INSTRUÇÃO FINAL
 
 Retorne apenas o JSON final.
+Use `story_map` para mostrar que você entendeu o arco do vídeo inteiro antes de escolher os cortes.
 Os campos de social media devem existir apenas em "post", não repetidos dentro de cada corte.
 Se algum campo novo não se aplicar, retorne null, string vazia ou lista vazia.
 """

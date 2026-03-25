@@ -1,6 +1,11 @@
 from typing import Dict, List
 
-from app.prompts.prompt_context import build_candidate_context, build_transcript_context
+from app.prompts.prompt_context import (
+    build_candidate_context,
+    build_candidate_neighborhood_context,
+    build_timeline_context,
+    build_transcript_context,
+)
 
 
 class ApiPromptBuilder:
@@ -25,11 +30,20 @@ class ApiPromptBuilder:
         transcript_context = build_transcript_context(
             transcript=transcript,
             candidates=candidates,
-            max_chars=int(self.max_context_chars * 0.72),
+            max_chars=int(self.max_context_chars * 0.38),
+        )
+        timeline_context = build_timeline_context(
+            transcript=transcript,
+            max_chars=int(self.max_context_chars * 0.22),
+        )
+        neighborhood_context = build_candidate_neighborhood_context(
+            transcript=transcript,
+            candidates=candidates,
+            max_chars=int(self.max_context_chars * 0.14),
         )
         candidate_context = build_candidate_context(
             candidates=candidates,
-            max_chars=int(self.max_context_chars * 0.28),
+            max_chars=int(self.max_context_chars * 0.16),
         )
 
         return f"""
@@ -42,6 +56,7 @@ video_ratio: {video_ratio}
 TASK
 
 Select the best narrative cuts from the speaker-aware transcript.
+Treat this as one final assembled video, not a set of isolated clips.
 
 MANDATORY RULES
 
@@ -52,6 +67,8 @@ MANDATORY RULES
 - You may adjust timestamps slightly to preserve complete meaning.
 - Prefer editorially complete cuts over merely loud or sensational ones.
 - Avoid redundant cuts that repeat the same narrative beat.
+- The selected cuts will be assembled into one final video, so preserve context between consecutive cuts.
+- The final cut must end with a clear verbal closure or payoff.
 
 MODE RULES
 
@@ -60,6 +77,14 @@ MODE RULES
 TRANSCRIPT WITH SPEAKERS
 
 {transcript_context}
+
+FULL VIDEO TIMELINE
+
+{timeline_context}
+
+CANDIDATE NEIGHBORHOODS
+
+{neighborhood_context}
 
 PRIORITIZED CANDIDATES
 
@@ -71,6 +96,17 @@ Return ONLY valid JSON in this format:
   "job_id": "{job_id}",
   "clip_mode": "{clip_mode}",
   "video_ratio": "{video_ratio}",
+  "story_map": {{
+    "core_topic": "main subject of the full video",
+    "central_conflict": "main tension or question driving the story",
+    "hook_strategy": "why the chosen hook is the best opening",
+    "sequence_logic": [
+      "how cut 1 sets the stage",
+      "how cut 2 develops the idea",
+      "how the final cut closes the subject"
+    ],
+    "final_payoff": "the closing line or conclusion the final video should end on"
+  }},
   "post": {{
     "title": "main final video title",
     "hook": "main hook used in the cold open",
@@ -83,9 +119,13 @@ Return ONLY valid JSON in this format:
     {{
       "start": 10.5,
       "end": 45.3,
+      "safe_start": 10.5,
+      "safe_end": 45.3,
       "reason": "why this cut is good and respects speaker continuity and requested mode",
       "narrative_role": "hook | setup | development | payoff",
-      "merge_group": "story_1"
+      "merge_group": "story_1",
+      "speaker_focus": "SPEAKER_01 | SPEAKER_02 | null",
+      "transition_after": "hard_cut | punch_in | whoosh | fade | none"
     }}
   ]
 }}

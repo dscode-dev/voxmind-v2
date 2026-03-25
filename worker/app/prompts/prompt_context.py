@@ -97,6 +97,91 @@ def build_candidate_context(candidates: List[Dict], max_chars: int) -> str:
     return serialized[:max_chars]
 
 
+def build_timeline_context(
+    transcript: List[Dict],
+    max_chars: int,
+    block_size_sec: int = 45,
+) -> str:
+    if not transcript:
+        return ""
+
+    blocks: List[Dict] = []
+    current_segments: List[Dict] = []
+    block_start = float(transcript[0].get("start", 0.0))
+    block_end = block_start + block_size_sec
+
+    for segment in transcript:
+        segment_start = float(segment.get("start", 0.0))
+        if current_segments and segment_start >= block_end:
+            blocks.append(_build_timeline_block(current_segments))
+            current_segments = []
+            block_start = segment_start
+            block_end = block_start + block_size_sec
+
+        current_segments.append(segment)
+
+    if current_segments:
+        blocks.append(_build_timeline_block(current_segments))
+
+    serialized = json.dumps(blocks, ensure_ascii=False, indent=2)
+    return serialized[:max_chars]
+
+
+def build_candidate_neighborhood_context(
+    transcript: List[Dict],
+    candidates: List[Dict],
+    max_chars: int,
+    max_candidates: int = 4,
+    neighbor_segments: int = 2,
+) -> str:
+    if not transcript or not candidates:
+        return ""
+
+    neighborhoods: List[Dict] = []
+    prioritized_candidates = sorted(
+        candidates,
+        key=lambda item: item.get("total_score", 0.0),
+        reverse=True,
+    )[:max_candidates]
+
+    for candidate in prioritized_candidates:
+        start = float(candidate.get("start", 0.0))
+        end = float(candidate.get("end", 0.0))
+        matching_indexes = [
+            index
+            for index, segment in enumerate(transcript)
+            if float(segment.get("end", 0.0)) >= start and float(segment.get("start", 0.0)) <= end
+        ]
+        if not matching_indexes:
+            continue
+
+        first_index = max(0, matching_indexes[0] - neighbor_segments)
+        last_index = min(len(transcript), matching_indexes[-1] + neighbor_segments + 1)
+        context_segments = transcript[first_index:last_index]
+        neighborhoods.append(
+            {
+                "candidate_id": candidate.get("candidate_id"),
+                "range": {
+                    "start": start,
+                    "end": end,
+                },
+                "text": _truncate_text(candidate.get("text", ""), 220),
+                "neighbor_segments": [
+                    {
+                        "start": float(segment.get("start", 0.0)),
+                        "end": float(segment.get("end", 0.0)),
+                        "speaker": segment.get("speaker", "UNKNOWN"),
+                        "text": _truncate_text(str(segment.get("text", "")).strip(), 180),
+                    }
+                    for segment in context_segments
+                ],
+            }
+        )
+
+    serialized = json.dumps(neighborhoods, ensure_ascii=False, indent=2)
+    return serialized[:max_chars]
+
+
 def _format_transcript_segments(segments: List[Dict]) -> str:
     lines = []
 
@@ -108,6 +193,26 @@ def _format_transcript_segments(segments: List[Dict]) -> str:
         lines.append(f"[{start} - {end}] {speaker}: {text}")
 
     return "\n".join(lines)
+
+
+def _build_timeline_block(segments: List[Dict]) -> Dict:
+    start = float(segments[0].get("start", 0.0))
+    end = float(segments[-1].get("end", 0.0))
+    speakers = sorted(
+        {
+            str(segment.get("speaker", "UNKNOWN"))
+            for segment in segments
+            if str(segment.get("speaker", "")).strip()
+        }
+    )
+    combined_text = " ".join(str(segment.get("text", "")).strip() for segment in segments).strip()
+    return {
+        "start": start,
+        "end": end,
+        "window": f"{format_timestamp(start)} - {format_timestamp(end)}",
+        "speakers": speakers,
+        "summary": _truncate_text(combined_text, 320),
+    }
 
 
 def _limit_transcript_segments(
