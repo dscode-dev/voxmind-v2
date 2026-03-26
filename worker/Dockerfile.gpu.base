@@ -14,6 +14,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
     PIP_DEFAULT_TIMEOUT=300 \
     PIP_RETRIES=10 \
+    NLTK_DATA=/usr/local/share/nltk_data \
     POETRY_VIRTUALENVS_CREATE=false \
     POETRY_NO_INTERACTION=1 \
     POETRY_INSTALLER_PARALLEL=false \
@@ -59,6 +60,12 @@ RUN if [ -n "$POETRY_INSTALL_GROUPS" ]; then \
         poetry install --only main --no-root; \
     fi && \
     rm -rf /tmp/poetry-cache
+
+RUN python - <<'PY'
+import nltk
+nltk.download("punkt", download_dir="/usr/local/share/nltk_data")
+nltk.download("punkt_tab", download_dir="/usr/local/share/nltk_data")
+PY
 
 RUN if echo "$POETRY_INSTALL_GROUPS" | grep -Eq '(^|,| )diarization($|,| )'; then \
         python -m pip uninstall -y torch torchaudio torchvision torchtext || true; \
