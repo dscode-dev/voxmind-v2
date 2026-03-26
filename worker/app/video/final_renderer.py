@@ -553,9 +553,15 @@ class FinalVideoRenderer:
         )
 
         intro_main_path = self.render_dir / "prepared_01_intro_main.mp4"
+        intro_resume_sec = min(
+            source_duration,
+            relative_start_sec + max(0.8, actual_duration - 0.2),
+        )
         intro_main_command = [
             "ffmpeg",
             "-y",
+            "-ss",
+            str(intro_resume_sec),
             "-i",
             str(prepared_files[0]),
             "-c:v",
@@ -578,9 +584,16 @@ class FinalVideoRenderer:
             stderr=subprocess.DEVNULL,
         )
 
+        resumed_duration = max(0.0, source_duration - intro_resume_sec)
         prepared_files = [teaser_path, intro_main_path, *prepared_files[1:]]
-        prepared_durations = [actual_duration, *prepared_durations]
-        transition_plans = [{}, *transition_plans]
+        prepared_durations = [actual_duration, resumed_duration, *prepared_durations[1:]]
+        transition_plans = [
+            {
+                "transition_after": str(cold_open.get("transition_after") or "fade"),
+                "transition_duration_ms": int(cold_open.get("transition_duration_ms") or 180),
+            },
+            *transition_plans,
+        ]
 
         return prepared_files, prepared_durations, transition_plans, True
 

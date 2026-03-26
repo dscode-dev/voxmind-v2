@@ -150,6 +150,10 @@ Exemplo:
         await self._process_json_document(update, context, document)
 
     def _validate_shorts(self, data: dict):
+        final_videos = data.get("final_videos")
+        if isinstance(final_videos, list) and final_videos:
+            self._validate_final_videos(final_videos)
+            return
 
         shorts = data.get("shorts_content")
 
@@ -172,6 +176,36 @@ Exemplo:
             if duration < settings.min_cut_duration_sec:
                 raise RuntimeError(
                     f"Cut {index} duration too short ({duration:.2f}s). Minimum is {settings.min_cut_duration_sec}s"
+                )
+
+    def _validate_final_videos(self, final_videos: list[dict]) -> None:
+        for video_index, video in enumerate(final_videos, start=1):
+            cuts = video.get("shorts_content") or []
+            if not isinstance(cuts, list) or not cuts:
+                raise RuntimeError(f"Video {video_index} must contain at least one cut")
+
+            total_duration = 0.0
+            for cut_index, cut in enumerate(cuts, start=1):
+                if "start" not in cut or "end" not in cut:
+                    raise RuntimeError(f"Video {video_index} cut {cut_index} missing start/end")
+
+                start = float(cut["start"])
+                end = float(cut["end"])
+                if start >= end:
+                    raise RuntimeError(f"Video {video_index} cut {cut_index} start >= end")
+
+                duration = end - start
+                total_duration += duration
+                if duration < settings.min_internal_cut_duration_sec:
+                    raise RuntimeError(
+                        f"Video {video_index} cut {cut_index} duration too short ({duration:.2f}s). "
+                        f"Minimum internal cut is {settings.min_internal_cut_duration_sec}s"
+                    )
+
+            if total_duration < settings.min_cut_duration_sec:
+                raise RuntimeError(
+                    f"Video {video_index} total duration too short ({total_duration:.2f}s). "
+                    f"Minimum final video is {settings.min_cut_duration_sec}s"
                 )
 
     def _normalize_finalize_payload(self, data: dict) -> dict:

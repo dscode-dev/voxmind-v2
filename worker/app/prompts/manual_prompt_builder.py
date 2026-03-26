@@ -102,6 +102,7 @@ REGRAS NARRATIVAS OBRIGATÓRIAS
 - Pense que agora você está escolhendo até 3 vídeos finais independentes.
 - Cada vídeo final precisa funcionar sozinho, com hook, desenvolvimento e fechamento próprios.
 - Não distribua um mesmo raciocínio em dois vídeos diferentes se isso quebrar o contexto.
+- Prefira 2 cortes conectados dentro do mesmo vídeo final quando isso produzir hook melhor, contexto melhor e duração mais competitiva.
 - Preserve ponte de contexto entre cortes consecutivos da mesma história.
 - Prefira uma sequência cronológica coesa dentro do mesmo arco narrativo.
 - Evite saltos grandes de tempo entre cortes, a menos que isso seja indispensável para o payoff final.
@@ -109,6 +110,8 @@ REGRAS NARRATIVAS OBRIGATÓRIAS
 - O `post.hook` precisa estar totalmente contido no primeiro corte selecionado.
 - O primeiro corte precisa começar antes ou exatamente no ponto em que a frase do hook começa.
 - Se um hook forte estiver fora do primeiro corte, ajuste o primeiro corte para incluí-lo ou escolha outro hook.
+- O hook deve ser uma frase falada forte, completa e reconhecível nos primeiros segundos do vídeo.
+- Não use como hook uma frase fraca, genérica ou dependente demais do contexto anterior.
 - Cada corte depois do primeiro precisa continuar naturalmente o corte anterior; não mude de assunto sem ponte narrativa clara.
 - Se houver dúvida entre usar 3 cortes desconectados ou 2 cortes coesos, prefira 2 cortes coesos.
 - Não escolha um corte seguinte apenas porque ele é forte isoladamente; ele precisa funcionar como continuação do vídeo final.
@@ -291,11 +294,11 @@ FORMATO: PORTRAIT
             return f"""
 REGRAS DE DURAÇÃO
 
-- Cada corte deve ter no mínimo {min_duration} segundos.
-- Para este modo, prefira vídeos finais entre 45 e 70 segundos.
-- Não retorne cortes com menos de {min_duration} segundos.
+- Cada vídeo final deve ter no mínimo {min_duration} segundos no total.
+- Para este modo, prefira vídeos finais entre 55 e 75 segundos.
+- Se usar 2 cortes conectados no mesmo vídeo final, cada corte interno deve ter pelo menos 12 segundos.
 - Cada vídeo final pode usar 1 ou 2 cortes conectados se isso melhorar hook, contexto e fechamento.
-- Só fique abaixo de 45 segundos se o assunto realmente fechar antes disso.
+- Só fique abaixo de 55 segundos se o assunto realmente fechar antes disso e não houver continuação forte no material.
 - Nunca exceda {max_duration} segundos.
 """
 

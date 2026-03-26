@@ -250,6 +250,10 @@ class Settings(BaseSettings):
         default=25,
         alias="RENDER_MIN_CLIP_DURATION_SEC"
     )
+    render_min_internal_cut_duration_sec: int = Field(
+        default=12,
+        alias="RENDER_MIN_INTERNAL_CUT_DURATION_SEC"
+    )
     render_boundary_snap_tolerance_sec: float = Field(
         default=8.0,
         alias="RENDER_BOUNDARY_SNAP_TOLERANCE_SEC"

@@ -84,6 +84,10 @@ class Settings(BaseSettings):
         default=25,
         alias="MIN_CUT_DURATION_SEC",
     )
+    min_internal_cut_duration_sec: int = Field(
+        default=12,
+        alias="MIN_INTERNAL_CUT_DURATION_SEC",
+    )
     short_serie_max_gap_sec: int = Field(
         default=22,
         alias="SHORT_SERIE_MAX_GAP_SEC",

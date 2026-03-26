@@ -74,9 +74,12 @@ MANDATORY RULES
 - Each final video must have its own hook, title, description and closure.
 - Do not split one incomplete thought across different final videos.
 - Prefer fewer strong final videos over 3 weak or incomplete ones.
+- Prefer 2 connected cuts inside the same final video when that gives a stronger hook, better context and more competitive duration.
 - `post.hook` must be fully contained inside the first selected cut.
 - The first cut must start before or exactly where the hook phrase begins.
 - If a strong hook sits outside the first cut, either move the first cut to include it or choose a different hook.
+- The hook must be a complete spoken line that feels strong and recognizable in the first seconds of the final video.
+- Do not use a hook phrase that becomes weak or confusing when isolated.
 - Every cut after the first must feel like a natural continuation of the previous one, not a new disconnected subject.
 - If the choice is between 3 disconnected cuts or 2 coherent cuts, prefer 2 coherent cuts.
 - Do not pick a later cut only because it is strong in isolation; it must strengthen the assembled video.
@@ -153,7 +156,8 @@ Return ONLY valid JSON in this format:
 Use transcript, timeline, heuristic candidates and ClipsAI candidates as strong context, but keep editorial autonomy if a better sequence is clearly supported by the material.
 Return `final_videos` with up to 3 separate final videos.
 Each `final_videos[i]` should usually contain 1 or 2 connected cuts in `shorts_content`.
-Prefer final videos around 45 to 70 seconds when the material supports it.
+Prefer final videos around 55 to 75 seconds when the material supports it.
+Only go below 55 seconds when the subject clearly closes earlier and there is no strong continuation.
 `final_videos[i].post.hook_source_cut_index` must point to the cut index inside `final_videos[i].shorts_content` that fully contains the main hook.
 `final_videos[i].shorts_content[0]` must fully contain the main hook for that final video.
 If there is only enough strong material for 1 or 2 good final videos, return only 1 or 2.

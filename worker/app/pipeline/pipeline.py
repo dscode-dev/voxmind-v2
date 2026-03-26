@@ -712,6 +712,11 @@ para continuar o processamento.
         self._mark_step("render_cuts", "started")
 
         filtered_cuts = []
+        min_cut_duration = (
+            settings.render_min_internal_cut_duration_sec
+            if self.manual_response.get("final_videos")
+            else settings.render_min_clip_duration_sec
+        )
 
         for cut in cuts:
 
@@ -723,7 +728,7 @@ para continuar o processamento.
 
             duration = end - start
 
-            if duration < settings.render_min_clip_duration_sec:
+            if duration < min_cut_duration:
                 continue
 
             filtered_cuts.append(cut)
@@ -1851,7 +1856,7 @@ para continuar o processamento.
                 end = float(cut.get("end", 0.0))
                 if end <= start:
                     continue
-                if (end - start) < settings.render_min_clip_duration_sec:
+                if (end - start) < settings.render_min_internal_cut_duration_sec:
                     continue
                 filtered.append(cut)
 
