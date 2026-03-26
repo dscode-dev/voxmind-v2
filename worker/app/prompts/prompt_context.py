@@ -85,7 +85,7 @@ def build_candidate_context(candidates: List[Dict], max_chars: int) -> str:
                 "speakers": candidate.get("speakers", []),
                 "editorial_signals": candidate.get("editorial_signals", {}),
                 "reason_signals": candidate.get("score_breakdown", {}),
-                "text": _truncate_text(candidate.get("text", ""), 420),
+                "text": _truncate_text(candidate.get("text", ""), 220),
             }
         )
 
@@ -156,19 +156,20 @@ def build_candidate_neighborhood_context(
                     "end": end,
                 },
                 "text": _truncate_text(candidate.get("text", ""), 220),
+                "source": candidate.get("source", "heuristic"),
                 "neighbor_segments": [
                     {
                         "start": float(segment.get("start", 0.0)),
                         "end": float(segment.get("end", 0.0)),
                         "speaker": segment.get("speaker", "UNKNOWN"),
-                        "text": _truncate_text(str(segment.get("text", "")).strip(), 180),
+                        "text": _truncate_text(str(segment.get("text", "")).strip(), 100),
                     }
                     for segment in context_segments
                 ],
             }
         )
 
-    return _serialize_json_items_with_limit(neighborhoods, max_chars)
+    return _serialize_json_items_with_limit(neighborhoods, max_chars, compact_single_item=True)
 
 
 def _select_dominant_candidate_cluster(
@@ -333,7 +334,11 @@ def _truncate_text(text: str, limit: int) -> str:
     return truncated + "..."
 
 
-def _serialize_json_items_with_limit(items: List[Dict], max_chars: int) -> str:
+def _serialize_json_items_with_limit(
+    items: List[Dict],
+    max_chars: int,
+    compact_single_item: bool = False,
+) -> str:
     serialized = json.dumps(items, ensure_ascii=False, indent=2)
     if len(serialized) <= max_chars:
         return serialized
@@ -345,7 +350,52 @@ def _serialize_json_items_with_limit(items: List[Dict], max_chars: int) -> str:
             break
         limited.append(item)
 
+    if limited:
+        return json.dumps(limited, ensure_ascii=False, indent=2)
+
+    if compact_single_item and items:
+        compact_item = _compact_json_item(items[0])
+        compact_serialized = json.dumps([compact_item], ensure_ascii=False, indent=2)
+        if len(compact_serialized) <= max_chars:
+            return compact_serialized
+
+        compact_item["neighbor_segments"] = compact_item.get("neighbor_segments", [])[:2]
+        compact_item["text"] = _truncate_text(str(compact_item.get("text", "")), 80)
+        compact_serialized = json.dumps([compact_item], ensure_ascii=False, indent=2)
+        if len(compact_serialized) <= max_chars:
+            return compact_serialized
+
+        compact_item["neighbor_segments"] = [
+            {
+                "start": segment.get("start"),
+                "end": segment.get("end"),
+                "speaker": segment.get("speaker"),
+            }
+            for segment in compact_item.get("neighbor_segments", [])[:1]
+        ]
+        compact_item["text"] = _truncate_text(str(compact_item.get("text", "")), 48)
+        compact_serialized = json.dumps([compact_item], ensure_ascii=False, indent=2)
+        if len(compact_serialized) <= max_chars:
+            return compact_serialized
+
     return json.dumps(limited, ensure_ascii=False, indent=2)
+
+
+def _compact_json_item(item: Dict) -> Dict:
+    compact = dict(item)
+    if "text" in compact:
+        compact["text"] = _truncate_text(str(compact.get("text", "")), 120)
+    if "neighbor_segments" in compact:
+        compact["neighbor_segments"] = [
+            {
+                "start": segment.get("start"),
+                "end": segment.get("end"),
+                "speaker": segment.get("speaker"),
+                "text": _truncate_text(str(segment.get("text", "")), 60),
+            }
+            for segment in compact.get("neighbor_segments", [])[:4]
+        ]
+    return compact
 
 
 def _truncate_lines(text: str, max_chars: int) -> str:

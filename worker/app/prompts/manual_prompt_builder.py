@@ -39,23 +39,23 @@ class ManualPromptBuilder:
         transcript_context = build_transcript_context(
             transcript=transcript,
             candidates=candidates,
-            max_chars=int(self.max_context_chars * 0.5),
+            max_chars=int(self.max_context_chars * 0.42),
             max_candidates=self.prompt_max_candidates,
             max_segments_per_candidate=self.prompt_max_segments_per_candidate,
         )
         timeline_context = build_timeline_context(
             transcript=transcript,
-            max_chars=int(self.max_context_chars * 0.2),
+            max_chars=int(self.max_context_chars * 0.18),
         )
         neighborhood_context = build_candidate_neighborhood_context(
             transcript=transcript,
             candidates=candidates,
-            max_chars=int(self.max_context_chars * 0.16),
-            max_candidates=self.prompt_max_candidates,
+            max_chars=int(self.max_context_chars * 0.22),
+            max_candidates=max(self.prompt_max_candidates, 6),
         )
         candidate_context = build_candidate_context(
             candidates=candidates,
-            max_chars=int(self.max_context_chars * 0.14),
+            max_chars=int(self.max_context_chars * 0.18),
         )
 
         return f"""
