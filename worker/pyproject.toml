@@ -6,7 +6,7 @@ authors = ["VoxMind"]
 package-mode = false
 
 [tool.poetry.dependencies]
-python = "^3.11"
+python = ">=3.11,<3.13"
 
 pydantic = "^2.8.0"
 pydantic-settings = "^2.4.0"
