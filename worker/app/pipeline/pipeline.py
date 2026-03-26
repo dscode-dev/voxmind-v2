@@ -1905,6 +1905,10 @@ para continuar o processamento.
             if not filtered:
                 continue
 
+            filtered = self._strengthen_final_video_cuts(filtered, transcript_segments, post)
+            post = self._strengthen_post_hook(post, filtered, transcript_segments)
+            filtered = self._assign_default_transitions(filtered)
+
             specs.append(
                 {
                     "video_index": int(video.get("video_index") or index),
@@ -1914,6 +1918,176 @@ para continuar o processamento.
             )
 
         return specs
+
+    def _strengthen_final_video_cuts(
+        self,
+        cuts: list[dict],
+        transcript_segments: list[dict],
+        post: dict,
+    ) -> list[dict]:
+        if not cuts:
+            return cuts
+
+        adjusted = [dict(cut) for cut in cuts]
+        total_duration = sum(
+            max(
+                0.0,
+                float(cut.get("safe_end", cut.get("end", 0.0))) - float(cut.get("safe_start", cut.get("start", 0.0))),
+            )
+            for cut in adjusted
+        )
+
+        target_min_total = 55.0
+        max_total = min(75.0, float(settings.qa_max_clip_duration_sec))
+
+        last = adjusted[-1]
+        last_start = float(last.get("safe_start", last.get("start", 0.0)))
+        last_end = float(last.get("safe_end", last.get("end", 0.0)))
+        strengthened_end = self._extend_last_cut_for_closure(
+            transcript_segments,
+            start=last_start,
+            current_end=last_end,
+        )
+        if strengthened_end > last_end:
+            last["end"] = round(strengthened_end, 2)
+            last["safe_end"] = round(strengthened_end, 2)
+            total_duration += strengthened_end - last_end
+
+        if total_duration >= target_min_total or len(adjusted) >= 2:
+            return adjusted
+
+        continuation = self._build_followup_cut(
+            last_cut=adjusted[-1],
+            transcript_segments=transcript_segments,
+            remaining_budget=max_total - total_duration,
+        )
+        if continuation is not None:
+            adjusted.append(continuation)
+
+        return adjusted
+
+    def _build_followup_cut(
+        self,
+        *,
+        last_cut: dict,
+        transcript_segments: list[dict],
+        remaining_budget: float,
+    ) -> dict | None:
+        if remaining_budget < float(settings.render_min_internal_cut_duration_sec):
+            return None
+
+        last_end = float(last_cut.get("safe_end", last_cut.get("end", 0.0)))
+        next_start = self._find_next_segment_start(transcript_segments, last_end + 0.01)
+        if next_start is None:
+            return None
+
+        start = next_start
+        max_end = start + remaining_budget
+        end = None
+
+        for segment in transcript_segments:
+            segment_start = float(segment.get("start", 0.0))
+            segment_end = float(segment.get("end", 0.0))
+            if segment_start < start:
+                continue
+            if segment_end > max_end:
+                break
+            end = segment_end
+            if (
+                segment_end - start >= float(settings.render_min_internal_cut_duration_sec)
+                and self._segment_has_strong_ending(segment)
+            ):
+                break
+
+        if end is None:
+            return None
+
+        duration = end - start
+        if duration < float(settings.render_min_internal_cut_duration_sec):
+            return None
+
+        return {
+            **last_cut,
+            "start": round(start, 2),
+            "end": round(end, 2),
+            "safe_start": round(start, 2),
+            "safe_end": round(end, 2),
+            "reason": str(last_cut.get("reason") or "").strip(),
+            "continuity_note": "continuação automática para fechar melhor o raciocínio e aumentar a retenção",
+            "transition_after": "fade",
+        }
+
+    def _strengthen_post_hook(
+        self,
+        post: dict,
+        cuts: list[dict],
+        transcript_segments: list[dict],
+    ) -> dict:
+        if not cuts:
+            return post
+
+        first_cut = cuts[0]
+        current_hook = str(post.get("hook") or "").strip()
+        if current_hook and self._hook_feels_strong(current_hook):
+            return post
+
+        candidate = self._derive_hook_from_cut(first_cut, transcript_segments)
+        if candidate:
+            updated = dict(post)
+            updated["hook"] = candidate
+            updated["hook_source_cut_index"] = 0
+            return updated
+
+        return post
+
+    def _derive_hook_from_cut(self, cut: dict, transcript_segments: list[dict]) -> str | None:
+        start = float(cut.get("safe_start", cut.get("start", 0.0)))
+        end = float(cut.get("safe_end", cut.get("end", 0.0)))
+        segments = [
+            segment
+            for segment in transcript_segments
+            if float(segment.get("end", 0.0)) > start and float(segment.get("start", 0.0)) < min(end, start + 16.0)
+        ]
+        best_text = None
+        best_score = -1.0
+
+        for segment in segments:
+            text = str(segment.get("text") or "").strip()
+            if not text:
+                continue
+            score = 0.0
+            if "?" in text:
+                score += 2.0
+            if any(token in text.lower() for token in ("ninguém", "quem", "por quê", "deep state", "blackrock")):
+                score += 1.5
+            if self._segment_has_strong_ending(segment):
+                score += 1.0
+            if len(text.split()) >= 6:
+                score += 0.8
+            if score > best_score:
+                best_score = score
+                best_text = text
+
+        return best_text
+
+    def _hook_feels_strong(self, hook: str) -> bool:
+        lowered = hook.lower()
+        if len(hook.strip()) < 20:
+            return False
+        if "?" in hook:
+            return True
+        return any(token in lowered for token in ("ninguém", "deep state", "blackrock", "verdade", "quem"))
+
+    def _assign_default_transitions(self, cuts: list[dict]) -> list[dict]:
+        if len(cuts) < 2:
+            return cuts
+
+        adjusted = [dict(cut) for cut in cuts]
+        for index, cut in enumerate(adjusted[:-1]):
+            transition = str(cut.get("transition_after") or "").strip().lower()
+            if transition in {"", "none", "hard_cut"}:
+                adjusted[index]["transition_after"] = "fade"
+        return adjusted
 
     def _run_auto_review(
         self,

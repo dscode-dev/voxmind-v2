@@ -107,6 +107,8 @@ class RenderPlanBuilder:
         transition = str(transition_after or DEFAULT_TRANSITION).strip().lower()
         allowed = {"none", "hard_cut", "punch_in", "whoosh", "fade"}
         if transition in allowed:
+            if transition in {"none", "hard_cut"}:
+                return "fade"
             return transition
         return DEFAULT_TRANSITION
 
