@@ -174,6 +174,53 @@ Exemplo:
                     f"Cut {index} duration too short ({duration:.2f}s). Minimum is {settings.min_cut_duration_sec}s"
                 )
 
+    def _normalize_finalize_payload(self, data: dict) -> dict:
+        normalized = dict(data or {})
+        final_videos = normalized.get("final_videos")
+        if not isinstance(final_videos, list) or not final_videos:
+            return normalized
+
+        flattened_cuts = []
+        normalized_videos = []
+
+        for index, video in enumerate(final_videos, start=1):
+            if not isinstance(video, dict):
+                continue
+
+            cuts = video.get("shorts_content") or []
+            if not isinstance(cuts, list) or not cuts:
+                continue
+
+            post = video.get("post") or {}
+            video_index = int(video.get("video_index") or index)
+            normalized_videos.append(
+                {
+                    **video,
+                    "video_index": video_index,
+                    "post": post,
+                    "shorts_content": cuts,
+                }
+            )
+
+            for cut in cuts:
+                if not isinstance(cut, dict):
+                    continue
+                flattened_cuts.append(
+                    {
+                        **cut,
+                        "_post": post,
+                        "_video_index": video_index,
+                    }
+                )
+
+        if flattened_cuts:
+            normalized["shorts_content"] = flattened_cuts
+        if normalized_videos:
+            normalized["final_videos"] = normalized_videos
+            normalized["post"] = normalized_videos[0].get("post", {})
+
+        return normalized
+
     def _sanitize_json_text(self, text: str) -> str:
         replacements = {
             "“": '"',
@@ -293,6 +340,7 @@ Esse arquivo é informativo e não dispara finalização.
         )
 
     async def _handle_finalize_payload(self, update: Update, data: dict):
+        data = self._normalize_finalize_payload(data)
         job_id = data.get("job_id")
 
         if not job_id:
@@ -301,7 +349,7 @@ Esse arquivo é informativo e não dispara finalização.
 
         if "shorts_content" not in data:
             await update.message.reply_text(
-                "JSON inválido. Campo obrigatório: shorts_content"
+                "JSON inválido. Campo obrigatório: shorts_content ou final_videos"
             )
             return
 
