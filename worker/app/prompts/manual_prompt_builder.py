@@ -72,6 +72,8 @@ REGRA CRÍTICA
 Retorne APENAS JSON válido.
 Não use markdown.
 Não escreva explicações fora do JSON.
+Não use aspas duplas dentro dos valores de string, a menos que estejam escapadas corretamente.
+Se quiser destacar um termo dentro de uma string, prefira remover as aspas em vez de escrever JSON inválido.
 
 CONFIGURAÇÃO
 

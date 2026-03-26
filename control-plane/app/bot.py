@@ -276,7 +276,49 @@ Exemplo:
 
         # Tolerate common manual-LLM artifacts like trailing commas.
         sanitized = re.sub(r",(\s*[}\]])", r"\1", sanitized)
+        sanitized = self._escape_inner_string_quotes(sanitized)
         return sanitized
+
+    def _escape_inner_string_quotes(self, text: str) -> str:
+        result: list[str] = []
+        in_string = False
+        escaped = False
+
+        for index, char in enumerate(text):
+            if escaped:
+                result.append(char)
+                escaped = False
+                continue
+
+            if char == "\\":
+                result.append(char)
+                escaped = True
+                continue
+
+            if char == '"':
+                if not in_string:
+                    in_string = True
+                    result.append(char)
+                    continue
+
+                next_significant = self._next_significant_char(text, index + 1)
+                if next_significant in {",", "}", "]", ":"} or next_significant is None:
+                    in_string = False
+                    result.append(char)
+                    continue
+
+                result.append('\\"')
+                continue
+
+            result.append(char)
+
+        return "".join(result)
+
+    def _next_significant_char(self, text: str, start: int) -> str | None:
+        for char in text[start:]:
+            if not char.isspace():
+                return char
+        return None
 
     def _parse_json_payload(self, text: str) -> dict:
         sanitized = self._sanitize_json_text(text)

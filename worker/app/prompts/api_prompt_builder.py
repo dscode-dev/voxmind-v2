@@ -58,6 +58,9 @@ TASK
 
 Select the best narrative cuts from the speaker-aware transcript.
 Treat this as a task to produce up to 3 separate final videos, each one independently postable.
+Return ONLY valid JSON.
+Do not place unescaped double quotes inside string values.
+If you want to emphasize a term inside a string, prefer plain text instead of nested quotes.
 
 MANDATORY RULES
 
