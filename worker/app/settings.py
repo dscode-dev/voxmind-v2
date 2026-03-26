@@ -108,6 +108,10 @@ class Settings(BaseSettings):
         default="int8",
         alias="ASR_COMPUTE_TYPE"
     )
+    asr_fallback_to_cpu_on_oom: bool = Field(
+        default=True,
+        alias="ASR_FALLBACK_TO_CPU_ON_OOM"
+    )
     asr_device: str = Field(
         default="cpu",
         alias="ASR_DEVICE"
@@ -158,6 +162,10 @@ class Settings(BaseSettings):
         default="cpu",
         alias="DIARIZATION_DEVICE"
     )
+    diarization_fallback_to_cpu_on_oom: bool = Field(
+        default=True,
+        alias="DIARIZATION_FALLBACK_TO_CPU_ON_OOM"
+    )
 
     diarization_hf_token: str | None = Field(
         default=None,
@@ -176,6 +184,10 @@ class Settings(BaseSettings):
     clipsai_device: str = Field(
         default="cuda",
         alias="CLIPSAI_DEVICE"
+    )
+    clipsai_fallback_to_cpu_on_oom: bool = Field(
+        default=True,
+        alias="CLIPSAI_FALLBACK_TO_CPU_ON_OOM"
     )
     clipsai_max_candidates: int = Field(
         default=6,

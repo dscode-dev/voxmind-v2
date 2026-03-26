@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import re
+import gc
 from datetime import datetime, timezone
 from importlib import import_module
 from typing import Any, Dict, List
@@ -24,6 +25,7 @@ class ClipsAICandidateProvider:
         min_duration_sec: float,
         max_duration_sec: float,
         window_size_sec: int = 180,
+        fallback_to_cpu_on_oom: bool = True,
     ):
         self.enabled = enabled
         self.device = device
@@ -31,6 +33,7 @@ class ClipsAICandidateProvider:
         self.min_duration_sec = min_duration_sec
         self.max_duration_sec = max_duration_sec
         self.window_size_sec = window_size_sec
+        self.fallback_to_cpu_on_oom = fallback_to_cpu_on_oom
 
     def build(self, transcript_segments: List[Dict]) -> tuple[List[Dict], Dict]:
         diagnostics: Dict[str, Any] = {
@@ -49,23 +52,43 @@ class ClipsAICandidateProvider:
             return [], diagnostics
 
         try:
-            classes = self._resolve_clipsai_classes()
-            transcription = self._build_transcription(classes, transcript_segments)
-            clipfinder = self._instantiate_clipfinder(classes["ClipFinder"])
-            clips = clipfinder.find_clips(transcription=transcription)
-            candidates = self._normalize_clips(clips, transcript_segments)
+            candidates, resolved_device = self._build_with_device(transcript_segments, self.device)
             diagnostics.update(
                 {
                     "available": True,
-                    "resolved_device": self._resolve_device_label(clipfinder),
+                    "resolved_device": resolved_device,
                     "candidate_count": len(candidates),
                     "reason": "completed",
                 }
             )
             return candidates, diagnostics
         except Exception as exc:
+            if self._should_fallback_to_cpu(exc):
+                try:
+                    self._clear_cuda_memory()
+                    candidates, resolved_device = self._build_with_device(transcript_segments, "cpu")
+                    diagnostics.update(
+                        {
+                            "available": True,
+                            "resolved_device": resolved_device,
+                            "candidate_count": len(candidates),
+                            "reason": "completed_cpu_fallback",
+                        }
+                    )
+                    return candidates, diagnostics
+                except Exception as cpu_exc:
+                    diagnostics["reason"] = f"{cpu_exc.__class__.__name__}:{cpu_exc}"
+                    return [], diagnostics
             diagnostics["reason"] = f"{exc.__class__.__name__}:{exc}"
             return [], diagnostics
+
+    def _build_with_device(self, transcript_segments: List[Dict], device: str) -> tuple[List[Dict], str]:
+        classes = self._resolve_clipsai_classes()
+        transcription = self._build_transcription(classes, transcript_segments)
+        clipfinder = self._instantiate_clipfinder(classes["ClipFinder"], device)
+        clips = clipfinder.find_clips(transcription=transcription)
+        candidates = self._normalize_clips(clips, transcript_segments)
+        return candidates, self._resolve_device_label(clipfinder, device)
 
     def _resolve_clipsai_classes(self) -> Dict[str, Any]:
         root = import_module("clipsai")
@@ -90,13 +113,13 @@ class ClipsAICandidateProvider:
 
         raise ImportError(f"clipsai symbol not found: {name}")
 
-    def _instantiate_clipfinder(self, clipfinder_cls: Any) -> Any:
+    def _instantiate_clipfinder(self, clipfinder_cls: Any, device: str) -> Any:
         signature = inspect.signature(clipfinder_cls)
         kwargs: Dict[str, Any] = {}
         for parameter_name in signature.parameters.keys():
             lowered = parameter_name.lower()
             if lowered in {"device", "compute_device", "torch_device"}:
-                kwargs[parameter_name] = self.device
+                kwargs[parameter_name] = device
         return clipfinder_cls(**kwargs)
 
     def _build_transcription(self, classes: Dict[str, Any], transcript_segments: List[Dict]) -> Any:
@@ -281,9 +304,29 @@ class ClipsAICandidateProvider:
             return clip.get(field_name, default)
         return getattr(clip, field_name, default)
 
-    def _resolve_device_label(self, clipfinder: Any) -> str:
+    def _resolve_device_label(self, clipfinder: Any, fallback: str | None = None) -> str:
         for field_name in ("device", "compute_device", "torch_device"):
             value = getattr(clipfinder, field_name, None)
             if value:
                 return str(value)
-        return self.device
+        return fallback or self.device
+
+    def _should_fallback_to_cpu(self, exc: Exception) -> bool:
+        if not self.fallback_to_cpu_on_oom:
+            return False
+        if str(self.device).strip().lower() != "cuda":
+            return False
+        message = str(exc).lower()
+        return "cuda" in message and "out of memory" in message
+
+    def _clear_cuda_memory(self) -> None:
+        gc.collect()
+        try:
+            torch_module = import_module("torch")
+            if bool(getattr(torch_module.cuda, "is_available", lambda: False)()):
+                torch_module.cuda.empty_cache()
+        except Exception:
+            pass
+
+    def release_resources(self) -> None:
+        self._clear_cuda_memory()

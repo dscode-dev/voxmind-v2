@@ -2,6 +2,7 @@ import json
 import math
 import re
 import subprocess
+import gc
 from pathlib import Path
 from typing import List, Dict, Tuple
 
@@ -22,6 +23,7 @@ class Transcriber:
         segment_duration_sec: int = 600,
         parallel_workers: int = 2,
         max_merged_segment_duration_sec: int = 18,
+        fallback_to_cpu_on_oom: bool = True,
     ):
         self.model_size = model_size
         self.device = device
@@ -34,10 +36,22 @@ class Transcriber:
         self.vad_filter = vad_filter
         self.segment_duration_sec = segment_duration_sec
         self.max_merged_segment_duration_sec = max_merged_segment_duration_sec
+        self.fallback_to_cpu_on_oom = fallback_to_cpu_on_oom
 
     def transcribe(self, video_path: Path) -> List[Dict]:
-        self._ensure_model()
+        try:
+            self._ensure_model()
+            return self._transcribe_with_current_model(video_path)
+        except Exception as exc:
+            if not self._should_fallback_to_cpu(exc):
+                raise
 
+            self._fallback_to_cpu()
+            self._ensure_model()
+            return self._transcribe_with_current_model(video_path)
+
+    def _transcribe_with_current_model(self, video_path: Path) -> List[Dict]:
+        
         audio_dir = video_path.parent / "audio_chunks"
         transcript_dir = video_path.parent / "transcripts"
 
@@ -121,6 +135,35 @@ class Transcriber:
             cpu_threads=self.cpu_threads,
             num_workers=self.parallel_workers,
         )
+
+    def _should_fallback_to_cpu(self, exc: Exception) -> bool:
+        if not self.fallback_to_cpu_on_oom:
+            return False
+        if str(self.device).strip().lower() != "cuda":
+            return False
+        message = str(exc).lower()
+        return "cuda" in message and "out of memory" in message
+
+    def _fallback_to_cpu(self) -> None:
+        self.model = None
+        self.device = "cpu"
+        self.compute_type = "int8"
+        self.parallel_workers = max(1, min(self.parallel_workers, 2))
+        self._clear_cuda_memory()
+
+    def _clear_cuda_memory(self) -> None:
+        gc.collect()
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+
+    def release_resources(self) -> None:
+        self.model = None
+        self._clear_cuda_memory()
 
     def _probe_duration(self, video_path: Path) -> float:
 

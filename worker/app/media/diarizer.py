@@ -1,6 +1,7 @@
 from importlib import import_module
 from pathlib import Path
 from typing import Dict, List
+import gc
 
 
 class SpeakerDiarizer:
@@ -11,11 +12,13 @@ class SpeakerDiarizer:
         model_name: str,
         device: str = "cpu",
         hf_token: str | None = None,
+        fallback_to_cpu_on_oom: bool = True,
     ):
         self.enabled = enabled
         self.model_name = model_name
         self.device = device
         self.hf_token = hf_token
+        self.fallback_to_cpu_on_oom = fallback_to_cpu_on_oom
         self._pipeline = None
         self._availability_reason = "disabled"
         self._last_run_reason = "not_started"
@@ -63,6 +66,9 @@ class SpeakerDiarizer:
         try:
             diarization = self._pipeline(str(audio_path))
         except Exception as exc:  # pragma: no cover
+            if self._should_fallback_to_cpu(exc):
+                self._fallback_to_cpu()
+                return self.diarize(audio_path)
             self._last_run_reason = self._format_exception_reason("runtime_error", exc)
             return []
 
@@ -97,6 +103,10 @@ class SpeakerDiarizer:
             self._availability_reason = "available"
             self._last_run_reason = "ready"
         except Exception as exc:  # pragma: no cover
+            if self._should_fallback_to_cpu(exc):
+                self._fallback_to_cpu()
+                self._ensure_pipeline_loaded()
+                return
             self._pipeline = None
             self._availability_reason = self._format_exception_reason("unavailable", exc)
             self._last_run_reason = self._availability_reason
@@ -131,6 +141,35 @@ class SpeakerDiarizer:
         if hasattr(self._pipeline, "to"):
             self._pipeline.to(target_device)
         self._resolved_device = resolved
+
+    def _should_fallback_to_cpu(self, exc: Exception) -> bool:
+        if not self.fallback_to_cpu_on_oom:
+            return False
+        if str(self.device).strip().lower() != "cuda":
+            return False
+        message = str(exc).lower()
+        return "cuda" in message and "out of memory" in message
+
+    def _fallback_to_cpu(self) -> None:
+        self._pipeline = None
+        self._load_attempted = False
+        self.device = "cpu"
+        self._resolved_device = "cpu"
+        self._clear_cuda_memory()
+
+    def _clear_cuda_memory(self) -> None:
+        gc.collect()
+        try:
+            torch_module = import_module("torch")
+            if bool(getattr(torch_module.cuda, "is_available", lambda: False)()):
+                torch_module.cuda.empty_cache()
+        except Exception:
+            pass
+
+    def release_resources(self) -> None:
+        self._pipeline = None
+        self._load_attempted = False
+        self._clear_cuda_memory()
 
     def _format_exception_reason(self, prefix: str, exc: Exception) -> str:
         message = str(exc).strip().replace("\n", " ")

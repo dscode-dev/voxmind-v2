@@ -76,12 +76,14 @@ class Pipeline:
             segment_duration_sec=settings.asr_segment_duration_sec,
             parallel_workers=settings.asr_parallel_workers,
             max_merged_segment_duration_sec=settings.asr_max_merged_segment_duration_sec,
+            fallback_to_cpu_on_oom=settings.asr_fallback_to_cpu_on_oom,
         )
         self.diarizer = SpeakerDiarizer(
             enabled=settings.diarization_enabled,
             model_name=settings.diarization_model_name,
             device=settings.diarization_device,
             hf_token=settings.diarization_hf_token,
+            fallback_to_cpu_on_oom=settings.diarization_fallback_to_cpu_on_oom,
         )
         self.transcript_merger = TranscriptSpeakerMerger(
             min_overlap_sec=settings.diarization_min_overlap_sec,
@@ -95,6 +97,7 @@ class Pipeline:
             max_candidates=settings.clipsai_max_candidates,
             min_duration_sec=settings.clipsai_min_candidate_duration_sec,
             max_duration_sec=settings.clipsai_max_candidate_duration_sec,
+            fallback_to_cpu_on_oom=settings.clipsai_fallback_to_cpu_on_oom,
         )
         self.scorer = self._build_scorer()
         self.delivery_package_builder = DeliveryPackageBuilder()
@@ -270,6 +273,7 @@ JOB_ID: {self.job_id}
     def run(self):
 
         try:
+            self._release_accelerator_memory()
             self._mark_step("pipeline", "started")
 
             if settings.pipeline_stage == "prepare":
@@ -313,6 +317,8 @@ ERROR:
                 "runtime_status_path": str(self.runtime.runtime_path),
                 "artifacts_manifest_path": str(self.artifacts.manifest_path),
             }
+        finally:
+            self._release_accelerator_memory()
 
     # ==================================================
     # STAGE 1 - PREPARE
@@ -344,9 +350,11 @@ ERROR:
         if not segments:
             raise RuntimeError("Transcription returned no segments")
         self._mark_step("transcribe", "completed", segment_count=len(segments))
+        self.transcriber.release_resources()
 
         raw_segments = [dict(segment) for segment in segments]
         segments = self._apply_diarization(video_path, raw_segments)
+        self.diarizer.release_resources()
 
         self._log("✂️ Generating chunks...")
         self._mark_step("chunk", "started")
@@ -393,6 +401,7 @@ ERROR:
             candidate_count=len(clipsai_candidates),
             device=clipsai_diagnostics.get("resolved_device"),
         )
+        self.clipsai_candidate_provider.release_resources()
 
         combined_candidates = self._merge_candidate_sources(candidates, clipsai_candidates)
 
@@ -617,6 +626,17 @@ para continuar o processamento.
             availability_reason=self.diarizer.availability_reason,
         )
         return merged
+
+    def _release_accelerator_memory(self) -> None:
+        for component in (
+            self.transcriber,
+            self.diarizer,
+            self.clipsai_candidate_provider,
+        ):
+            try:
+                component.release_resources()
+            except Exception:
+                continue
 
     # ==================================================
     # STAGE 2 - FINALIZE
