@@ -22,6 +22,9 @@ RUN apt-get update && \
         software-properties-common \
         curl \
         git \
+        file \
+        libmagic1 \
+        libmagic-dev \
         ffmpeg \
         build-essential && \
     add-apt-repository ppa:deadsnakes/ppa && \

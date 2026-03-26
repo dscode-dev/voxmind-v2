@@ -1,0 +1,33 @@
+{
+  "artifacts": {
+    "source_audio": {
+      "artifact_name": "source_audio",
+      "pipeline_stage": "prepare",
+      "local_path": "/work/6976840e-90b0-41b5-bb24-94cb3f9dfc95/audio/video.wav",
+      "exists": true,
+      "size_bytes": 32048818,
+      "artifact_type": "audio",
+      "updated_at": "2026-03-26T15:29:10.076788+00:00"
+    },
+    "speaker_turns": {
+      "artifact_name": "speaker_turns",
+      "pipeline_stage": "prepare",
+      "local_path": "/work/6976840e-90b0-41b5-bb24-94cb3f9dfc95/speaker_turns.json",
+      "exists": true,
+      "size_bytes": 18511,
+      "artifact_type": "json",
+      "updated_at": "2026-03-26T15:29:41.256549+00:00"
+    },
+    "diarization_diagnostics": {
+      "artifact_name": "diarization_diagnostics",
+      "pipeline_stage": "prepare",
+      "local_path": "/work/6976840e-90b0-41b5-bb24-94cb3f9dfc95/diarization_diagnostics.json",
+      "exists": true,
+      "size_bytes": 333,
+      "artifact_type": "json",
+      "updated_at": "2026-03-26T15:29:41.255894+00:00"
+    }
+  },
+  "job_id": "6976840e-90b0-41b5-bb24-94cb3f9dfc95",
+  "updated_at": "2026-03-26T15:29:41.256553+00:00"
+}

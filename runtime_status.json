@@ -1,0 +1,18 @@
+{
+  "job_id": "6976840e-90b0-41b5-bb24-94cb3f9dfc95",
+  "pipeline_stage": "prepare",
+  "step": "pipeline",
+  "status": "failed",
+  "updated_at": "2026-03-26T15:29:48.811690+00:00",
+  "details": {
+    "video_path": "/work/6976840e-90b0-41b5-bb24-94cb3f9dfc95/video.mp4",
+    "segment_count": 175,
+    "speaker_turn_count": 197,
+    "unknown_segment_count": 0,
+    "availability_reason": "available",
+    "chunk_count": 16,
+    "candidate_count": 15,
+    "reason": "ImportError:failed to find libmagic.  Check your installation",
+    "error": "ClipsAI candidate generation failed: ImportError:failed to find libmagic.  Check your installation"
+  }
+}
