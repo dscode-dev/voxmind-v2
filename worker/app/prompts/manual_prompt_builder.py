@@ -99,6 +99,8 @@ REGRAS NARRATIVAS OBRIGATÓRIAS
 - Se o melhor corte estiver fora dos candidatos priorizados, siga a narrativa e escolha assim mesmo.
 - Pense que os cortes serão montados em um único vídeo final, não publicados isoladamente.
 - Preserve ponte de contexto entre cortes consecutivos da mesma história.
+- Prefira uma sequência cronológica coesa dentro do mesmo arco narrativo.
+- Evite saltos grandes de tempo entre cortes, a menos que isso seja indispensável para o payoff final.
 - O último corte deve fechar o assunto com uma conclusão clara, payoff ou fechamento verbal forte.
 
 {self._build_speaker_guidance(has_named_speakers)}

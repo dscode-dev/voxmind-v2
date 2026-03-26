@@ -26,18 +26,18 @@ def build_transcript_context(
         return full_text
 
     if not candidates:
-        return full_text[:max_chars]
-
-    selected_segments: List[Dict] = []
-    seen_ranges: set[tuple[float, float]] = set()
+        return _truncate_lines(_format_transcript_segments(_limit_transcript_segments(transcript)), max_chars)
 
     prioritized_candidates = sorted(
         candidates,
         key=lambda item: item.get("total_score", 0.0),
         reverse=True,
     )[:max_candidates]
+    focused_candidates = _select_dominant_candidate_cluster(prioritized_candidates)
+    selected_segments: List[Dict] = []
+    seen_ranges: set[tuple[float, float]] = set()
 
-    for candidate in prioritized_candidates:
+    for candidate in focused_candidates:
         start = float(candidate["start"]) - context_padding_sec
         end = float(candidate["end"]) + context_padding_sec
         included_for_candidate = 0
@@ -60,13 +60,6 @@ def build_transcript_context(
             if included_for_candidate >= max_segments_per_candidate:
                 break
 
-    for segment in _sample_story_segments(transcript):
-        key = (float(segment["start"]), float(segment["end"]))
-        if key in seen_ranges:
-            continue
-        seen_ranges.add(key)
-        selected_segments.append(segment)
-
     selected_segments.sort(key=lambda item: float(item["start"]))
     focused_segments = _limit_transcript_segments(selected_segments)
     focused_text = _format_transcript_segments(focused_segments)
@@ -74,7 +67,7 @@ def build_transcript_context(
     if len(focused_text) <= max_chars:
         return focused_text
 
-    return focused_text[:max_chars]
+    return _truncate_lines(focused_text, max_chars)
 
 
 def build_candidate_context(candidates: List[Dict], max_chars: int) -> str:
@@ -100,8 +93,7 @@ def build_candidate_context(candidates: List[Dict], max_chars: int) -> str:
             }
         )
 
-    serialized = json.dumps(compact_candidates, ensure_ascii=False, indent=2)
-    return serialized[:max_chars]
+    return _serialize_json_items_with_limit(compact_candidates, max_chars)
 
 
 def build_timeline_context(
@@ -130,8 +122,7 @@ def build_timeline_context(
     if current_segments:
         blocks.append(_build_timeline_block(current_segments))
 
-    serialized = json.dumps(blocks, ensure_ascii=False, indent=2)
-    return serialized[:max_chars]
+    return _serialize_json_items_with_limit(blocks, max_chars)
 
 
 def build_candidate_neighborhood_context(
@@ -185,8 +176,35 @@ def build_candidate_neighborhood_context(
             }
         )
 
-    serialized = json.dumps(neighborhoods, ensure_ascii=False, indent=2)
-    return serialized[:max_chars]
+    return _serialize_json_items_with_limit(neighborhoods, max_chars)
+
+
+def _select_dominant_candidate_cluster(
+    candidates: List[Dict],
+    max_gap_sec: float = 75.0,
+) -> List[Dict]:
+    if not candidates:
+        return []
+
+    ordered = sorted(candidates, key=lambda item: float(item.get("start", 0.0)))
+    clusters: List[List[Dict]] = [[ordered[0]]]
+
+    for candidate in ordered[1:]:
+        previous = clusters[-1][-1]
+        previous_end = float(previous.get("end", previous.get("start", 0.0)))
+        candidate_start = float(candidate.get("start", 0.0))
+        if candidate_start - previous_end <= max_gap_sec:
+            clusters[-1].append(candidate)
+            continue
+        clusters.append([candidate])
+
+    return max(
+        clusters,
+        key=lambda cluster: (
+            sum(float(item.get("total_score", 0.0)) for item in cluster),
+            -float(cluster[0].get("start", 0.0)),
+        ),
+    )
 
 
 def _format_transcript_segments(segments: List[Dict]) -> str:
@@ -220,32 +238,6 @@ def _build_timeline_block(segments: List[Dict]) -> Dict:
         "speakers": speakers,
         "summary": _truncate_text(combined_text, 320),
     }
-
-
-def _sample_story_segments(transcript: List[Dict], samples_per_region: int = 4) -> List[Dict]:
-    if not transcript:
-        return []
-
-    total = len(transcript)
-    if total <= samples_per_region * 3:
-        return transcript
-
-    first = transcript[:samples_per_region]
-    middle_start = max(0, (total // 2) - (samples_per_region // 2))
-    middle = transcript[middle_start : middle_start + samples_per_region]
-    last = transcript[-samples_per_region:]
-
-    sampled: List[Dict] = []
-    seen: set[tuple[float, float]] = set()
-    for region in (first, middle, last):
-        for segment in region:
-            key = (float(segment["start"]), float(segment["end"]))
-            if key in seen:
-                continue
-            seen.add(key)
-            sampled.append(segment)
-
-    return sampled
 
 
 def _limit_transcript_segments(
@@ -295,3 +287,36 @@ def _truncate_text(text: str, limit: int) -> str:
     truncated = text[: limit - 3].rstrip()
     truncated = truncated.rsplit(" ", 1)[0].rstrip(" ,;:")
     return truncated + "..."
+
+
+def _serialize_json_items_with_limit(items: List[Dict], max_chars: int) -> str:
+    serialized = json.dumps(items, ensure_ascii=False, indent=2)
+    if len(serialized) <= max_chars:
+        return serialized
+
+    limited: List[Dict] = []
+    for item in items:
+        candidate = json.dumps([*limited, item], ensure_ascii=False, indent=2)
+        if len(candidate) > max_chars:
+            break
+        limited.append(item)
+
+    return json.dumps(limited, ensure_ascii=False, indent=2)
+
+
+def _truncate_lines(text: str, max_chars: int) -> str:
+    if len(text) <= max_chars:
+        return text
+
+    lines = text.splitlines()
+    selected: List[str] = []
+    current_length = 0
+
+    for line in lines:
+        line_length = len(line) + (1 if selected else 0)
+        if current_length + line_length > max_chars:
+            break
+        selected.append(line)
+        current_length += line_length
+
+    return "\n".join(selected)

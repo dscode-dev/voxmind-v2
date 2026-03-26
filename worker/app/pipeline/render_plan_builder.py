@@ -5,6 +5,10 @@ from typing import Dict, List
 DEFAULT_TRANSITION = "hard_cut"
 DEFAULT_CAPTION_STYLE = "clean_subtitles"
 DEFAULT_COLD_OPEN_DURATION_SEC = 2.0
+DEFAULT_COLD_OPEN_MIN_DURATION_SEC = 3.1
+DEFAULT_COLD_OPEN_MAX_DURATION_SEC = 4.8
+DEFAULT_COLD_OPEN_LEAD_IN_SEC = 0.45
+DEFAULT_COLD_OPEN_TAIL_SEC = 0.5
 
 
 class RenderPlanBuilder:
@@ -161,21 +165,22 @@ class RenderPlanBuilder:
         if clip_end <= clip_start:
             return {"enabled": False}
 
-        segment_start = float(best_segment.get("start", clip_start))
-        segment_end = float(best_segment.get("end", clip_end))
-        preview_start = max(0.0, segment_start - clip_start - 0.35)
-        preview_duration = min(
-            DEFAULT_COLD_OPEN_DURATION_SEC + 0.9,
-            max(1.4, (segment_end - segment_start) + 0.9),
-            max(1.4, clip_end - clip_start - preview_start),
+        preview = self._build_hook_preview_window(
+            best_segment=best_segment,
+            transcript_segments=transcript_segments,
+            clip_start=clip_start,
+            clip_end=clip_end,
+            source_clip_index=source_clip_index,
         )
+        if preview is None:
+            return {"enabled": False}
 
         return {
             "enabled": True,
             "source_clip_index": source_clip_index,
-            "duration_sec": round(preview_duration, 2),
-            "relative_start_sec": round(preview_start, 2),
-            "source_text": str(best_segment.get("text") or "").strip(),
+            "duration_sec": round(preview["duration_sec"], 2),
+            "relative_start_sec": round(preview["relative_start_sec"], 2),
+            "source_text": preview["source_text"],
             "transition_after": "fade",
             "transition_duration_ms": 180,
         }
@@ -223,6 +228,84 @@ class RenderPlanBuilder:
                     }
 
         return best_segment
+
+    def _build_hook_preview_window(
+        self,
+        *,
+        best_segment: Dict,
+        transcript_segments: List[Dict],
+        clip_start: float,
+        clip_end: float,
+        source_clip_index: int,
+    ) -> Dict | None:
+        if clip_end <= clip_start:
+            return None
+
+        source_segments = [
+            segment
+            for segment in transcript_segments
+            if int(segment.get("_clip_index", source_clip_index) or source_clip_index) == source_clip_index
+            and float(segment.get("end", 0.0)) >= clip_start
+            and float(segment.get("start", 0.0)) <= clip_end
+        ]
+        source_segments.sort(key=lambda item: float(item.get("start", 0.0)))
+        if not source_segments:
+            return None
+
+        best_start = float(best_segment.get("start", clip_start))
+        best_end = float(best_segment.get("end", clip_end))
+        best_index = next(
+            (
+                index
+                for index, segment in enumerate(source_segments)
+                if float(segment.get("start", 0.0)) == best_start
+                and float(segment.get("end", 0.0)) == best_end
+            ),
+            0,
+        )
+        start_segment = source_segments[best_index]
+        absolute_start = max(clip_start, float(start_segment.get("start", clip_start)) - DEFAULT_COLD_OPEN_LEAD_IN_SEC)
+        absolute_end = min(
+            clip_end,
+            max(
+                float(start_segment.get("end", clip_start)) + DEFAULT_COLD_OPEN_TAIL_SEC,
+                absolute_start + DEFAULT_COLD_OPEN_MIN_DURATION_SEC,
+            ),
+        )
+        preview_text_parts = [str(start_segment.get("text") or "").strip()]
+
+        for segment in source_segments[best_index + 1 :]:
+            current_duration = absolute_end - absolute_start
+            if current_duration >= DEFAULT_COLD_OPEN_MAX_DURATION_SEC:
+                break
+
+            segment_end = float(segment.get("end", absolute_end))
+            preview_text_parts.append(str(segment.get("text") or "").strip())
+            absolute_end = min(
+                clip_end,
+                max(segment_end + DEFAULT_COLD_OPEN_TAIL_SEC, absolute_end),
+            )
+            current_duration = absolute_end - absolute_start
+
+            joined_text = " ".join(part for part in preview_text_parts if part).strip()
+            if current_duration >= DEFAULT_COLD_OPEN_MIN_DURATION_SEC and self._looks_like_sentence_closure(joined_text):
+                break
+
+        duration_sec = max(0.0, absolute_end - absolute_start)
+        if duration_sec < 1.8:
+            return None
+
+        return {
+            "relative_start_sec": max(0.0, absolute_start - clip_start),
+            "duration_sec": min(duration_sec, DEFAULT_COLD_OPEN_MAX_DURATION_SEC),
+            "source_text": " ".join(part for part in preview_text_parts if part).strip(),
+        }
+
+    def _looks_like_sentence_closure(self, text: str) -> bool:
+        stripped = text.strip()
+        if not stripped:
+            return False
+        return bool(re.search(r"[.!?…][\"')\\]]?$", stripped))
 
     def _tokenize(self, text: str) -> List[str]:
         return re.findall(r"\w+", text.lower())

@@ -69,6 +69,8 @@ MANDATORY RULES
 - Avoid redundant cuts that repeat the same narrative beat.
 - If the best cut is outside the prioritized candidates, follow the story and pick it anyway.
 - The selected cuts will be assembled into one final video, so preserve context between consecutive cuts.
+- Prefer a chronologically cohesive sequence inside the same narrative arc.
+- Avoid large time jumps between cuts unless they are essential for the final payoff.
 - The final cut must end with a clear verbal closure or payoff.
 
 MODE RULES
