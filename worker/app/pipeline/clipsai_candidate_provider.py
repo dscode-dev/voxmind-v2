@@ -72,9 +72,6 @@ class ClipsAICandidateProvider:
         return {
             "ClipFinder": self._resolve_symbol(root, "ClipFinder", ["clipsai.clip.clipfinder"]),
             "Transcription": self._resolve_symbol(root, "Transcription", ["clipsai.transcribe.transcription"]),
-            "Sentence": self._resolve_symbol(root, "Sentence", ["clipsai.transcribe.transcription"]),
-            "Word": self._resolve_symbol(root, "Word", ["clipsai.transcribe.transcription"]),
-            "Character": self._resolve_symbol(root, "Character", ["clipsai.transcribe.transcription"]),
         }
 
     def _resolve_symbol(self, root: Any, name: str, module_paths: List[str]) -> Any:
@@ -103,136 +100,94 @@ class ClipsAICandidateProvider:
         return clipfinder_cls(**kwargs)
 
     def _build_transcription(self, classes: Dict[str, Any], transcript_segments: List[Dict]) -> Any:
-        words: List[Any] = []
-        sentences: List[Any] = []
-        characters: List[Any] = []
-        full_text_parts: List[str] = []
-        current_char = 0
+        char_info: List[Dict[str, Any]] = []
+        speaker_ids = self._build_speaker_index(transcript_segments)
 
-        for sentence_index, segment in enumerate(transcript_segments):
+        for segment in transcript_segments:
             text = str(segment.get("text") or "").strip()
             if not text:
                 continue
 
-            if full_text_parts:
-                full_text_parts.append(" ")
-                current_char += 1
-
-            sentence_start_char = current_char
-            full_text_parts.append(text)
-            sentence_start = float(segment.get("start", 0.0))
-            sentence_end = float(segment.get("end", sentence_start))
-            sentence_end_char = sentence_start_char + len(text) - 1
-            if sentence_end_char < sentence_start_char:
-                continue
-
-            sentences.append(
-                self._instantiate_object(
-                    classes["Sentence"],
+            if char_info:
+                char_info.append(
                     {
-                        "start_time": sentence_start,
-                        "end_time": sentence_end,
-                        "start_char": sentence_start_char,
-                        "end_char": sentence_end_char,
-                        "text": text,
-                    },
+                        "char": " ",
+                        "start_time": None,
+                        "end_time": None,
+                        "speaker": None,
+                    }
                 )
-            )
 
-            current_char = sentence_end_char + 1
-            segment_words = text.split()
-            word_timings = self._approximate_word_timings(sentence_start, sentence_end, segment_words)
-            local_char = sentence_start_char
-
-            for word_index, (word_text, word_start, word_end) in enumerate(word_timings, start=len(words)):
-                word_start_char = local_char
-                word_end_char = word_start_char + len(word_text) - 1
-                words.append(
-                    self._instantiate_object(
-                        classes["Word"],
-                        {
-                            "start_time": word_start,
-                            "end_time": word_end,
-                            "start_char": word_start_char,
-                            "end_char": word_end_char,
-                            "text": word_text,
-                        },
-                    )
+            segment_start = float(segment.get("start", 0.0))
+            segment_end = float(segment.get("end", segment_start))
+            speaker = speaker_ids.get(str(segment.get("speaker", "UNKNOWN")).strip(), None)
+            char_timings = self._approximate_char_timings(segment_start, segment_end, text)
+            for character, start_time, end_time in char_timings:
+                char_info.append(
+                    {
+                        "char": character,
+                        "start_time": start_time,
+                        "end_time": end_time,
+                        "speaker": speaker,
+                    }
                 )
-                for character_offset, character in enumerate(word_text):
-                    characters.append(
-                        self._instantiate_object(
-                            classes["Character"],
-                            {
-                                "start_time": word_start,
-                                "end_time": word_end,
-                                "word_index": word_index,
-                                "sentence_index": sentence_index,
-                                "text": character,
-                            },
-                        )
-                    )
-                    character_offset += 0
-                local_char = word_end_char + 2
 
-        full_text = "".join(full_text_parts).strip()
-        if not full_text:
+        if not char_info:
             raise ValueError("empty_clipsai_transcription")
 
         transcription_payload = {
-            "text": full_text,
-            "language": "pt",
-            "created_time": datetime.now(timezone.utc),
-            "start_time": float(transcript_segments[0].get("start", 0.0)),
-            "end_time": float(transcript_segments[-1].get("end", 0.0)),
             "source_software": "voxmind-faster-whisper",
-            "characters": characters,
-            "words": words,
-            "sentences": sentences,
+            "time_created": datetime.now(timezone.utc),
+            "language": "pt",
+            "num_speakers": len([speaker for speaker in speaker_ids.values() if speaker is not None]),
+            "char_info": char_info,
         }
-        return self._instantiate_object(classes["Transcription"], transcription_payload)
+        return classes["Transcription"](transcription_payload)
 
-    def _instantiate_object(self, cls: Any, payload: Dict[str, Any]) -> Any:
-        if cls is None:
-            return payload
-
-        try:
-            return cls(**payload)
-        except Exception:
-            try:
-                signature = inspect.signature(cls)
-                ordered_kwargs = {
-                    name: payload[name]
-                    for name in signature.parameters.keys()
-                    if name in payload
-                }
-                return cls(**ordered_kwargs)
-            except Exception:
-                instance = cls.__new__(cls)
-                for key, value in payload.items():
-                    try:
-                        setattr(instance, key, value)
-                    except Exception:
-                        continue
-                return instance
-
-    def _approximate_word_timings(
+    def _approximate_char_timings(
         self,
         start_time: float,
         end_time: float,
-        words: List[str],
-    ) -> List[tuple[str, float, float]]:
-        if not words:
+        text: str,
+    ) -> List[tuple[str, float | None, float | None]]:
+        if not text:
             return []
 
         duration = max(end_time - start_time, 0.01)
-        step = duration / max(len(words), 1)
-        timings: List[tuple[str, float, float]] = []
-        for index, word in enumerate(words):
-            word_start = start_time + (step * index)
-            word_end = min(end_time, word_start + step)
-            timings.append((word, round(word_start, 3), round(word_end, 3)))
+        timed_characters = [char for char in text if char != " "]
+        step = duration / max(len(timed_characters), 1)
+        timings: List[tuple[str, float | None, float | None]] = []
+        timed_index = 0
+
+        for character in text:
+            if character == " ":
+                timings.append((character, None, None))
+                continue
+
+            char_start = start_time + (step * timed_index)
+            char_end = min(end_time, char_start + step)
+            timings.append((character, round(char_start, 3), round(char_end, 3)))
+            timed_index += 1
+
         return timings
+
+    def _build_speaker_index(self, transcript_segments: List[Dict]) -> Dict[str, int | None]:
+        speakers = sorted(
+            {
+                str(segment.get("speaker", "UNKNOWN")).strip()
+                for segment in transcript_segments
+                if str(segment.get("speaker", "")).strip()
+            }
+        )
+        mapping: Dict[str, int | None] = {}
+        current_id = 0
+        for speaker in speakers:
+            if speaker.upper() == "UNKNOWN":
+                mapping[speaker] = None
+                continue
+            mapping[speaker] = current_id
+            current_id += 1
+        return mapping
 
     def _normalize_clips(self, clips: List[Any], transcript_segments: List[Dict]) -> List[Dict]:
         candidates: List[Dict] = []
