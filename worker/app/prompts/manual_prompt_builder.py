@@ -95,7 +95,8 @@ REGRAS NARRATIVAS OBRIGATÓRIAS
 - Evite cortes redundantes entre si; cada corte precisa trazer uma ideia distinta.
 - Se houver dúvida entre um trecho muito chamativo e um trecho mais completo, prefira o mais completo.
 - Você pode ajustar timestamps em aproximadamente ±8 segundos para capturar início natural, desenvolvimento e fechamento.
-- Os candidatos são pistas, não limites rígidos.
+- Os candidatos são pistas fortes e prioritárias, não limites rígidos.
+- Dê atenção especial aos candidatos marcados com `source = clipsai`, porque eles representam blocos narrativos detectados automaticamente no transcript.
 - Se o melhor corte estiver fora dos candidatos priorizados, siga a narrativa e escolha assim mesmo.
 - Pense que os cortes serão montados em um único vídeo final, não publicados isoladamente.
 - Preserve ponte de contexto entre cortes consecutivos da mesma história.
@@ -187,6 +188,7 @@ INSTRUÇÃO FINAL
 
 Retorne apenas o JSON final.
 Use `story_map` para mostrar que você entendeu o arco do vídeo inteiro antes de escolher os cortes.
+Use transcript, timeline, candidatos heurísticos e candidatos do ClipsAI como contexto forte para decidir com autonomia.
 Os campos de social media devem existir apenas em "post", não repetidos dentro de cada corte.
 Se algum campo novo não se aplicar, retorne null, string vazia ou lista vazia.
 """

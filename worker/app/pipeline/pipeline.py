@@ -183,7 +183,7 @@ class Pipeline:
         if self.clip_mode == "short_serie" and self.video_ratio == "portrait":
             return Scorer(
                 max_candidates=8,
-                max_candidates_per_window=1,
+                max_candidates_per_window=2,
                 min_start_gap=16,
                 prefer_thematic_continuity=True,
                 thematic_similarity_threshold=0.16,

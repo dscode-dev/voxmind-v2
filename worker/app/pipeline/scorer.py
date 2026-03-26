@@ -75,6 +75,7 @@ class Scorer:
         if (
             self.prefer_thematic_continuity
             and anchor_candidate is not None
+            and candidate.get("source") != "clipsai"
             and self._topic_similarity(candidate.get("text", ""), anchor_candidate.get("text", ""))
             < self.thematic_similarity_threshold
         ):

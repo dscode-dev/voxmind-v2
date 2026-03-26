@@ -63,7 +63,8 @@ MANDATORY RULES
 - Never start in the middle of a sentence.
 - Never end before the idea concludes.
 - Respect speaker continuity when dialogue is important.
-- Use candidates as hints, not strict boundaries.
+- Use candidates as strong and prioritized hints, not strict boundaries.
+- Give special attention to candidates with `source = clipsai`, because they represent narrative blocks detected directly from the transcript.
 - You may adjust timestamps slightly to preserve complete meaning.
 - Prefer editorially complete cuts over merely loud or sensational ones.
 - Avoid redundant cuts that repeat the same narrative beat.
@@ -132,6 +133,8 @@ Return ONLY valid JSON in this format:
     }}
   ]
 }}
+
+Use transcript, timeline, heuristic candidates and ClipsAI candidates as strong context, but keep editorial autonomy if a better sequence is clearly supported by the material.
 """
 
     def _build_mode_instructions(self, clip_mode: str) -> str:
