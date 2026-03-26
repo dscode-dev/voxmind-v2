@@ -1242,11 +1242,19 @@ para continuar o processamento.
             return None
 
         max_backfill = float(settings.render_context_backfill_max_sec)
-        if (current_start - previous_segment_start) > max_backfill:
-            return None
+        backfill_start = previous_segment_start
+        for segment in reversed(transcript_segments):
+            segment_start = float(segment.get("start", 0.0))
+            if segment_start >= current_start:
+                continue
+            if (current_start - segment_start) > max_backfill:
+                break
+            backfill_start = segment_start
+            if self._segment_starts_cleanly(segment):
+                break
 
         allowed_overlap = 0.6
-        return max(previous_segment_start, previous_end - allowed_overlap)
+        return max(backfill_start, previous_end - allowed_overlap)
 
     def _find_previous_segment_start(
         self,
@@ -1260,6 +1268,20 @@ para continuar o processamento.
                 break
             previous_start = segment_start
         return previous_start
+
+    def _segment_starts_cleanly(self, segment: dict | None) -> bool:
+        if not segment:
+            return False
+
+        text = str(segment.get("text") or "").strip()
+        if not text:
+            return False
+
+        lowered = text.lower()
+        if re.match(r"^(e|mas|ent[aã]o|porque|por isso|s[oó] que|a[ií]|da[ií]|ele|ela|isso|essa|esse)\b", lowered):
+            return False
+
+        return True
 
     def _find_previous_strong_ending(
         self,
