@@ -757,6 +757,7 @@ para continuar o processamento.
             transcript_segments,
         )
         final_clip_files = self._render_final_clips(
+            video_path,
             filtered_cuts,
             cut_files,
             render_plan,
@@ -811,9 +812,14 @@ para continuar o processamento.
                 path,
                 artifact_type="video",
             )
+            video_payloads = publish_package.get("videos") or []
+            video_post = video_payloads[index - 1].get("post", {}) if index - 1 < len(video_payloads) else {}
+            caption_lines = [str(video_post.get("title") or f"Video final {index}").strip()]
+            if str(video_post.get("hook") or "").strip():
+                caption_lines.append(str(video_post.get("hook")).strip())
             self.telegram.send_video(
                 str(path),
-                caption=f"Video final {index} - JOB_ID: {self.job_id}",
+                caption="\n".join(line for line in caption_lines if line),
             )
         if subtitle_path is not None and subtitle_path.exists():
             self.artifacts.mark_local(
@@ -1744,6 +1750,7 @@ para continuar o processamento.
 
     def _render_final_clips(
         self,
+        video_path: Path,
         filtered_cuts: list[dict],
         cut_files: list[Path],
         render_plan: dict,
@@ -1752,6 +1759,44 @@ para continuar o processamento.
         self._mark_step("final_clips", "started")
         final_clips_dir = self.work_dir / "final_clips"
         final_clips_dir.mkdir(parents=True, exist_ok=True)
+        final_video_specs = self._build_final_video_specs(transcript_segments)
+        if final_video_specs:
+            outputs: list[Path] = []
+            for index, spec in enumerate(final_video_specs, start=1):
+                local_cut_files = self.cutter.cut(video_path, spec["cuts"])
+                soundtrack = self.soundtrack_selector.select(
+                    cuts=spec["cuts"],
+                    long_video_script=self.manual_response.get("long_video_script"),
+                )
+                local_render_plan = self.render_plan_builder.build(
+                    job_id=self.job_id,
+                    clip_mode=self.clip_mode,
+                    video_ratio=self.video_ratio,
+                    cuts=spec["cuts"],
+                    post_payload=spec["post"],
+                    transcript_segments=transcript_segments,
+                    soundtrack=soundtrack,
+                    qa_report=None,
+                )
+                subtitle_output = final_clips_dir / f"final_clip_{index:02d}.srt"
+                clip_subtitle_path = self.subtitle_builder.build_final_reel_srt(
+                    cuts=spec["cuts"],
+                    transcript_segments=transcript_segments,
+                    output_path=subtitle_output,
+                )
+                rendered_path = self.final_renderer.render(
+                    cut_files=local_cut_files,
+                    render_plan=local_render_plan,
+                    subtitle_path=clip_subtitle_path,
+                )
+                clip_output = final_clips_dir / f"final_clip_{index:02d}.mp4"
+                if rendered_path is not None and rendered_path.exists() and rendered_path != clip_output:
+                    rendered_path.replace(clip_output)
+                outputs.append(clip_output if clip_output.exists() else rendered_path)
+
+            self._mark_step("final_clips", "completed", clip_count=len(outputs))
+            return [path for path in outputs if path is not None]
+
         clips_plan = {
             int(item.get("clip_index", 0)): item
             for item in render_plan.get("clips", [])
@@ -1779,6 +1824,49 @@ para continuar o processamento.
 
         self._mark_step("final_clips", "completed", clip_count=len(outputs))
         return outputs
+
+    def _build_final_video_specs(self, transcript_segments: list[dict]) -> list[dict]:
+        specs: list[dict] = []
+        for index, video in enumerate(self.manual_response.get("final_videos") or [], start=1):
+            if not isinstance(video, dict):
+                continue
+
+            cuts = list(video.get("shorts_content") or [])
+            if not cuts:
+                continue
+
+            post = self._normalize_post_payload(video.get("post"), cuts)
+            normalized_cuts = self._normalize_cuts_to_transcript(cuts, transcript_segments)
+            normalized_cuts = self._align_first_cut_to_global_hook(
+                normalized_cuts,
+                transcript_segments,
+                post,
+            )
+            if self.clip_mode == "short_serie":
+                normalized_cuts = self._prune_disconnected_short_serie_cuts(normalized_cuts)
+
+            filtered = []
+            for cut in normalized_cuts:
+                start = float(cut.get("start", 0.0))
+                end = float(cut.get("end", 0.0))
+                if end <= start:
+                    continue
+                if (end - start) < settings.render_min_clip_duration_sec:
+                    continue
+                filtered.append(cut)
+
+            if not filtered:
+                continue
+
+            specs.append(
+                {
+                    "video_index": int(video.get("video_index") or index),
+                    "post": post,
+                    "cuts": filtered,
+                }
+            )
+
+        return specs
 
     def _run_auto_review(
         self,

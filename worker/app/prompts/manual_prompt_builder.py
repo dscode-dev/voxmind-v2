@@ -208,7 +208,7 @@ Retorne apenas o JSON final.
 Use `story_map` para mostrar que você entendeu o arco do vídeo inteiro antes de escolher os cortes.
 Use transcript, timeline, candidatos heurísticos e candidatos do ClipsAI como contexto forte para decidir com autonomia.
 Crie `final_videos` com até 3 vídeos finais independentes.
-Cada item de `final_videos` deve ter seu próprio `post` e normalmente exatamente 1 corte principal em `shorts_content`.
+Cada item de `final_videos` deve ter seu próprio `post` e normalmente 1 ou 2 cortes principais em `shorts_content`.
 Os campos de social media devem existir dentro de `final_videos[i].post`, não repetidos dentro de cada corte.
 `final_videos[i].post.hook_source_cut_index` deve apontar para o índice do corte dentro de `final_videos[i].shorts_content` que contém integralmente o hook principal.
 `final_videos[i].shorts_content[0]` deve conter integralmente o hook principal desse vídeo.
@@ -292,9 +292,10 @@ FORMATO: PORTRAIT
 REGRAS DE DURAÇÃO
 
 - Cada corte deve ter no mínimo {min_duration} segundos.
-- Para este modo, prefira cortes entre 26 e 35 segundos.
+- Para este modo, prefira vídeos finais entre 45 e 70 segundos.
 - Não retorne cortes com menos de {min_duration} segundos.
-- Só ultrapasse 35 segundos se isso for necessário para fechar a ideia.
+- Cada vídeo final pode usar 1 ou 2 cortes conectados se isso melhorar hook, contexto e fechamento.
+- Só fique abaixo de 45 segundos se o assunto realmente fechar antes disso.
 - Nunca exceda {max_duration} segundos.
 """
 

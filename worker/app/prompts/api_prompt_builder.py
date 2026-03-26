@@ -152,7 +152,8 @@ Return ONLY valid JSON in this format:
 
 Use transcript, timeline, heuristic candidates and ClipsAI candidates as strong context, but keep editorial autonomy if a better sequence is clearly supported by the material.
 Return `final_videos` with up to 3 separate final videos.
-Each `final_videos[i]` should usually contain exactly 1 main cut in `shorts_content`.
+Each `final_videos[i]` should usually contain 1 or 2 connected cuts in `shorts_content`.
+Prefer final videos around 45 to 70 seconds when the material supports it.
 `final_videos[i].post.hook_source_cut_index` must point to the cut index inside `final_videos[i].shorts_content` that fully contains the main hook.
 `final_videos[i].shorts_content[0]` must fully contain the main hook for that final video.
 If there is only enough strong material for 1 or 2 good final videos, return only 1 or 2.
