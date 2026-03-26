@@ -65,6 +65,7 @@ Você é um editor sênior de conteúdo para Shorts, TikTok, Reels e vídeos lon
 
 Sua função é selecionar os melhores cortes do vídeo preservando integridade narrativa,
 continuidade de fala e contexto suficiente para o espectador entender cada trecho.
+Agora o objetivo final é gerar até 3 vídeos finais independentes, cada um pronto para postagem.
 
 REGRA CRÍTICA
 
@@ -98,11 +99,21 @@ REGRAS NARRATIVAS OBRIGATÓRIAS
 - Os candidatos são pistas fortes e prioritárias, não limites rígidos.
 - Dê atenção especial aos candidatos marcados com `source = clipsai`, porque eles representam blocos narrativos detectados automaticamente no transcript.
 - Se o melhor corte estiver fora dos candidatos priorizados, siga a narrativa e escolha assim mesmo.
-- Pense que os cortes serão montados em um único vídeo final, não publicados isoladamente.
+- Pense que agora você está escolhendo até 3 vídeos finais independentes.
+- Cada vídeo final precisa funcionar sozinho, com hook, desenvolvimento e fechamento próprios.
+- Não distribua um mesmo raciocínio em dois vídeos diferentes se isso quebrar o contexto.
 - Preserve ponte de contexto entre cortes consecutivos da mesma história.
 - Prefira uma sequência cronológica coesa dentro do mesmo arco narrativo.
 - Evite saltos grandes de tempo entre cortes, a menos que isso seja indispensável para o payoff final.
 - O último corte deve fechar o assunto com uma conclusão clara, payoff ou fechamento verbal forte.
+- O `post.hook` precisa estar totalmente contido no primeiro corte selecionado.
+- O primeiro corte precisa começar antes ou exatamente no ponto em que a frase do hook começa.
+- Se um hook forte estiver fora do primeiro corte, ajuste o primeiro corte para incluí-lo ou escolha outro hook.
+- Cada corte depois do primeiro precisa continuar naturalmente o corte anterior; não mude de assunto sem ponte narrativa clara.
+- Se houver dúvida entre usar 3 cortes desconectados ou 2 cortes coesos, prefira 2 cortes coesos.
+- Não escolha um corte seguinte apenas porque ele é forte isoladamente; ele precisa funcionar como continuação do vídeo final.
+- Se houver salto temporal relevante entre dois cortes, explique claramente por que esse salto preserva a lógica da história.
+- Prefira terminar o vídeo um pouco antes, mas com fechamento claro, do que terminar no meio do assunto.
 
 {self._build_speaker_guidance(has_named_speakers)}
 
@@ -136,25 +147,32 @@ OUTPUT JSON
     ],
     "final_payoff": "qual frase, revelação ou conclusão deve encerrar o vídeo"
   }},
-  "post": {{
-    "title": "título principal do vídeo final",
-    "hook": "gancho principal do vídeo final; será usado na abertura teaser",
-    "description": "descrição final para postagem",
-    "hashtags": ["#tag1", "#tag2", "#tag3"],
-    "thumbnail": "ideia de thumbnail principal",
-    "speaker_focus": "SPEAKER_01 | SPEAKER_02 | null"
-  }},
-  "shorts_content": [
+  "final_videos": [
     {{
-      "start": 10.5,
-      "end": 45.3,
-      "safe_start": 10.5,
-      "safe_end": 45.3,
-      "reason": "por que esse trecho respeita narrativa, speaker continuity e clip_mode",
-      "narrative_role": "hook | setup | development | payoff",
-      "merge_group": "story_1",
-      "speaker_focus": "SPEAKER_01 | SPEAKER_02 | null",
-      "transition_after": "hard_cut | punch_in | whoosh | fade | none"
+      "video_index": 1,
+      "post": {{
+        "title": "título principal do vídeo final 1",
+        "hook": "gancho principal do vídeo final 1",
+        "hook_source_cut_index": 0,
+        "description": "descrição final para postagem",
+        "hashtags": ["#tag1", "#tag2", "#tag3"],
+        "thumbnail": "ideia de thumbnail principal",
+        "speaker_focus": "SPEAKER_01 | SPEAKER_02 | null"
+      }},
+      "shorts_content": [
+        {{
+          "start": 10.5,
+          "end": 45.3,
+          "safe_start": 10.5,
+          "safe_end": 45.3,
+          "reason": "por que esse trecho respeita narrativa, speaker continuity e clip_mode",
+          "narrative_role": "hook | setup | development | payoff",
+          "merge_group": "story_1",
+          "continuity_note": "como este vídeo se sustenta sozinho",
+          "speaker_focus": "SPEAKER_01 | SPEAKER_02 | null",
+          "transition_after": "hard_cut | punch_in | whoosh | fade | none"
+        }}
+      ]
     }}
   ],
   "long_video_script": {{
@@ -189,7 +207,13 @@ INSTRUÇÃO FINAL
 Retorne apenas o JSON final.
 Use `story_map` para mostrar que você entendeu o arco do vídeo inteiro antes de escolher os cortes.
 Use transcript, timeline, candidatos heurísticos e candidatos do ClipsAI como contexto forte para decidir com autonomia.
-Os campos de social media devem existir apenas em "post", não repetidos dentro de cada corte.
+Crie `final_videos` com até 3 vídeos finais independentes.
+Cada item de `final_videos` deve ter seu próprio `post` e normalmente exatamente 1 corte principal em `shorts_content`.
+Os campos de social media devem existir dentro de `final_videos[i].post`, não repetidos dentro de cada corte.
+`final_videos[i].post.hook_source_cut_index` deve apontar para o índice do corte dentro de `final_videos[i].shorts_content` que contém integralmente o hook principal.
+`final_videos[i].shorts_content[0]` deve conter integralmente o hook principal desse vídeo.
+Em `short_serie`, use `continuity_note` para mostrar explicitamente por que o vídeo se sustenta sozinho.
+Se não houver material forte para 3 vídeos bons, retorne apenas 1 ou 2 vídeos finais.
 Se algum campo novo não se aplicar, retorne null, string vazia ou lista vazia.
 """
 

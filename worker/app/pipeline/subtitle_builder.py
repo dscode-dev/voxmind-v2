@@ -5,6 +5,32 @@ from typing import Dict, List
 
 class SubtitleBuilder:
 
+    def build_clip_srt(
+        self,
+        *,
+        cut: Dict,
+        transcript_segments: List[Dict],
+        output_path: Path,
+    ) -> Path | None:
+        entries = self._entries_for_cut(
+            cut=cut,
+            transcript_segments=transcript_segments,
+        )
+        if not entries:
+            return None
+
+        lines: List[str] = []
+        for index, entry in enumerate(entries, start=1):
+            lines.append(str(index))
+            lines.append(
+                f"{self._format_timestamp(entry['start'])} --> {self._format_timestamp(entry['end'])}"
+            )
+            lines.append(entry["text"])
+            lines.append("")
+
+        output_path.write_text("\n".join(lines), encoding="utf-8")
+        return output_path
+
     def build_final_reel_srt(
         self,
         *,
@@ -70,6 +96,43 @@ class SubtitleBuilder:
                 )
 
             accumulated_offset += end - start
+
+        return self._merge_adjacent_entries(entries)
+
+    def _entries_for_cut(
+        self,
+        *,
+        cut: Dict,
+        transcript_segments: List[Dict],
+    ) -> List[Dict]:
+        start = float(cut.get("safe_start", cut.get("start", 0.0)))
+        end = float(cut.get("safe_end", cut.get("end", 0.0)))
+        if end <= start:
+            return []
+
+        entries: List[Dict] = []
+        segments = self._segments_for_cut(
+            transcript_segments=transcript_segments,
+            cut_start=start,
+            cut_end=end,
+        )
+        for segment in segments:
+            local_start = max(0.0, float(segment.get("start", 0.0)) - start)
+            local_end = min(end, float(segment.get("end", 0.0))) - start
+            if local_end <= local_start:
+                continue
+
+            text = self._subtitle_text(segment)
+            if not text:
+                continue
+
+            entries.append(
+                {
+                    "start": round(local_start, 3),
+                    "end": round(local_end, 3),
+                    "text": text,
+                }
+            )
 
         return self._merge_adjacent_entries(entries)
 

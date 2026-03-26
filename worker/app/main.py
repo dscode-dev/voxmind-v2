@@ -83,7 +83,7 @@ def run_pipeline(job: dict):
             )
             return
 
-        if "shorts_content" not in manual_response:
+        if "shorts_content" not in manual_response and "final_videos" not in manual_response:
             logger.error(
                 "Finalize job received invalid manual_response",
                 extra={"job_id": job_id, "pipeline_stage": pipeline_stage, "step": "validate_job", "status": "failed"},
@@ -294,6 +294,7 @@ def run_pipeline(job: dict):
 
             # salva cortes
             cut_files = result.get("cut_files", [])
+            final_clip_files = result.get("final_clip_files", [])
             final_reel_path = result.get("final_reel_path")
             subtitle_path = result.get("subtitle_path")
             qa_report_path = result.get("qa_report_path")
@@ -301,18 +302,18 @@ def run_pipeline(job: dict):
             delivery_package_path = result.get("delivery_package_path")
             publish_package_path = result.get("publish_package_path")
 
-            for file_path in cut_files:
+            for file_path in final_clip_files:
                 path_obj = Path(file_path)
 
                 if path_obj.exists():
                     storage.upload(
                         str(path_obj),
-                        f"jobs/{job_id}/cuts/{path_obj.name}",
+                        f"jobs/{job_id}/final_clips/{path_obj.name}",
                     )
                     pipeline.artifacts.mark_remote(
                         path_obj.stem,
                         pipeline_stage,
-                        f"jobs/{job_id}/cuts/{path_obj.name}",
+                        f"jobs/{job_id}/final_clips/{path_obj.name}",
                         path_obj,
                     )
 

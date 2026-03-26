@@ -12,6 +12,7 @@ class PublishPackageBuilder:
         video_ratio: str,
         cuts: List[Dict],
         post_payload: Dict | None,
+        final_clip_files: List[Path],
         final_reel_path: Path | None,
         subtitle_path: Path | None,
         qa_report: Dict | None,
@@ -25,12 +26,13 @@ class PublishPackageBuilder:
         description = str(post_payload.get("description") or primary_clip.get("description") or "").strip()
         thumbnail_text = str(post_payload.get("thumbnail") or primary_clip.get("thumbnail") or "").strip()
         speaker_focus = str(post_payload.get("speaker_focus") or primary_clip.get("speaker_focus") or "").strip()
+        videos = self._build_video_payloads(cuts, final_clip_files, post_payload)
 
         return {
             "job_id": job_id,
             "clip_mode": clip_mode,
             "video_ratio": video_ratio,
-            "publish_status": self._publish_status(qa_report, final_reel_path),
+            "publish_status": self._publish_status(qa_report, final_reel_path, final_clip_files),
             "primary_hook": primary_hook,
             "primary_title": primary_title,
             "description": description,
@@ -39,14 +41,23 @@ class PublishPackageBuilder:
             "caption_text": self._build_caption_text(primary_title, primary_hook, description, ordered_hashtags),
             "hashtags": ordered_hashtags,
             "telegram_caption": self._build_telegram_caption(primary_title, primary_hook, description, ordered_hashtags),
+            "videos": videos,
+            "final_clips": self._final_clips_payload(final_clip_files),
             "final_reel": self._final_reel_payload(final_reel_path),
             "subtitles": self._subtitle_payload(subtitle_path),
             "automation": automation_report or {},
         }
 
-    def _publish_status(self, qa_report: Dict | None, final_reel_path: Path | None) -> str:
-        if final_reel_path is None or not final_reel_path.exists():
-            return "missing_final_reel"
+    def _publish_status(
+        self,
+        qa_report: Dict | None,
+        final_reel_path: Path | None,
+        final_clip_files: List[Path],
+    ) -> str:
+        has_final_reel = final_reel_path is not None and final_reel_path.exists()
+        has_final_clips = any(path.exists() for path in final_clip_files)
+        if not has_final_reel and not has_final_clips:
+            return "missing_final_assets"
 
         if not qa_report:
             return "ready"
@@ -131,3 +142,43 @@ class PublishPackageBuilder:
             "local_path": str(subtitle_path),
             "format": "srt",
         }
+
+    def _final_clips_payload(self, final_clip_files: List[Path]) -> List[Dict]:
+        payload: List[Dict] = []
+        for index, path in enumerate(final_clip_files, start=1):
+            payload.append(
+                {
+                    "clip_index": index,
+                    "status": "generated" if path.exists() else "missing",
+                    "file_name": path.name,
+                    "local_path": str(path),
+                }
+            )
+        return payload
+
+    def _build_video_payloads(self, cuts: List[Dict], final_clip_files: List[Path], fallback_post: Dict) -> List[Dict]:
+        videos: List[Dict] = []
+        for index, cut in enumerate(cuts, start=1):
+            post = cut.get("_post") or fallback_post or {}
+            hashtags = self._collect_hashtags([cut], post)
+            final_clip = final_clip_files[index - 1] if index - 1 < len(final_clip_files) else None
+            videos.append(
+                {
+                    "video_index": index,
+                    "post": {
+                        "title": str(post.get("title") or cut.get("title") or "").strip(),
+                        "hook": str(post.get("hook") or cut.get("hook") or "").strip(),
+                        "hook_source_cut_index": int(post.get("hook_source_cut_index") or 0),
+                        "description": str(post.get("description") or cut.get("description") or "").strip(),
+                        "hashtags": hashtags,
+                        "thumbnail": str(post.get("thumbnail") or cut.get("thumbnail") or "").strip(),
+                        "speaker_focus": str(post.get("speaker_focus") or cut.get("speaker_focus") or "").strip() or None,
+                    },
+                    "final_clip": {
+                        "status": "generated" if final_clip and final_clip.exists() else "missing",
+                        "file_name": final_clip.name if final_clip else None,
+                        "local_path": str(final_clip) if final_clip else None,
+                    },
+                }
+            )
+        return videos

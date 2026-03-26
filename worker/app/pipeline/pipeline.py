@@ -642,6 +642,8 @@ para continuar o processamento.
         except Exception:
             raise RuntimeError("Invalid JSON received from AI")
 
+        self.manual_response = self._normalize_response_schema(self.manual_response)
+
         if "shorts_content" not in self.manual_response:
             raise RuntimeError("Invalid response: shorts_content missing")
 
@@ -678,6 +680,12 @@ para continuar o processamento.
             raise RuntimeError("shorts_content is empty")
 
         cuts = self._normalize_cuts_to_transcript(cuts, transcript_segments)
+        cuts = self._align_first_cut_to_global_hook(
+            cuts,
+            transcript_segments,
+            self.manual_response.get("post", {}),
+        )
+        cuts = self._prune_disconnected_short_serie_cuts(cuts)
         self.manual_response["shorts_content"] = cuts
 
         self._log("🎬 Generating cuts...")
@@ -728,9 +736,16 @@ para continuar o processamento.
             filtered_cuts,
             transcript_segments,
         )
-        final_reel_path = self._render_final_reel(cut_files, render_plan, subtitle_path)
+        final_clip_files = self._render_final_clips(
+            filtered_cuts,
+            cut_files,
+            render_plan,
+            transcript_segments,
+        )
+        final_reel_path = None
         publish_package = self._build_publish_package(
             filtered_cuts,
+            final_clip_files,
             final_reel_path,
             subtitle_path,
             qa_report,
@@ -739,6 +754,7 @@ para continuar o processamento.
         delivery_package = self._build_delivery_package(
             filtered_cuts,
             cut_files,
+            final_clip_files,
             final_reel_path,
             subtitle_path,
             qa_report,
@@ -747,9 +763,6 @@ para continuar o processamento.
         )
 
         self._mark_step("send_cuts", "started")
-        for path in cut_files:
-            self.telegram.send_video(path, caption=f"Corte {Path(path).name} - JOB_ID: {self.job_id}")
-
         if qa_report is not None:
             qa_report_path = self._write_json_artifact("qa_report.json", qa_report, "qa_report")
 
@@ -771,16 +784,16 @@ para continuar o processamento.
             "publish_package",
         )
 
-        if final_reel_path is not None and final_reel_path.exists():
+        for index, path in enumerate(final_clip_files, start=1):
             self.artifacts.mark_local(
-                "final_reel",
+                f"final_clip_{index:02d}",
                 settings.pipeline_stage,
-                final_reel_path,
+                path,
                 artifact_type="video",
             )
             self.telegram.send_video(
-                str(final_reel_path),
-                caption=str(publish_package.get("telegram_caption") or f"Final reel for JOB_ID: {self.job_id}"),
+                str(path),
+                caption=f"Video final {index} - JOB_ID: {self.job_id}",
             )
         if subtitle_path is not None and subtitle_path.exists():
             self.artifacts.mark_local(
@@ -799,6 +812,7 @@ para continuar o processamento.
             "status": "success",
             "job_id": self.job_id,
             "cut_files": cut_files,
+            "final_clip_files": [str(path) for path in final_clip_files],
             "final_reel_path": str(final_reel_path) if final_reel_path is not None else None,
             "subtitle_path": str(subtitle_path) if subtitle_path is not None else None,
             "qa_report_path": str(self.work_dir / "qa_report.json") if qa_report is not None else None,
@@ -808,6 +822,53 @@ para continuar o processamento.
             "runtime_status_path": str(self.runtime.runtime_path),
             "artifacts_manifest_path": str(self.artifacts.manifest_path),
         }
+
+    def _normalize_response_schema(self, payload: dict) -> dict:
+        normalized = dict(payload or {})
+        final_videos = normalized.get("final_videos")
+        if not isinstance(final_videos, list) or not final_videos:
+            return normalized
+
+        flattened_cuts: list[dict] = []
+        normalized_videos: list[dict] = []
+
+        for index, video in enumerate(final_videos, start=1):
+            if not isinstance(video, dict):
+                continue
+
+            cuts = video.get("shorts_content") or []
+            if not isinstance(cuts, list) or not cuts:
+                continue
+
+            post = self._normalize_post_payload(video.get("post"), cuts)
+            video_index = int(video.get("video_index") or index)
+            normalized_videos.append(
+                {
+                    **video,
+                    "video_index": video_index,
+                    "post": post,
+                    "shorts_content": cuts,
+                }
+            )
+
+            for cut in cuts:
+                if not isinstance(cut, dict):
+                    continue
+                flattened_cuts.append(
+                    {
+                        **cut,
+                        "_post": post,
+                        "_video_index": video_index,
+                    }
+                )
+
+        if flattened_cuts:
+            normalized["shorts_content"] = flattened_cuts
+        if normalized_videos:
+            normalized["final_videos"] = normalized_videos
+            normalized["post"] = normalized_videos[0].get("post", {})
+
+        return normalized
 
     def _normalize_post_payload(self, post_payload: dict | None, cuts: list[dict]) -> dict:
         payload = dict(post_payload or {})
@@ -853,6 +914,11 @@ para continuar o processamento.
         if global_hook and len(global_hook) < 18:
             warnings.append("post: short_hook")
 
+        if global_hook and cuts:
+            first_cut = cuts[0]
+            if not self._text_belongs_to_cut(global_hook, first_cut):
+                warnings.append("post: hook_outside_first_cut")
+
         for index, cut in enumerate(cuts, start=1):
             start = float(cut.get("start", 0.0) or 0.0)
             end = float(cut.get("end", 0.0) or 0.0)
@@ -878,17 +944,38 @@ para continuar o processamento.
         }
 
     def _build_publish_message(self, publish_package: dict) -> str:
-        title = str(publish_package.get("primary_title") or "Video pronto").strip()
-        hook = str(publish_package.get("primary_hook") or "").strip()
-        description = str(publish_package.get("description") or "").strip()
-        hashtags = " ".join(publish_package.get("hashtags") or [])
-        lines = [f"🎯 PUBLICAÇÃO PRONTA", f"JOB_ID: {self.job_id}", "", title]
-        if hook:
-            lines.append(hook)
-        if description:
-            lines.extend(["", description])
-        if hashtags:
-            lines.extend(["", hashtags])
+        videos = publish_package.get("videos") or []
+        lines = [f"🎯 PUBLICAÇÃO PRONTA", f"JOB_ID: {self.job_id}"]
+
+        for video in videos:
+            post = video.get("post") or {}
+            hashtags = " ".join(post.get("hashtags") or [])
+            lines.extend(
+                [
+                    "",
+                    f"Vídeo {video.get('video_index')}",
+                    str(post.get("title") or "Video pronto").strip(),
+                ]
+            )
+            if str(post.get("hook") or "").strip():
+                lines.append(str(post.get("hook")).strip())
+            if str(post.get("description") or "").strip():
+                lines.append(str(post.get("description")).strip())
+            if hashtags:
+                lines.append(hashtags)
+
+        if not videos:
+            title = str(publish_package.get("primary_title") or "Video pronto").strip()
+            hook = str(publish_package.get("primary_hook") or "").strip()
+            description = str(publish_package.get("description") or "").strip()
+            hashtags = " ".join(publish_package.get("hashtags") or [])
+            lines.extend(["", title])
+            if hook:
+                lines.append(hook)
+            if description:
+                lines.extend(["", description])
+            if hashtags:
+                lines.extend(["", hashtags])
         return "\n".join(line for line in lines if line is not None)
 
     def _sanitize_json_text(self, text: str) -> str:
@@ -1045,6 +1132,65 @@ para continuar o processamento.
 
         adjusted = self._remove_adjacent_overlap(normalized, transcript_segments)
         return self._improve_sequence_continuity(adjusted, transcript_segments)
+
+    def _align_first_cut_to_global_hook(
+        self,
+        cuts: list[dict],
+        transcript_segments: list[dict],
+        post_payload: dict,
+    ) -> list[dict]:
+        if not cuts or not transcript_segments:
+            return cuts
+
+        hook_text = str(post_payload.get("hook") or "").strip()
+        if not hook_text:
+            return cuts
+
+        first = dict(cuts[0])
+        first_start = float(first.get("safe_start", first.get("start", 0.0)))
+        first_end = float(first.get("safe_end", first.get("end", 0.0)))
+        if self._text_belongs_to_cut(hook_text, first):
+            return cuts
+
+        hook_segment = self._find_best_matching_segment(hook_text, transcript_segments)
+        if hook_segment is None:
+            return cuts
+
+        hook_start = float(hook_segment.get("start", first_start))
+        hook_end = float(hook_segment.get("end", first_end))
+        if hook_start > first_end or hook_end < first_start:
+            return cuts
+
+        new_start = min(first_start, hook_start)
+        max_duration = float(settings.qa_max_clip_duration_sec)
+        new_end = first_end
+        if (new_end - new_start) > max_duration:
+            new_end = min(first_end, new_start + max_duration)
+
+        first["start"] = round(new_start, 2)
+        first["safe_start"] = round(new_start, 2)
+        first["end"] = round(new_end, 2)
+        first["safe_end"] = round(new_end, 2)
+
+        updated = [first, *cuts[1:]]
+        return self._remove_adjacent_overlap(updated, transcript_segments)
+
+    def _prune_disconnected_short_serie_cuts(self, cuts: list[dict]) -> list[dict]:
+        if self.clip_mode != "short_serie" or len(cuts) < 2:
+            return cuts
+
+        ordered = sorted((dict(cut) for cut in cuts), key=lambda item: float(item["start"]))
+        selected = [ordered[0]]
+        max_soft_gap = min(float(settings.short_serie_max_gap_sec), 12.0)
+
+        for candidate in ordered[1:]:
+            previous = selected[-1]
+            gap = float(candidate["start"]) - float(previous["end"])
+            if gap > max_soft_gap and self._cut_pair_feels_disconnected(previous, candidate):
+                break
+            selected.append(candidate)
+
+        return selected
 
     def _find_segment_covering(self, transcript_segments: list[dict], timestamp: float) -> dict | None:
         for segment in transcript_segments:
@@ -1323,6 +1469,59 @@ para continuar o processamento.
         allowed_overlap = 0.6
         return max(backfill_start, previous_end - allowed_overlap)
 
+    def _find_best_matching_segment(
+        self,
+        target_text: str,
+        transcript_segments: list[dict],
+    ) -> dict | None:
+        target_tokens = self._tokenize_text(target_text)
+        if not target_tokens:
+            return None
+
+        best_segment = None
+        best_score = 0.0
+        for segment in transcript_segments:
+            segment_text = str(segment.get("text") or "").strip()
+            if not segment_text:
+                continue
+
+            segment_tokens = self._tokenize_text(segment_text)
+            if not segment_tokens:
+                continue
+
+            overlap = len(target_tokens & segment_tokens) / max(1, len(target_tokens))
+            if overlap > best_score:
+                best_score = overlap
+                best_segment = segment
+
+        if best_score < 0.34:
+            return None
+        return best_segment
+
+    def _text_belongs_to_cut(self, text: str, cut: dict) -> bool:
+        cut_text = str(cut.get("reason") or "") + " " + str(cut.get("hook") or "")
+        token_overlap = self._token_overlap_ratio(text, cut_text)
+        return token_overlap >= 0.4
+
+    def _cut_pair_feels_disconnected(self, left: dict, right: dict) -> bool:
+        left_text = str(left.get("reason") or "") + " " + str(left.get("hook") or "")
+        right_text = str(right.get("reason") or "") + " " + str(right.get("hook") or "")
+        return self._token_overlap_ratio(left_text, right_text) < 0.16
+
+    def _token_overlap_ratio(self, left_text: str, right_text: str) -> float:
+        left_tokens = self._tokenize_text(left_text)
+        right_tokens = self._tokenize_text(right_text)
+        if not left_tokens or not right_tokens:
+            return 0.0
+        return len(left_tokens & right_tokens) / max(1, min(len(left_tokens), len(right_tokens)))
+
+    def _tokenize_text(self, text: str) -> set[str]:
+        return {
+            token
+            for token in "".join(char.lower() if char.isalnum() else " " for char in text).split()
+            if len(token) > 2
+        }
+
     def _find_previous_segment_start(
         self,
         transcript_segments: list[dict],
@@ -1394,6 +1593,7 @@ para continuar o processamento.
         self,
         filtered_cuts: list[dict],
         cut_files: list[Path],
+        final_clip_files: list[Path],
         final_reel_path: Path | None,
         subtitle_path: Path | None,
         qa_report: dict | None,
@@ -1407,6 +1607,7 @@ para continuar o processamento.
             video_ratio=self.video_ratio,
             cuts=filtered_cuts,
             cut_files=cut_files,
+            final_clip_files=final_clip_files,
             final_reel_path=final_reel_path,
             subtitle_path=subtitle_path,
             post_payload=self.manual_response.get("post"),
@@ -1428,6 +1629,7 @@ para continuar o processamento.
     def _build_publish_package(
         self,
         filtered_cuts: list[dict],
+        final_clip_files: list[Path],
         final_reel_path: Path | None,
         subtitle_path: Path | None,
         qa_report: dict | None,
@@ -1440,6 +1642,7 @@ para continuar o processamento.
             video_ratio=self.video_ratio,
             cuts=filtered_cuts,
             post_payload=self.manual_response.get("post"),
+            final_clip_files=final_clip_files,
             final_reel_path=final_reel_path,
             subtitle_path=subtitle_path,
             qa_report=qa_report,
@@ -1518,6 +1721,44 @@ para continuar o processamento.
 
         self._mark_step("final_reel", "completed", output_path=str(output))
         return output
+
+    def _render_final_clips(
+        self,
+        filtered_cuts: list[dict],
+        cut_files: list[Path],
+        render_plan: dict,
+        transcript_segments: list[dict],
+    ) -> list[Path]:
+        self._mark_step("final_clips", "started")
+        final_clips_dir = self.work_dir / "final_clips"
+        final_clips_dir.mkdir(parents=True, exist_ok=True)
+        clips_plan = {
+            int(item.get("clip_index", 0)): item
+            for item in render_plan.get("clips", [])
+            if item.get("clip_index")
+        }
+        soundtrack = render_plan.get("soundtrack") or {}
+        outputs: list[Path] = []
+
+        for index, (cut, cut_file) in enumerate(zip(filtered_cuts, cut_files), start=1):
+            subtitle_output = final_clips_dir / f"final_clip_{index:02d}.srt"
+            clip_subtitle_path = self.subtitle_builder.build_clip_srt(
+                cut=cut,
+                transcript_segments=transcript_segments,
+                output_path=subtitle_output,
+            )
+            clip_output = final_clips_dir / f"final_clip_{index:02d}.mp4"
+            rendered_path = self.final_renderer.render_clip(
+                input_path=cut_file,
+                clip_plan=clips_plan.get(index, {}),
+                subtitle_path=clip_subtitle_path,
+                soundtrack=soundtrack,
+                output_path=clip_output,
+            )
+            outputs.append(rendered_path)
+
+        self._mark_step("final_clips", "completed", clip_count=len(outputs))
+        return outputs
 
     def _run_auto_review(
         self,

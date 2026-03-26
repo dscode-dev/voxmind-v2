@@ -69,6 +69,49 @@ class FinalVideoRenderer:
 
         return final_output
 
+    def render_clip(
+        self,
+        *,
+        input_path: Path,
+        clip_plan: Dict,
+        subtitle_path: Path | None = None,
+        soundtrack: Dict | None = None,
+        output_path: Path,
+    ) -> Path:
+        prepared_path = self.render_dir / f"{output_path.stem}_prepared.mp4"
+        self._render_clip_with_overlay(
+            input_path=input_path,
+            output_path=prepared_path,
+            clip_plan=clip_plan,
+        )
+
+        current_output = prepared_path
+        soundtrack = soundtrack or {}
+        if soundtrack.get("status") == "selected" and soundtrack.get("local_path"):
+            mixed_output = self.render_dir / f"{output_path.stem}_mixed.mp4"
+            self._mix_soundtrack(
+                input_path=current_output,
+                soundtrack_path=Path(str(soundtrack["local_path"])),
+                volume=float(soundtrack.get("mix_volume", 0.12) or 0.12),
+                output_path=mixed_output,
+            )
+            current_output = mixed_output
+
+        if subtitle_path is not None and subtitle_path.exists():
+            burned_output = self.render_dir / f"{output_path.stem}_burned.mp4"
+            self._burn_subtitles(
+                input_path=current_output,
+                subtitle_path=subtitle_path,
+                output_path=burned_output,
+            )
+            current_output = burned_output
+
+        if current_output != output_path:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            current_output.replace(output_path)
+
+        return output_path
+
     def _assemble_sequence(
         self,
         *,
@@ -537,7 +580,7 @@ class FinalVideoRenderer:
 
         prepared_files = [teaser_path, intro_main_path, *prepared_files[1:]]
         prepared_durations = [actual_duration, *prepared_durations]
-        transition_plans = [{} for _ in range(len(prepared_files))]
+        transition_plans = [{}, *transition_plans]
 
         return prepared_files, prepared_durations, transition_plans, True
 

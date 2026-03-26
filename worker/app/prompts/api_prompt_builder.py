@@ -57,7 +57,7 @@ video_ratio: {video_ratio}
 TASK
 
 Select the best narrative cuts from the speaker-aware transcript.
-Treat this as one final assembled video, not a set of isolated clips.
+Treat this as a task to produce up to 3 separate final videos, each one independently postable.
 
 MANDATORY RULES
 
@@ -70,10 +70,18 @@ MANDATORY RULES
 - Prefer editorially complete cuts over merely loud or sensational ones.
 - Avoid redundant cuts that repeat the same narrative beat.
 - If the best cut is outside the prioritized candidates, follow the story and pick it anyway.
-- The selected cuts will be assembled into one final video, so preserve context between consecutive cuts.
-- Prefer a chronologically cohesive sequence inside the same narrative arc.
-- Avoid large time jumps between cuts unless they are essential for the final payoff.
-- The final cut must end with a clear verbal closure or payoff.
+- Produce up to 3 final videos that can each stand alone.
+- Each final video must have its own hook, title, description and closure.
+- Do not split one incomplete thought across different final videos.
+- Prefer fewer strong final videos over 3 weak or incomplete ones.
+- `post.hook` must be fully contained inside the first selected cut.
+- The first cut must start before or exactly where the hook phrase begins.
+- If a strong hook sits outside the first cut, either move the first cut to include it or choose a different hook.
+- Every cut after the first must feel like a natural continuation of the previous one, not a new disconnected subject.
+- If the choice is between 3 disconnected cuts or 2 coherent cuts, prefer 2 coherent cuts.
+- Do not pick a later cut only because it is strong in isolation; it must strengthen the assembled video.
+- If there is a meaningful time jump between consecutive cuts, explain why the jump still preserves narrative logic.
+- Prefer ending slightly earlier with a clear closure over ending in the middle of the subject.
 
 MODE RULES
 
@@ -112,30 +120,42 @@ Return ONLY valid JSON in this format:
     ],
     "final_payoff": "the closing line or conclusion the final video should end on"
   }},
-  "post": {{
-    "title": "main final video title",
-    "hook": "main hook used in the cold open",
-    "description": "final posting description",
-    "hashtags": ["#tag1", "#tag2", "#tag3"],
-    "thumbnail": "thumbnail idea",
-    "speaker_focus": "SPEAKER_01 | SPEAKER_02 | null"
-  }},
-  "shorts_content": [
+  "final_videos": [
     {{
-      "start": 10.5,
-      "end": 45.3,
-      "safe_start": 10.5,
-      "safe_end": 45.3,
-      "reason": "why this cut is good and respects speaker continuity and requested mode",
-      "narrative_role": "hook | setup | development | payoff",
-      "merge_group": "story_1",
-      "speaker_focus": "SPEAKER_01 | SPEAKER_02 | null",
-      "transition_after": "hard_cut | punch_in | whoosh | fade | none"
+      "video_index": 1,
+      "post": {{
+        "title": "main final video title",
+        "hook": "main hook used in the opening of this final video",
+        "hook_source_cut_index": 0,
+        "description": "final posting description",
+        "hashtags": ["#tag1", "#tag2", "#tag3"],
+        "thumbnail": "thumbnail idea",
+        "speaker_focus": "SPEAKER_01 | SPEAKER_02 | null"
+      }},
+      "shorts_content": [
+        {{
+          "start": 10.5,
+          "end": 45.3,
+          "safe_start": 10.5,
+          "safe_end": 45.3,
+          "reason": "why this cut is good and respects speaker continuity and requested mode",
+          "narrative_role": "hook | setup | development | payoff",
+          "merge_group": "story_1",
+          "continuity_note": "how this final video stands on its own",
+          "speaker_focus": "SPEAKER_01 | SPEAKER_02 | null",
+          "transition_after": "hard_cut | punch_in | whoosh | fade | none"
+        }}
+      ]
     }}
   ]
 }}
 
 Use transcript, timeline, heuristic candidates and ClipsAI candidates as strong context, but keep editorial autonomy if a better sequence is clearly supported by the material.
+Return `final_videos` with up to 3 separate final videos.
+Each `final_videos[i]` should usually contain exactly 1 main cut in `shorts_content`.
+`final_videos[i].post.hook_source_cut_index` must point to the cut index inside `final_videos[i].shorts_content` that fully contains the main hook.
+`final_videos[i].shorts_content[0]` must fully contain the main hook for that final video.
+If there is only enough strong material for 1 or 2 good final videos, return only 1 or 2.
 """
 
     def _build_mode_instructions(self, clip_mode: str) -> str:

@@ -11,6 +11,7 @@ class DeliveryPackageBuilder:
         video_ratio: str,
         cuts: List[Dict],
         cut_files: List[Path],
+        final_clip_files: List[Path],
         final_reel_path: Path | None,
         subtitle_path: Path | None,
         post_payload: Dict | None,
@@ -22,6 +23,7 @@ class DeliveryPackageBuilder:
         response_validation: Dict | None = None,
     ) -> Dict:
         clips = []
+        videos = []
         automation_by_index = {
             int(clip.get("clip_index", 0)): clip
             for clip in (automation_report or {}).get("clips", [])
@@ -31,11 +33,14 @@ class DeliveryPackageBuilder:
         for index, cut_file in enumerate(cut_files):
             cut = cuts[index] if index < len(cuts) else {}
             clip_index = index + 1
+            final_clip_file = final_clip_files[index] if index < len(final_clip_files) else None
             clips.append(
                 {
                     "clip_index": clip_index,
                     "file_name": cut_file.name,
                     "local_path": str(cut_file),
+                    "final_file_name": final_clip_file.name if final_clip_file else None,
+                    "final_local_path": str(final_clip_file) if final_clip_file else None,
                     "start": float(cut.get("start", 0.0)),
                     "end": float(cut.get("end", 0.0)),
                     "safe_start": float(cut.get("safe_start", cut.get("start", 0.0))),
@@ -50,6 +55,15 @@ class DeliveryPackageBuilder:
                     "automation": automation_by_index.get(clip_index),
                 }
             )
+            videos.append(
+                {
+                    "video_index": clip_index,
+                    "post": cut.get("_post") or post_payload or {},
+                    "clip_index": clip_index,
+                    "final_file_name": final_clip_file.name if final_clip_file else None,
+                    "final_local_path": str(final_clip_file) if final_clip_file else None,
+                }
+            )
 
         return {
             "job_id": job_id,
@@ -60,9 +74,11 @@ class DeliveryPackageBuilder:
             "response_validation": response_validation or {},
             "automation": automation_report,
             "post": post_payload or {},
+            "videos": videos,
             "clip_count": len(clips),
             "clips": clips,
             "final_assets": {
+                "final_clips": self._final_clips_payload(final_clip_files),
                 "final_reel": self._final_reel_payload(final_reel_path),
                 "subtitles": self._subtitle_payload(subtitle_path),
             },
@@ -111,3 +127,16 @@ class DeliveryPackageBuilder:
             "local_path": str(subtitle_path),
             "format": "srt",
         }
+
+    def _final_clips_payload(self, final_clip_files: List[Path]) -> List[Dict]:
+        payload: List[Dict] = []
+        for index, path in enumerate(final_clip_files, start=1):
+            payload.append(
+                {
+                    "clip_index": index,
+                    "status": "generated" if path.exists() else "missing",
+                    "file_name": path.name,
+                    "local_path": str(path),
+                }
+            )
+        return payload
