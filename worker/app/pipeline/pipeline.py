@@ -1087,6 +1087,30 @@ para continuar o processamento.
             current["end"] = round(bridged_end, 2)
             current["safe_end"] = round(bridged_end, 2)
 
+            next_start = self._backfill_cut_start_for_context(
+                cut=nxt,
+                previous_end=bridged_end,
+                transcript_segments=transcript_segments,
+            )
+            if next_start is not None:
+                nxt["start"] = round(next_start, 2)
+                nxt["safe_start"] = round(next_start, 2)
+
+        for index in range(1, len(adjusted)):
+            previous = adjusted[index - 1]
+            current = adjusted[index]
+            if not self._cut_needs_context_bridge(current, transcript_segments):
+                continue
+
+            next_start = self._backfill_cut_start_for_context(
+                cut=current,
+                previous_end=float(previous.get("end", 0.0)),
+                transcript_segments=transcript_segments,
+            )
+            if next_start is not None:
+                current["start"] = round(next_start, 2)
+                current["safe_start"] = round(next_start, 2)
+
         last = adjusted[-1]
         last_start = float(last.get("start", 0.0))
         last_end = float(last.get("end", 0.0))
@@ -1160,7 +1184,15 @@ para continuar o processamento.
             if self._segment_has_strong_ending(segment):
                 return segment_end
 
-        return extension_candidate
+        previous_strong_end = self._find_previous_strong_ending(
+            transcript_segments,
+            start=start,
+            current_end=current_end,
+        )
+        if previous_strong_end is not None:
+            return previous_strong_end
+
+        return current_end
 
     def _has_strong_closing_near_timestamp(
         self,
@@ -1190,6 +1222,65 @@ para continuar o processamento.
             return True
 
         return False
+
+    def _backfill_cut_start_for_context(
+        self,
+        *,
+        cut: dict,
+        previous_end: float,
+        transcript_segments: list[dict],
+    ) -> float | None:
+        current_start = float(cut.get("start", 0.0))
+        if current_start <= previous_end:
+            return None
+
+        previous_segment_start = self._find_previous_segment_start(
+            transcript_segments,
+            current_start,
+        )
+        if previous_segment_start is None:
+            return None
+
+        max_backfill = float(settings.render_context_backfill_max_sec)
+        if (current_start - previous_segment_start) > max_backfill:
+            return None
+
+        allowed_overlap = 0.6
+        return max(previous_segment_start, previous_end - allowed_overlap)
+
+    def _find_previous_segment_start(
+        self,
+        transcript_segments: list[dict],
+        timestamp: float,
+    ) -> float | None:
+        previous_start = None
+        for segment in transcript_segments:
+            segment_start = float(segment.get("start", 0.0))
+            if segment_start >= timestamp:
+                break
+            previous_start = segment_start
+        return previous_start
+
+    def _find_previous_strong_ending(
+        self,
+        transcript_segments: list[dict],
+        *,
+        start: float,
+        current_end: float,
+    ) -> float | None:
+        min_duration_end = start + float(settings.render_min_clip_duration_sec)
+        candidate = None
+
+        for segment in transcript_segments:
+            segment_end = float(segment.get("end", 0.0))
+            if segment_end > current_end:
+                break
+            if segment_end < min_duration_end:
+                continue
+            if self._segment_has_strong_ending(segment):
+                candidate = segment_end
+
+        return candidate
 
     def _run_clip_qa(
         self,

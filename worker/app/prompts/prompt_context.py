@@ -17,9 +17,9 @@ def build_transcript_context(
     transcript: List[Dict],
     candidates: List[Dict],
     max_chars: int,
-    context_padding_sec: int = 8,
-    max_candidates: int = 3,
-    max_segments_per_candidate: int = 6,
+    context_padding_sec: int = 14,
+    max_candidates: int = 5,
+    max_segments_per_candidate: int = 10,
 ) -> str:
     full_text = _format_transcript_segments(transcript)
     if len(full_text) <= max_chars:
@@ -60,6 +60,13 @@ def build_transcript_context(
             if included_for_candidate >= max_segments_per_candidate:
                 break
 
+    for segment in _sample_story_segments(transcript):
+        key = (float(segment["start"]), float(segment["end"]))
+        if key in seen_ranges:
+            continue
+        seen_ranges.add(key)
+        selected_segments.append(segment)
+
     selected_segments.sort(key=lambda item: float(item["start"]))
     focused_segments = _limit_transcript_segments(selected_segments)
     focused_text = _format_transcript_segments(focused_segments)
@@ -89,7 +96,7 @@ def build_candidate_context(candidates: List[Dict], max_chars: int) -> str:
                 "speakers": candidate.get("speakers", []),
                 "editorial_signals": candidate.get("editorial_signals", {}),
                 "reason_signals": candidate.get("score_breakdown", {}),
-                "text": _truncate_text(candidate.get("text", ""), 280),
+                "text": _truncate_text(candidate.get("text", ""), 420),
             }
         )
 
@@ -100,7 +107,7 @@ def build_candidate_context(candidates: List[Dict], max_chars: int) -> str:
 def build_timeline_context(
     transcript: List[Dict],
     max_chars: int,
-    block_size_sec: int = 45,
+    block_size_sec: int = 35,
 ) -> str:
     if not transcript:
         return ""
@@ -132,7 +139,7 @@ def build_candidate_neighborhood_context(
     candidates: List[Dict],
     max_chars: int,
     max_candidates: int = 4,
-    neighbor_segments: int = 2,
+    neighbor_segments: int = 4,
 ) -> str:
     if not transcript or not candidates:
         return ""
@@ -213,6 +220,32 @@ def _build_timeline_block(segments: List[Dict]) -> Dict:
         "speakers": speakers,
         "summary": _truncate_text(combined_text, 320),
     }
+
+
+def _sample_story_segments(transcript: List[Dict], samples_per_region: int = 4) -> List[Dict]:
+    if not transcript:
+        return []
+
+    total = len(transcript)
+    if total <= samples_per_region * 3:
+        return transcript
+
+    first = transcript[:samples_per_region]
+    middle_start = max(0, (total // 2) - (samples_per_region // 2))
+    middle = transcript[middle_start : middle_start + samples_per_region]
+    last = transcript[-samples_per_region:]
+
+    sampled: List[Dict] = []
+    seen: set[tuple[float, float]] = set()
+    for region in (first, middle, last):
+        for segment in region:
+            key = (float(segment["start"]), float(segment["end"]))
+            if key in seen:
+                continue
+            seen.add(key)
+            sampled.append(segment)
+
+    return sampled
 
 
 def _limit_transcript_segments(

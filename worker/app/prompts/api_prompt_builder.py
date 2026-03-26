@@ -30,20 +30,20 @@ class ApiPromptBuilder:
         transcript_context = build_transcript_context(
             transcript=transcript,
             candidates=candidates,
-            max_chars=int(self.max_context_chars * 0.38),
+            max_chars=int(self.max_context_chars * 0.5),
         )
         timeline_context = build_timeline_context(
             transcript=transcript,
-            max_chars=int(self.max_context_chars * 0.22),
+            max_chars=int(self.max_context_chars * 0.2),
         )
         neighborhood_context = build_candidate_neighborhood_context(
             transcript=transcript,
             candidates=candidates,
-            max_chars=int(self.max_context_chars * 0.14),
+            max_chars=int(self.max_context_chars * 0.16),
         )
         candidate_context = build_candidate_context(
             candidates=candidates,
-            max_chars=int(self.max_context_chars * 0.16),
+            max_chars=int(self.max_context_chars * 0.14),
         )
 
         return f"""
@@ -67,6 +67,7 @@ MANDATORY RULES
 - You may adjust timestamps slightly to preserve complete meaning.
 - Prefer editorially complete cuts over merely loud or sensational ones.
 - Avoid redundant cuts that repeat the same narrative beat.
+- If the best cut is outside the prioritized candidates, follow the story and pick it anyway.
 - The selected cuts will be assembled into one final video, so preserve context between consecutive cuts.
 - The final cut must end with a clear verbal closure or payoff.
 

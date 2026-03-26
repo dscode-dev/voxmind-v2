@@ -163,11 +163,11 @@ class RenderPlanBuilder:
 
         segment_start = float(best_segment.get("start", clip_start))
         segment_end = float(best_segment.get("end", clip_end))
-        preview_start = max(0.0, segment_start - clip_start)
+        preview_start = max(0.0, segment_start - clip_start - 0.35)
         preview_duration = min(
-            DEFAULT_COLD_OPEN_DURATION_SEC,
-            max(0.8, segment_end - segment_start),
-            max(0.8, clip_end - clip_start - preview_start),
+            DEFAULT_COLD_OPEN_DURATION_SEC + 0.9,
+            max(1.4, (segment_end - segment_start) + 0.9),
+            max(1.4, clip_end - clip_start - preview_start),
         )
 
         return {

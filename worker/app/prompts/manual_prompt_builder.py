@@ -39,23 +39,23 @@ class ManualPromptBuilder:
         transcript_context = build_transcript_context(
             transcript=transcript,
             candidates=candidates,
-            max_chars=int(self.max_context_chars * 0.38),
+            max_chars=int(self.max_context_chars * 0.5),
             max_candidates=self.prompt_max_candidates,
             max_segments_per_candidate=self.prompt_max_segments_per_candidate,
         )
         timeline_context = build_timeline_context(
             transcript=transcript,
-            max_chars=int(self.max_context_chars * 0.22),
+            max_chars=int(self.max_context_chars * 0.2),
         )
         neighborhood_context = build_candidate_neighborhood_context(
             transcript=transcript,
             candidates=candidates,
-            max_chars=int(self.max_context_chars * 0.14),
+            max_chars=int(self.max_context_chars * 0.16),
             max_candidates=self.prompt_max_candidates,
         )
         candidate_context = build_candidate_context(
             candidates=candidates,
-            max_chars=int(self.max_context_chars * 0.16),
+            max_chars=int(self.max_context_chars * 0.14),
         )
 
         return f"""
@@ -96,6 +96,7 @@ REGRAS NARRATIVAS OBRIGATÓRIAS
 - Se houver dúvida entre um trecho muito chamativo e um trecho mais completo, prefira o mais completo.
 - Você pode ajustar timestamps em aproximadamente ±8 segundos para capturar início natural, desenvolvimento e fechamento.
 - Os candidatos são pistas, não limites rígidos.
+- Se o melhor corte estiver fora dos candidatos priorizados, siga a narrativa e escolha assim mesmo.
 - Pense que os cortes serão montados em um único vídeo final, não publicados isoladamente.
 - Preserve ponte de contexto entre cortes consecutivos da mesma história.
 - O último corte deve fechar o assunto com uma conclusão clara, payoff ou fechamento verbal forte.

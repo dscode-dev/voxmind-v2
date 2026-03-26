@@ -78,15 +78,15 @@ class Settings(BaseSettings):
     )
 
     llm_max_chars: int = Field(
-        default=12000,
+        default=18000,
         alias="LLM_MAX_CHARS"
     )
     prompt_max_candidates: int = Field(
-        default=3,
+        default=5,
         alias="PROMPT_MAX_CANDIDATES"
     )
     prompt_max_segments_per_candidate: int = Field(
-        default=6,
+        default=10,
         alias="PROMPT_MAX_SEGMENTS_PER_CANDIDATE"
     )
 
@@ -224,6 +224,10 @@ class Settings(BaseSettings):
     render_sequence_bridge_max_gap_sec: float = Field(
         default=10.0,
         alias="RENDER_SEQUENCE_BRIDGE_MAX_GAP_SEC"
+    )
+    render_context_backfill_max_sec: float = Field(
+        default=2.5,
+        alias="RENDER_CONTEXT_BACKFILL_MAX_SEC"
     )
     render_final_closure_extension_max_sec: float = Field(
         default=14.0,
