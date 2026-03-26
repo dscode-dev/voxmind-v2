@@ -3,6 +3,7 @@ FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
 ARG POETRY_INSTALL_GROUPS="diarization"
 ARG TORCH_VERSION="2.5.1"
 ARG TORCHAUDIO_VERSION="2.5.1"
+ARG TORCHVISION_VERSION="0.20.1"
 ARG POETRY_VERSION="2.0.1"
 ARG PYTHON_VERSION="3.11"
 ARG TORCH_FLAVOR="gpu"
@@ -62,12 +63,14 @@ RUN if echo "$POETRY_INSTALL_GROUPS" | grep -Eq '(^|,| )diarization($|,| )'; the
             python -m pip install --no-cache-dir \
                 --index-url https://download.pytorch.org/whl/cu124 \
                 "torch==${TORCH_VERSION}" \
-                "torchaudio==${TORCHAUDIO_VERSION}"; \
+                "torchaudio==${TORCHAUDIO_VERSION}" \
+                "torchvision==${TORCHVISION_VERSION}"; \
         else \
             python -m pip install --no-cache-dir \
                 --index-url https://download.pytorch.org/whl/cpu \
                 "torch==${TORCH_VERSION}" \
-                "torchaudio==${TORCHAUDIO_VERSION}"; \
+                "torchaudio==${TORCHAUDIO_VERSION}" \
+                "torchvision==${TORCHVISION_VERSION}"; \
         fi; \
     fi
 
