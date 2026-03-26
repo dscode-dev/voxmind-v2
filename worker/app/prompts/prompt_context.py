@@ -81,6 +81,7 @@ def build_candidate_context(candidates: List[Dict], max_chars: int) -> str:
         compact_candidates.append(
             {
                 "candidate_id": candidate.get("candidate_id"),
+                "source": candidate.get("source", "heuristic"),
                 "start": candidate.get("start"),
                 "end": candidate.get("end"),
                 "duration": candidate.get("duration"),

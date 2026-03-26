@@ -101,6 +101,7 @@ class Scorer:
     def _to_output(self, candidate: Dict) -> Dict:
         return {
             "candidate_id": candidate.get("candidate_id"),
+            "source": candidate.get("source", "heuristic"),
             "start": float(candidate["start"]),
             "end": float(candidate["end"]),
             "duration": float(candidate.get("duration", float(candidate["end"]) - float(candidate["start"]))),
