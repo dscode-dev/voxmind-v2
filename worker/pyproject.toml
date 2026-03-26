@@ -29,6 +29,7 @@ onnxruntime = "^1.17.0"
 "pyannote.audio" = "^3.3.2"
 huggingface-hub = "0.25.*"
 clipsai = "*"
+whisperx = "^3.2.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.2.0"
