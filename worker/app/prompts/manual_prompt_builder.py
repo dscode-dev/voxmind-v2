@@ -1,9 +1,6 @@
 from typing import Dict, List
 
-from app.prompts.prompt_context import (
-    build_candidate_context,
-    build_transcript_context,
-)
+from app.prompts.prompt_context import build_transcript_context
 
 
 class ManualPromptBuilder:
@@ -30,22 +27,16 @@ class ManualPromptBuilder:
         clip_mode: str = "short_serie",
         video_ratio: str = "portrait",
     ) -> str:
-        prompt_candidates = candidates
-
         has_named_speakers = any(
             (segment.get("speaker") or "").strip().upper() not in {"", "UNKNOWN"}
             for segment in transcript
         )
         transcript_context = build_transcript_context(
             transcript=transcript,
-            candidates=prompt_candidates,
+            candidates=[],
             max_chars=int(self.max_context_chars * 0.80),
             max_candidates=self.prompt_max_candidates,
             max_segments_per_candidate=self.prompt_max_segments_per_candidate,
-        )
-        candidate_context = build_candidate_context(
-            candidates=prompt_candidates,
-            max_chars=int(self.max_context_chars * 0.20),
         )
 
         return f"""
@@ -83,7 +74,6 @@ O QUE VOCÊ DEVE FAZER
 - Cada vídeo final deve ter um hook forte no começo, desenvolvimento claro e fechamento real.
 - Prefira menos vídeos bons do que vários vídeos fracos.
 - Use o transcript como contexto principal.
-- Use os candidatos priorizados como pistas úteis, mas decida pelos trechos que melhor fecham a narrativa.
 - Você pode ajustar timestamps em aproximadamente ±8 segundos para capturar início natural e fechamento.
 
 REGRAS EDITORIAIS
@@ -153,10 +143,6 @@ CONTEXTO PRINCIPAL
 TRANSCRIPT RELEVANTE COM SPEAKERS
 
 {transcript_context}
-
-CANDIDATOS PRIORIZADOS
-
-{candidate_context}
 
 INSTRUÇÃO FINAL
 

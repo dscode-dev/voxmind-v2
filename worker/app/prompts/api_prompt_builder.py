@@ -1,9 +1,6 @@
 from typing import Dict, List
 
-from app.prompts.prompt_context import (
-    build_candidate_context,
-    build_transcript_context,
-)
+from app.prompts.prompt_context import build_transcript_context
 
 
 class ApiPromptBuilder:
@@ -25,16 +22,10 @@ class ApiPromptBuilder:
         clip_mode: str = "short_serie",
         video_ratio: str = "portrait",
     ) -> str:
-        prompt_candidates = candidates
-
         transcript_context = build_transcript_context(
             transcript=transcript,
-            candidates=prompt_candidates,
+            candidates=[],
             max_chars=int(self.max_context_chars * 0.80),
-        )
-        candidate_context = build_candidate_context(
-            candidates=prompt_candidates,
-            max_chars=int(self.max_context_chars * 0.20),
         )
 
         return f"""
@@ -58,7 +49,6 @@ MANDATORY RULES
 - Never end before the idea concludes.
 - Respect speaker continuity when dialogue is important.
 - Use the transcript as the primary context.
-- Use the prioritized candidates as useful hints, but choose the sequence that best closes the narrative.
 - You may adjust timestamps slightly to preserve complete meaning.
 - Prefer editorially complete cuts over merely loud or sensational ones.
 - Avoid redundant cuts that repeat the same narrative beat.
@@ -92,10 +82,6 @@ MODE RULES
 TRANSCRIPT WITH SPEAKERS
 
 {transcript_context}
-
-PRIORITIZED CANDIDATES
-
-{candidate_context}
 
 Return ONLY valid JSON in this format:
 
@@ -137,7 +123,7 @@ Use 1 or 2 cuts per final video according to the real narrative need.
   ]
 }}
 
-Use the transcript as the main context and the prioritized candidates as helpful hints, but keep editorial autonomy if a better sequence is clearly supported by the material.
+Use the transcript as the main context and choose the sequence that best closes the narrative.
 Return `final_videos` with up to 3 separate final videos.
 Each `final_videos[i]` must directly include `title`, `hook`, `hook_start`, `hook_end`, `description`, `hashtags`, `thumbnail`, `soundtrack_suggestion`, `speaker_focus` and `shorts_content`.
 Each `final_videos[i]` should preferably contain 2 connected cuts in `shorts_content` when strong continuation exists.

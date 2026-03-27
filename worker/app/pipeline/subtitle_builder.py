@@ -206,10 +206,12 @@ ScriptType: v4.00+
 WrapStyle: 2
 ScaledBorderAndShadow: yes
 YCbCr Matrix: TV.601
+PlayResX: 1080
+PlayResY: 1920
 
 [V4+ Styles]
 Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding
-Style: VoxMind,Montserrat SemiBold,20,&H00000000,&H00000000,&H00000000,&H00FFFFFF,1,0,0,0,100,100,0,0,3,0,0,2,90,90,360,1
+Style: VoxMind,DejaVu Sans,28,&H00000000,&H00000000,&H00000000,&H00FFFFFF,1,0,0,0,100,100,0,0,3,0,0,8,90,90,300,1
 
 [Events]
 Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text

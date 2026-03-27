@@ -42,6 +42,7 @@ def test_manual_prompt_builder_includes_speakers_and_mode_rules():
     assert '"safe_end"' in prompt
     assert '"speaker_focus"' in prompt
     assert '"transition_after"' in prompt
+    assert "CANDIDATOS PRIORIZADOS" not in prompt
 
 
 def test_manual_prompt_builder_respects_context_budget():

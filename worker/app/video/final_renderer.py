@@ -592,13 +592,19 @@ class FinalVideoRenderer:
         if source_duration <= 0.0 or relative_start_sec >= source_duration:
             return prepared_files, prepared_durations, transition_plans, False
 
-        actual_duration = min(duration_sec, max(0.8, source_duration - relative_start_sec))
+        playback_speed = max(0.5, float(settings.render_playback_speed or 1.0))
+        prepared_relative_start_sec = relative_start_sec / playback_speed
+        prepared_duration_sec = duration_sec / playback_speed
+        if prepared_relative_start_sec >= source_duration:
+            return prepared_files, prepared_durations, transition_plans, False
+
+        actual_duration = min(prepared_duration_sec, max(0.8, source_duration - prepared_relative_start_sec))
         teaser_path = self.render_dir / "prepared_00_hook.mp4"
         command = [
             "ffmpeg",
             "-y",
             "-ss",
-            str(relative_start_sec),
+            str(prepared_relative_start_sec),
             "-t",
             str(actual_duration),
             "-i",
@@ -646,7 +652,7 @@ class FinalVideoRenderer:
         intro_main_path = self.render_dir / "prepared_01_intro_main.mp4"
         intro_resume_sec = min(
             source_duration,
-            relative_start_sec + actual_duration,
+            prepared_relative_start_sec + actual_duration,
         )
         intro_main_command = [
             "ffmpeg",
