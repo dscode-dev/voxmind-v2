@@ -33,11 +33,13 @@ class SubtitleBuilder:
         transcript_segments: List[Dict],
         output_path: Path,
         lead_in_sec: float = 0.0,
+        cold_open: Dict | None = None,
     ) -> Path | None:
         events = self._events_for_final_reel(
             cuts=cuts,
             transcript_segments=transcript_segments,
             lead_in_sec=lead_in_sec,
+            cold_open=cold_open,
         )
         if not events:
             return None
@@ -52,35 +54,100 @@ class SubtitleBuilder:
         cuts: List[Dict],
         transcript_segments: List[Dict],
         lead_in_sec: float = 0.0,
+        cold_open: Dict | None = None,
     ) -> List[Dict]:
         events: List[Dict] = []
-        accumulated_offset = max(0.0, float(lead_in_sec or 0.0))
+        accumulated_offset = 0.0
+        cold_open = dict(cold_open or {})
+        consumed_first_cut_until = None
 
-        for cut in cuts:
+        if cuts and cold_open.get("enabled") and int(cold_open.get("source_clip_index", 1) or 1) == 1:
+            first_cut = cuts[0]
+            first_start = float(first_cut.get("safe_start", first_cut.get("start", 0.0)))
+            first_end = float(first_cut.get("safe_end", first_cut.get("end", 0.0)))
+            relative_start = max(0.0, float(cold_open.get("relative_start_sec", 0.0) or 0.0))
+            teaser_duration = max(0.0, float(cold_open.get("duration_sec", 0.0) or 0.0))
+            teaser_start = first_start + relative_start
+            teaser_end = min(first_end, teaser_start + teaser_duration)
+
+            if teaser_end > teaser_start:
+                events.extend(
+                    self._events_for_range(
+                        transcript_segments=transcript_segments,
+                        source_start=teaser_start,
+                        source_end=teaser_end,
+                        timeline_offset=0.0,
+                    )
+                )
+                accumulated_offset = max(0.0, float(lead_in_sec or 0.0))
+                consumed_first_cut_until = teaser_end
+            else:
+                accumulated_offset = max(0.0, float(lead_in_sec or 0.0))
+        else:
+            accumulated_offset = max(0.0, float(lead_in_sec or 0.0))
+
+        for cut_index, cut in enumerate(cuts):
             start = float(cut.get("safe_start", cut.get("start", 0.0)))
             end = float(cut.get("safe_end", cut.get("end", 0.0)))
             if end <= start:
                 continue
 
-            segments = self._segments_for_cut(
-                transcript_segments=transcript_segments,
-                cut_start=start,
-                cut_end=end,
-            )
-            for segment in segments:
-                local_start = max(0.0, float(segment.get("start", 0.0)) - start) / self.playback_speed
-                local_end = (min(end, float(segment.get("end", 0.0))) - start) / self.playback_speed
-                if local_end <= local_start:
-                    continue
-                events.extend(
-                    self._chunked_events_for_segment(
-                        start=accumulated_offset + local_start,
-                        end=accumulated_offset + local_end,
-                        text=str(segment.get("text") or "").strip(),
-                    )
-                )
-            accumulated_offset += max(0.0, end - start) / self.playback_speed
+            visible_start = start
+            if cut_index == 0 and consumed_first_cut_until is not None:
+                visible_start = max(visible_start, consumed_first_cut_until)
+            if end <= visible_start:
+                continue
 
+            events.extend(
+                self._events_for_range(
+                    transcript_segments=transcript_segments,
+                    source_start=visible_start,
+                    source_end=end,
+                    timeline_offset=accumulated_offset,
+                )
+            )
+            accumulated_offset += max(0.0, end - visible_start) / self.playback_speed
+
+        return events
+
+    def _events_for_range(
+        self,
+        *,
+        transcript_segments: List[Dict],
+        source_start: float,
+        source_end: float,
+        timeline_offset: float,
+    ) -> List[Dict]:
+        events: List[Dict] = []
+        segments = self._segments_for_cut(
+            transcript_segments=transcript_segments,
+            cut_start=source_start,
+            cut_end=source_end,
+        )
+        for segment in segments:
+            word_events = self._word_level_events_for_segment(
+                segment=segment,
+                source_start=source_start,
+                source_end=source_end,
+                timeline_offset=timeline_offset,
+            )
+            if word_events:
+                events.extend(word_events)
+                continue
+
+            clipped_start = max(source_start, float(segment.get("start", 0.0)))
+            clipped_end = min(source_end, float(segment.get("end", 0.0)))
+            local_start = max(0.0, clipped_start - source_start) / self.playback_speed
+            local_end = max(0.0, clipped_end - source_start) / self.playback_speed
+            if local_end <= local_start:
+                continue
+            events.extend(
+                self._chunked_events_for_segment(
+                    start=timeline_offset + local_start,
+                    end=timeline_offset + local_end,
+                    text=str(segment.get("text") or "").strip(),
+                )
+            )
         return events
 
     def _events_for_cut(
@@ -101,6 +168,16 @@ class SubtitleBuilder:
             cut_end=end,
         )
         for segment in segments:
+            word_events = self._word_level_events_for_segment(
+                segment=segment,
+                source_start=start,
+                source_end=end,
+                timeline_offset=0.0,
+            )
+            if word_events:
+                events.extend(word_events)
+                continue
+
             local_start = max(0.0, float(segment.get("start", 0.0)) - start) / self.playback_speed
             local_end = (min(end, float(segment.get("end", 0.0))) - start) / self.playback_speed
             if local_end <= local_start:
@@ -163,6 +240,60 @@ class SubtitleBuilder:
                 }
             )
             cursor = chunk_end
+
+        return self._merge_adjacent_events(events)
+
+    def _word_level_events_for_segment(
+        self,
+        *,
+        segment: Dict,
+        source_start: float,
+        source_end: float,
+        timeline_offset: float,
+    ) -> List[Dict]:
+        raw_words = list(segment.get("words") or [])
+        if not raw_words:
+            return []
+
+        clipped_words: List[Dict] = []
+        for word in raw_words:
+            word_start = float(word.get("start", 0.0))
+            word_end = float(word.get("end", 0.0))
+            word_text = str(word.get("text") or "").strip()
+            if not word_text:
+                continue
+            if word_end <= source_start or word_start >= source_end:
+                continue
+            clipped_words.append(
+                {
+                    "start": max(source_start, word_start),
+                    "end": min(source_end, word_end),
+                    "text": word_text,
+                }
+            )
+
+        if not clipped_words:
+            return []
+
+        chunks = self._chunk_words([word["text"] for word in clipped_words], max_words=2, max_chars=14)
+        events: List[Dict] = []
+        cursor = 0
+        for chunk in chunks:
+            chunk_words = clipped_words[cursor : cursor + len(chunk)]
+            cursor += len(chunk)
+            if not chunk_words:
+                continue
+            local_start = max(0.0, float(chunk_words[0]["start"]) - source_start) / self.playback_speed
+            local_end = max(0.0, float(chunk_words[-1]["end"]) - source_start) / self.playback_speed
+            if local_end <= local_start:
+                continue
+            events.append(
+                {
+                    "start": round(timeline_offset + local_start, 3),
+                    "end": round(timeline_offset + local_end, 3),
+                    "text": " ".join(word["text"] for word in chunk_words).upper(),
+                }
+            )
 
         return self._merge_adjacent_events(events)
 
