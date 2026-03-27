@@ -2247,6 +2247,11 @@ para continuar o processamento.
                 normalized_cuts,
                 transcript_segments,
             )
+            normalized_cuts = self._align_first_cut_to_global_hook(
+                normalized_cuts,
+                transcript_segments,
+                post,
+            )
             if self.clip_mode == "short_serie":
                 normalized_cuts = self._prune_disconnected_short_serie_cuts(normalized_cuts)
 
