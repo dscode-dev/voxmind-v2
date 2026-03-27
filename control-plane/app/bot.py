@@ -256,10 +256,71 @@ Exemplo:
         if flattened_cuts:
             normalized["shorts_content"] = flattened_cuts
         if normalized_videos:
+            normalized_videos = self._cap_final_videos_total_duration(normalized_videos)
             normalized["final_videos"] = normalized_videos
             normalized["post"] = normalized_videos[0].get("post", {})
 
+            flattened_cuts = []
+            for video in normalized_videos:
+                post = video.get("post", {})
+                video_index = int(video.get("video_index") or 0)
+                for cut in video.get("shorts_content") or []:
+                    if not isinstance(cut, dict):
+                        continue
+                    flattened_cuts.append(
+                        {
+                            **cut,
+                            "_post": post,
+                            "_video_index": video_index,
+                        }
+                    )
+            if flattened_cuts:
+                normalized["shorts_content"] = flattened_cuts
+
         return normalized
+
+    def _cap_final_videos_total_duration(self, final_videos: list[dict]) -> list[dict]:
+        max_total = float(settings.max_final_video_duration_sec)
+        min_internal = float(settings.min_internal_cut_duration_sec)
+        normalized_videos: list[dict] = []
+
+        for video in final_videos:
+            cuts = [dict(cut) for cut in (video.get("shorts_content") or []) if isinstance(cut, dict)]
+            total_duration = sum(
+                max(0.0, float(cut.get("end", 0.0)) - float(cut.get("start", 0.0)))
+                for cut in cuts
+            )
+            overflow = max(0.0, total_duration - max_total)
+
+            for index in range(len(cuts) - 1, -1, -1):
+                if overflow <= 0:
+                    break
+
+                cut = cuts[index]
+                start = float(cut.get("safe_start", cut.get("start", 0.0)))
+                end = float(cut.get("safe_end", cut.get("end", 0.0)))
+                duration = max(0.0, end - start)
+                removable = max(0.0, duration - min_internal)
+                if removable <= 0.0:
+                    continue
+
+                trim_amount = min(removable, overflow)
+                new_end = round(end - trim_amount, 2)
+                if new_end <= start:
+                    continue
+
+                cut["end"] = new_end
+                cut["safe_end"] = new_end
+                overflow -= max(0.0, end - new_end)
+
+            normalized_videos.append(
+                {
+                    **video,
+                    "shorts_content": cuts,
+                }
+            )
+
+        return normalized_videos
 
     def _extract_video_post_payload(self, video_payload: dict | None) -> dict:
         payload = dict((video_payload or {}).get("post") or {})

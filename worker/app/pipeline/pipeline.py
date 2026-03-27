@@ -2045,10 +2045,12 @@ para continuar o processamento.
     ) -> Path | None:
         self._mark_step("final_reel_subtitles", "started")
         output_path = self.work_dir / "final_reel.ass"
+        render_plan = self._build_render_plan(filtered_cuts, transcript_segments, None)
         subtitle_path = self.subtitle_builder.build_final_reel_srt(
             cuts=filtered_cuts,
             transcript_segments=transcript_segments,
             output_path=output_path,
+            lead_in_sec=self._cold_open_lead_in_seconds(render_plan),
         )
         if subtitle_path is None:
             self._mark_step("final_reel_subtitles", "skipped", reason="no_subtitle_entries")
@@ -2080,6 +2082,21 @@ para continuar o processamento.
         )
         self._mark_step("render_plan", "completed", clip_count=len(plan.get("clips", [])))
         return plan
+
+    def _cold_open_lead_in_seconds(self, render_plan: dict | None) -> float:
+        clips = list((render_plan or {}).get("clips") or [])
+        if not clips:
+            return 0.0
+
+        first_clip = clips[0] if isinstance(clips[0], dict) else {}
+        cold_open = first_clip.get("cold_open") or {}
+        if not cold_open.get("enabled"):
+            return 0.0
+
+        try:
+            return max(0.0, float(cold_open.get("duration_sec") or 0.0))
+        except (TypeError, ValueError):
+            return 0.0
 
     def _render_final_reel(
         self,
@@ -2142,6 +2159,7 @@ para continuar o processamento.
                     cuts=spec["cuts"],
                     transcript_segments=transcript_segments,
                     output_path=subtitle_output,
+                    lead_in_sec=self._cold_open_lead_in_seconds(local_render_plan),
                 )
                 rendered_path = self.final_renderer.render(
                     cut_files=local_cut_files,
@@ -2364,24 +2382,40 @@ para continuar o processamento.
         if total_duration <= max_total:
             return adjusted
 
+        min_internal = float(settings.render_min_internal_cut_duration_sec)
         overflow = total_duration - max_total
-        last = adjusted[-1]
-        last_start = float(last.get("safe_start", last.get("start", 0.0)))
-        last_end = float(last.get("safe_end", last.get("end", 0.0)))
-        target_end = max(last_start, last_end - overflow)
-        strong_ending = self._find_previous_strong_ending(
-            transcript_segments,
-            start=last_start,
-            current_end=min(last_end, target_end + 2.0),
-        )
-        if strong_ending is not None and strong_ending >= last_start + float(settings.render_min_internal_cut_duration_sec):
-            target_end = min(target_end, strong_ending)
 
-        if (target_end - last_start) < float(settings.render_min_internal_cut_duration_sec):
-            target_end = last_start + float(settings.render_min_internal_cut_duration_sec)
+        for index in range(len(adjusted) - 1, -1, -1):
+            if overflow <= 0:
+                break
 
-        last["end"] = round(min(last_end, target_end), 2)
-        last["safe_end"] = round(min(last_end, target_end), 2)
+            cut = adjusted[index]
+            cut_start = float(cut.get("safe_start", cut.get("start", 0.0)))
+            cut_end = float(cut.get("safe_end", cut.get("end", 0.0)))
+            current_duration = max(0.0, cut_end - cut_start)
+            removable = max(0.0, current_duration - min_internal)
+            if removable <= 0.0:
+                continue
+
+            trim_amount = min(removable, overflow)
+            target_end = max(cut_start + min_internal, cut_end - trim_amount)
+            strong_ending = self._find_previous_strong_ending(
+                transcript_segments,
+                start=cut_start,
+                current_end=min(cut_end, target_end + 2.0),
+            )
+            if strong_ending is not None and strong_ending >= cut_start + min_internal:
+                target_end = min(target_end, strong_ending)
+
+            new_end = round(min(cut_end, target_end), 2)
+            effective_trim = max(0.0, cut_end - new_end)
+            if effective_trim <= 0.0:
+                continue
+
+            cut["end"] = new_end
+            cut["safe_end"] = new_end
+            overflow -= effective_trim
+
         return adjusted
 
     def _build_followup_cut(

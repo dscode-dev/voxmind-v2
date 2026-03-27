@@ -153,6 +153,7 @@ Cada item de `final_videos` deve trazer diretamente:
 Cada item de `final_videos` deve ter preferencialmente 2 cortes conectados em `shorts_content` quando houver continuação forte.
 Use uma parte em segundos dos cortes escolhidos para servir de hook na tentativa de chamar a atenção do usuário nos primeiros segundos
 Valide a duração total de cada `final_video` antes de responder: o total precisa ficar entre 25 e 120 segundos.
+Se algum `final_video` passar de 120 segundos, encurte o último corte desse vídeo antes de responder.
 Prefira fechar o assunto corretamente, mesmo que isso leve o vídeo para além de 1 minuto.
 Você pode ir até 120 segundos apenas quando essa extensão for necessária para concluir a ideia sem cortar o assunto.
 Não replique mecanicamente a quantidade de itens mostrada no exemplo do `OUTPUT JSON`.

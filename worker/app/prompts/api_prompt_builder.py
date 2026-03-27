@@ -52,7 +52,6 @@ MANDATORY RULES
 - You may adjust timestamps slightly to preserve complete meaning.
 - Prefer editorially complete cuts over merely loud or sensational ones.
 - Avoid redundant cuts that repeat the same narrative beat.
-- If the best cut is outside the prioritized candidates, follow the story and pick it anyway.
 - Produce up to 3 final videos that can each stand alone.
 - Each final video must have its own hook, title, description and closure.
 - Do not split one incomplete thought across different final videos.
@@ -135,6 +134,7 @@ Only go below 55 seconds when the subject clearly closes earlier and there is no
 You may go beyond 75 seconds only when that extension is necessary to conclude the subject clearly.
 Prefer concluding the idea correctly even if that pushes the final video beyond 1 minute.
 Validate the total duration of each `final_video` before responding: it must stay between 25 and 120 seconds.
+If any `final_video` exceeds 120 seconds, shorten the last cut of that video before responding.
 `final_videos[i].hook_source_cut_index` must point to the cut index inside `final_videos[i].shorts_content` that fully contains the main hook.
 `final_videos[i].shorts_content[0]` must fully contain the main hook for that final video.
 If there is only enough strong material for 1 or 2 good final videos, return only 1 or 2.

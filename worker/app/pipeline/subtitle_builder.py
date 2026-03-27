@@ -32,10 +32,12 @@ class SubtitleBuilder:
         cuts: List[Dict],
         transcript_segments: List[Dict],
         output_path: Path,
+        lead_in_sec: float = 0.0,
     ) -> Path | None:
         events = self._events_for_final_reel(
             cuts=cuts,
             transcript_segments=transcript_segments,
+            lead_in_sec=lead_in_sec,
         )
         if not events:
             return None
@@ -49,9 +51,10 @@ class SubtitleBuilder:
         *,
         cuts: List[Dict],
         transcript_segments: List[Dict],
+        lead_in_sec: float = 0.0,
     ) -> List[Dict]:
         events: List[Dict] = []
-        accumulated_offset = 0.0
+        accumulated_offset = max(0.0, float(lead_in_sec or 0.0))
 
         for cut in cuts:
             start = float(cut.get("safe_start", cut.get("start", 0.0)))
