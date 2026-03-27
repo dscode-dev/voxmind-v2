@@ -1,3 +1,4 @@
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Dict, List
@@ -277,8 +278,9 @@ class FinalVideoRenderer:
         if settings.render_visual_filter_enabled:
             video_filters.extend(
                 [
-                    "eq=contrast=1.04:brightness=0.02:saturation=1.08",
-                    "unsharp=5:5:0.45:5:5:0.0",
+                    "eq=contrast=1.07:brightness=0.03:saturation=1.12:gamma=0.97",
+                    "unsharp=5:5:0.5:5:5:0.0",
+                    "noise=alls=3:allf=t+u",
                 ]
             )
         if settings.render_playback_speed and abs(settings.render_playback_speed - 1.0) > 0.01:
@@ -521,7 +523,13 @@ class FinalVideoRenderer:
         subtitle_path: Path,
         output_path: Path,
     ) -> None:
-        subtitles_filter = self._subtitle_filter(subtitle_path)
+        local_subtitle_path = self.render_dir / f"burn_{subtitle_path.name}"
+        if local_subtitle_path.resolve() != subtitle_path.resolve():
+            shutil.copyfile(subtitle_path, local_subtitle_path)
+        else:
+            local_subtitle_path = subtitle_path
+
+        subtitles_filter = self._subtitle_filter(local_subtitle_path)
         command = [
             "ffmpeg",
             "-y",
@@ -703,10 +711,7 @@ class FinalVideoRenderer:
         return prepared_files, prepared_durations, transition_plans, True
 
     def _subtitle_filter(self, subtitle_path: Path) -> str:
-        try:
-            subtitle_file = str(subtitle_path.resolve().relative_to(self.render_dir.resolve()))
-        except ValueError:
-            subtitle_file = str(subtitle_path.resolve())
+        subtitle_file = subtitle_path.name
         subtitle_file = (
             subtitle_file.replace("\\", "\\\\")
             .replace(":", "\\:")
