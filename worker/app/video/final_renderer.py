@@ -128,111 +128,90 @@ class FinalVideoRenderer:
             prepared_durations=prepared_durations,
             render_plan=render_plan,
         )
-
-        clips_plan = {
-            int(item.get("clip_index", 0)): item
-            for item in render_plan.get("clips", [])
-            if item.get("clip_index")
-        }
-
-        use_fade = any(
-            str((transition_plans[index - 1] or {}).get("transition_after") or "")
-            in {"fade", "whoosh", "punch_in"}
-            for index in range(1, len(prepared_files))
-        )
-
-        if len(prepared_files) == 1 or not use_fade:
+        if len(prepared_files) == 1:
             self._concat_prepared_files(prepared_files, output_path)
             return
 
-        command = ["ffmpeg", "-y"]
-        for prepared_file in prepared_files:
-            command.extend(["-i", str(prepared_file)])
-
-        video_labels: List[str] = []
-        audio_labels: List[str] = []
-        filter_parts: List[str] = []
-        for index in range(len(prepared_files)):
-            normalized_video = f"[v{index}_base]"
-            normalized_audio = f"[a{index}_base]"
-            filter_parts.append(
-                f"[{index}:v]fps=30,format=yuv420p,setsar=1,setpts=PTS-STARTPTS{normalized_video}"
-            )
-            filter_parts.append(
-                f"[{index}:a]aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS{normalized_audio}"
-            )
-            video_labels.append(normalized_video)
-            audio_labels.append(normalized_audio)
-
-        current_video = video_labels[0]
-        current_audio = audio_labels[0]
-        elapsed = prepared_durations[0]
-
-        for index in range(1, len(prepared_files)):
-            clip_plan = transition_plans[index - 1] or {}
-            transition = str(clip_plan.get("transition_after") or "hard_cut")
-            duration_ms = int(clip_plan.get("transition_duration_ms") or 0)
-            fade_sec = max(0.12, duration_ms / 1000.0) if transition == "fade" and duration_ms > 0 else 0.0
-            if transition in {"whoosh", "punch_in"} and duration_ms > 0:
-                fade_sec = max(0.12, duration_ms / 1000.0)
-
-            next_video = video_labels[index]
-            next_audio = audio_labels[index]
-            out_video = f"[v{index}]"
-            out_audio = f"[a{index}]"
-
-            if transition in {"fade", "whoosh", "punch_in"} and fade_sec > 0:
-                xfade_transition = {
-                    "fade": "fadeblack",
-                    "whoosh": "wipeleft",
-                    "punch_in": "smoothleft",
-                }.get(transition, "fade")
-                offset = max(0.0, elapsed - fade_sec)
-                filter_parts.append(
-                    f"{current_video}{next_video}"
-                    f"xfade=transition={xfade_transition}:duration={fade_sec}:offset={offset}"
-                    f"{out_video}"
-                )
-                filter_parts.append(
-                    f"{current_audio}{next_audio}"
-                    f"acrossfade=d={fade_sec}:curve1=tri:curve2=tri"
-                    f"{out_audio}"
-                )
-                elapsed = elapsed + prepared_durations[index] - fade_sec
-            else:
-                filter_parts.append(f"{current_video}{next_video}concat=n=2:v=1:a=0{out_video}")
-                filter_parts.append(f"{current_audio}{next_audio}concat=n=2:v=0:a=1{out_audio}")
-                elapsed = elapsed + prepared_durations[index]
-
-            current_video = out_video
-            current_audio = out_audio
-
-        command.extend(
-            [
-                "-filter_complex",
-                ";".join(filter_parts),
-                "-map",
-                current_video,
-                "-map",
-                current_audio,
-                "-c:v",
-                "libx264",
-                "-preset",
-                "fast",
-                "-crf",
-                "22",
-                "-pix_fmt",
-                "yuv420p",
-                "-c:a",
-                "aac",
-                "-ar",
-                "48000",
-                "-movflags",
-                "+faststart",
-                str(output_path),
-            ]
+        transition_ready_files = self._prepare_transition_edges(
+            prepared_files=prepared_files,
+            prepared_durations=prepared_durations,
+            transition_plans=transition_plans,
         )
+        self._concat_prepared_files(transition_ready_files, output_path)
 
+    def _prepare_transition_edges(
+        self,
+        *,
+        prepared_files: List[Path],
+        prepared_durations: List[float],
+        transition_plans: List[Dict],
+    ) -> List[Path]:
+        output_files: List[Path] = []
+        for index, input_path in enumerate(prepared_files):
+            incoming_plan = transition_plans[index - 1] if index > 0 and index - 1 < len(transition_plans) else {}
+            outgoing_plan = transition_plans[index] if index < len(transition_plans) else {}
+            duration = prepared_durations[index] if index < len(prepared_durations) else self._probe_duration(input_path)
+            transitioned_path = self.render_dir / f"{input_path.stem}_transitioned.mp4"
+            self._render_transitioned_clip(
+                input_path=input_path,
+                output_path=transitioned_path,
+                duration=duration,
+                incoming_plan=incoming_plan or {},
+                outgoing_plan=outgoing_plan or {},
+            )
+            output_files.append(transitioned_path)
+        return output_files
+
+    def _render_transitioned_clip(
+        self,
+        *,
+        input_path: Path,
+        output_path: Path,
+        duration: float,
+        incoming_plan: Dict,
+        outgoing_plan: Dict,
+    ) -> None:
+        video_filters: List[str] = ["fps=30", "format=yuv420p", "setsar=1", "setpts=PTS-STARTPTS"]
+        audio_filters: List[str] = ["aresample=async=1:first_pts=0", "asetpts=PTS-STARTPTS"]
+
+        fade_in_sec = self._transition_fade_seconds(incoming_plan)
+        fade_out_sec = self._transition_fade_seconds(outgoing_plan)
+        usable_duration = max(0.0, duration)
+
+        if fade_in_sec > 0.0 and usable_duration > fade_in_sec + 0.15:
+            video_filters.append(f"fade=t=in:st=0:d={fade_in_sec}")
+            audio_filters.append(f"afade=t=in:st=0:d={fade_in_sec}")
+
+        if fade_out_sec > 0.0 and usable_duration > fade_out_sec + 0.15:
+            fade_out_start = max(0.0, usable_duration - fade_out_sec)
+            video_filters.append(f"fade=t=out:st={fade_out_start}:d={fade_out_sec}")
+            audio_filters.append(f"afade=t=out:st={fade_out_start}:d={fade_out_sec}")
+
+        command = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(input_path),
+            "-vf",
+            ",".join(video_filters),
+            "-af",
+            ",".join(audio_filters),
+            "-c:v",
+            "libx264",
+            "-preset",
+            "fast",
+            "-crf",
+            "22",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-ar",
+            "48000",
+            "-movflags",
+            "+faststart",
+            str(output_path),
+        ]
         subprocess.run(
             command,
             check=True,
@@ -240,6 +219,13 @@ class FinalVideoRenderer:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+
+    def _transition_fade_seconds(self, transition_plan: Dict | None) -> float:
+        transition = str((transition_plan or {}).get("transition_after") or "").strip().lower()
+        duration_ms = int((transition_plan or {}).get("transition_duration_ms") or 0)
+        if transition not in {"fade", "whoosh", "punch_in"} or duration_ms <= 0:
+            return 0.0
+        return max(0.12, duration_ms / 1000.0)
 
     def _concat_prepared_files(self, prepared_files: List[Path], output_path: Path) -> None:
         concat_list = self.render_dir / "concat.txt"
