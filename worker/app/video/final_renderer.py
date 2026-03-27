@@ -178,10 +178,15 @@ class FinalVideoRenderer:
             out_audio = f"[a{index}]"
 
             if transition in {"fade", "whoosh", "punch_in"} and fade_sec > 0:
+                xfade_transition = {
+                    "fade": "fadeblack",
+                    "whoosh": "wipeleft",
+                    "punch_in": "smoothleft",
+                }.get(transition, "fade")
                 offset = max(0.0, elapsed - fade_sec)
                 filter_parts.append(
                     f"{current_video}{next_video}"
-                    f"xfade=transition=fade:duration={fade_sec}:offset={offset}"
+                    f"xfade=transition={xfade_transition}:duration={fade_sec}:offset={offset}"
                     f"{out_video}"
                 )
                 filter_parts.append(

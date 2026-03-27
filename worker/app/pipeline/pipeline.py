@@ -1917,7 +1917,7 @@ para continuar o processamento.
                 }
             )
 
-        return specs
+        return self._augment_final_video_specs(specs, transcript_segments)
 
     def _strengthen_final_video_cuts(
         self,
@@ -2028,15 +2028,15 @@ para continuar o processamento.
 
         first_cut = cuts[0]
         current_hook = str(post.get("hook") or "").strip()
-        if current_hook and self._hook_feels_strong(current_hook):
-            return post
-
         candidate = self._derive_hook_from_cut(first_cut, transcript_segments)
         if candidate:
             updated = dict(post)
             updated["hook"] = candidate
             updated["hook_source_cut_index"] = 0
             return updated
+
+        if current_hook and self._hook_feels_strong(current_hook):
+            return post
 
         return post
 
@@ -2088,6 +2088,99 @@ para continuar o processamento.
             if transition in {"", "none", "hard_cut"}:
                 adjusted[index]["transition_after"] = "fade"
         return adjusted
+
+    def _augment_final_video_specs(
+        self,
+        specs: list[dict],
+        transcript_segments: list[dict],
+    ) -> list[dict]:
+        if len(specs) >= 3:
+            return specs[:3]
+
+        candidates = self._load_prepare_candidates()
+        if not candidates:
+            return specs
+
+        occupied_ranges = []
+        for spec in specs:
+            for cut in spec.get("cuts", []):
+                occupied_ranges.append(
+                    (
+                        float(cut.get("safe_start", cut.get("start", 0.0))),
+                        float(cut.get("safe_end", cut.get("end", 0.0))),
+                    )
+                )
+
+        next_index = len(specs) + 1
+        for candidate in candidates:
+            if len(specs) >= 3:
+                break
+
+            start = float(candidate.get("start", 0.0))
+            end = float(candidate.get("end", 0.0))
+            if end <= start:
+                continue
+            if any(not (end <= existing_start or start >= existing_end) for existing_start, existing_end in occupied_ranges):
+                continue
+
+            cut = {
+                "start": round(start, 2),
+                "end": round(end, 2),
+                "safe_start": round(start, 2),
+                "safe_end": round(end, 2),
+                "reason": str(candidate.get("text") or "").strip(),
+                "narrative_role": str(candidate.get("narrative_role") or "development"),
+                "merge_group": f"auto_video_{next_index}",
+                "continuity_note": "vídeo complementar gerado automaticamente a partir dos melhores candidatos do pipeline",
+                "speaker_focus": self._primary_speaker_from_candidate(candidate),
+                "transition_after": "fade",
+            }
+            strengthened = self._strengthen_final_video_cuts([cut], transcript_segments, {})
+            post = self._normalize_post_payload({}, strengthened)
+            post = self._strengthen_post_hook(post, strengthened, transcript_segments)
+            specs.append(
+                {
+                    "video_index": next_index,
+                    "post": post,
+                    "cuts": self._assign_default_transitions(strengthened),
+                }
+            )
+            occupied_ranges.extend(
+                (
+                    float(item.get("safe_start", item.get("start", 0.0))),
+                    float(item.get("safe_end", item.get("end", 0.0))),
+                )
+                for item in strengthened
+            )
+            next_index += 1
+
+        return specs
+
+    def _load_prepare_candidates(self) -> list[dict]:
+        local_path = self.work_dir / "candidates.json"
+        if not local_path.exists():
+            try:
+                self.storage.download(
+                    f"jobs/{self.job_id}/candidates.json",
+                    str(local_path),
+                )
+            except Exception:
+                return []
+
+        try:
+            with open(local_path, "r", encoding="utf-8") as handle:
+                data = json.load(handle)
+        except Exception:
+            return []
+
+        return data if isinstance(data, list) else []
+
+    def _primary_speaker_from_candidate(self, candidate: dict) -> str | None:
+        speakers = candidate.get("speakers") or []
+        if not isinstance(speakers, list) or not speakers:
+            return None
+        speaker = str(speakers[0]).strip()
+        return speaker or None
 
     def _run_auto_review(
         self,

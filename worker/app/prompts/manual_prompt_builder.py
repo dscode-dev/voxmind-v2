@@ -61,19 +61,17 @@ class ManualPromptBuilder:
         return f"""
 JOB_ID: {job_id}
 
-Você é um editor sênior de conteúdo para Shorts, TikTok, Reels e vídeos longos.
+Você é um editor sênior de vídeo curto.
+Sua tarefa é analisar as transcrições e escolher os melhores pedaços para montar vídeos curtos com alto potencial de retenção.
+Os pedaços escolhidos precisam pertencer ao mesmo contexto ou se conectar de forma natural.
+Em cada vídeo final, você também deve escolher um trecho específico que funcione como hook e chame a atenção do usuário nos primeiros segundos.
 
-Sua função é selecionar os melhores cortes do vídeo preservando integridade narrativa,
-continuidade de fala e contexto suficiente para o espectador entender cada trecho.
-Agora o objetivo final é gerar até 3 vídeos finais independentes, cada um pronto para postagem.
+RETORNO
 
-REGRA CRÍTICA
-
-Retorne APENAS JSON válido.
-Não use markdown.
-Não escreva explicações fora do JSON.
-Não use aspas duplas dentro dos valores de string, a menos que estejam escapadas corretamente.
-Se quiser destacar um termo dentro de uma string, prefira remover as aspas em vez de escrever JSON inválido.
+- Retorne apenas JSON válido.
+- Não use markdown.
+- Não escreva texto fora do JSON.
+- Não use aspas duplas dentro de valores de string, a menos que estejam escapadas.
 
 CONFIGURAÇÃO
 
@@ -87,53 +85,33 @@ video_ratio: {video_ratio}
 
 {self._build_duration_rules(clip_mode, video_ratio)}
 
-REGRAS NARRATIVAS OBRIGATÓRIAS
+O QUE VOCÊ DEVE FAZER
+
+- Escolha os melhores trechos do transcript para montar até 3 vídeos finais.
+- Cada vídeo final deve contar uma ideia clara do começo ao fim.
+- Os cortes de um mesmo vídeo final devem compartilhar o mesmo contexto ou se conectar de forma natural.
+- Cada vídeo final deve ter um hook forte no começo, desenvolvimento claro e fechamento real.
+- Prefira menos vídeos bons do que vários vídeos fracos.
+- Use transcript, timeline e candidatos como contexto forte.
+- Dê atenção especial aos candidatos com `source = clipsai`.
+- Você pode ajustar timestamps em aproximadamente ±8 segundos para capturar início natural e fechamento.
+
+REGRAS EDITORIAIS
 
 - Nunca comece no meio de frase.
-- Nunca termine antes do fechamento da ideia.
-- Nunca corte no meio do turno de fala de um locutor se isso quebrar o sentido.
-- Preserve continuidade entre falas relacionadas.
-- Em diálogos, garanta que a troca entre speakers continue compreensível.
-- Prefira trechos com setup, desenvolvimento e payoff claros.
-- Evite cortes redundantes entre si; cada corte precisa trazer uma ideia distinta.
-- Se houver dúvida entre um trecho muito chamativo e um trecho mais completo, prefira o mais completo.
-- Você pode ajustar timestamps em aproximadamente ±8 segundos para capturar início natural, desenvolvimento e fechamento.
-- Os candidatos são pistas fortes e prioritárias, não limites rígidos.
-- Dê atenção especial aos candidatos marcados com `source = clipsai`, porque eles representam blocos narrativos detectados automaticamente no transcript.
-- Se o melhor corte estiver fora dos candidatos priorizados, siga a narrativa e escolha assim mesmo.
-- Pense que agora você está escolhendo até 3 vídeos finais independentes.
-- Cada vídeo final precisa funcionar sozinho, com hook, desenvolvimento e fechamento próprios.
-- Não distribua um mesmo raciocínio em dois vídeos diferentes se isso quebrar o contexto.
-- Prefira 2 cortes conectados dentro do mesmo vídeo final quando isso produzir hook melhor, contexto melhor e duração mais competitiva.
-- Preserve ponte de contexto entre cortes consecutivos da mesma história.
-- Prefira uma sequência cronológica coesa dentro do mesmo arco narrativo.
-- Evite saltos grandes de tempo entre cortes, a menos que isso seja indispensável para o payoff final.
-- O último corte deve fechar o assunto com uma conclusão clara, payoff ou fechamento verbal forte.
-- O `post.hook` precisa estar totalmente contido no primeiro corte selecionado.
-- O primeiro corte precisa começar antes ou exatamente no ponto em que a frase do hook começa.
-- Se um hook forte estiver fora do primeiro corte, ajuste o primeiro corte para incluí-lo ou escolha outro hook.
-- O hook deve ser uma frase falada forte, completa e reconhecível nos primeiros segundos do vídeo.
-- Não use como hook uma frase fraca, genérica ou dependente demais do contexto anterior.
-- Cada corte depois do primeiro precisa continuar naturalmente o corte anterior; não mude de assunto sem ponte narrativa clara.
-- Se houver dúvida entre usar 3 cortes desconectados ou 2 cortes coesos, prefira 2 cortes coesos.
-- Não escolha um corte seguinte apenas porque ele é forte isoladamente; ele precisa funcionar como continuação do vídeo final.
-- Se houver salto temporal relevante entre dois cortes, explique claramente por que esse salto preserva a lógica da história.
-- Prefira terminar o vídeo um pouco antes, mas com fechamento claro, do que terminar no meio do assunto.
+- Nunca termine no meio do assunto.
+- Não corte no meio de uma troca de speaker se isso quebrar o sentido.
+- Prefira blocos completos e cronologicamente coerentes.
+- Evite saltos grandes de tempo sem ponte narrativa clara.
+- Evite vídeos redundantes entre si.
+- Se houver dúvida entre vários vídeos desconexos e menos vídeos fortes, prefira menos vídeos fortes.
+- Se usar 2 cortes no mesmo vídeo final, o segundo deve continuar naturalmente o primeiro e aprofundar o mesmo assunto.
+- O hook deve ser uma frase falada forte, completa e reconhecível.
+- O `post.hook` deve estar totalmente dentro do primeiro corte.
+- `shorts_content[0]` deve começar antes ou exatamente no ponto em que o hook começa.
+- O último corte deve fechar a ideia com payoff, conclusão ou fechamento verbal claro.
 
 {self._build_speaker_guidance(has_named_speakers)}
-
-QUALIDADE DO CORTE
-
-- começo natural
-- desenvolvimento claro
-- payoff, conclusão, revelação ou fechamento
-- contexto suficiente para funcionar no modo solicitado
-- retenção alta nos primeiros segundos
-- coerência editorial entre hook, title, description e thumbnail
-- diversidade entre os cortes selecionados
-- evite títulos genéricos sem sujeito concreto ou sem tese clara
-- prefira títulos e hooks que mencionem explicitamente o personagem, instituição ou conflito principal
-- quando possível, use uma frase forte real do transcript como base do hook
 
 OUTPUT JSON
 
@@ -179,17 +157,10 @@ OUTPUT JSON
         }}
       ]
     }}
-  ],
-  "long_video_script": {{
-    "title": "título sugerido",
-    "hook": "gancho inicial do vídeo",
-    "context": "contextualização clara do tema",
-    "development": "desenvolvimento narrativo principal",
-    "twist": "ponto de virada ou revelação",
-    "conclusion": "conclusão reflexiva",
-    "narration_style": "ritmo e tom da narração"
-  }}
+  ]
 }}
+
+CONTEXTO PRINCIPAL
 
 TRANSCRIPT RELEVANTE COM SPEAKERS
 
@@ -210,16 +181,10 @@ CANDIDATOS PRIORIZADOS
 INSTRUÇÃO FINAL
 
 Retorne apenas o JSON final.
-Use `story_map` para mostrar que você entendeu o arco do vídeo inteiro antes de escolher os cortes.
-Use transcript, timeline, candidatos heurísticos e candidatos do ClipsAI como contexto forte para decidir com autonomia.
-Crie `final_videos` com até 3 vídeos finais independentes.
-Cada item de `final_videos` deve ter seu próprio `post` e normalmente 1 ou 2 cortes principais em `shorts_content`.
-Os campos de social media devem existir dentro de `final_videos[i].post`, não repetidos dentro de cada corte.
-`final_videos[i].post.hook_source_cut_index` deve apontar para o índice do corte dentro de `final_videos[i].shorts_content` que contém integralmente o hook principal.
-`final_videos[i].shorts_content[0]` deve conter integralmente o hook principal desse vídeo.
-Em `short_serie`, use `continuity_note` para mostrar explicitamente por que o vídeo se sustenta sozinho.
-Se não houver material forte para 3 vídeos bons, retorne apenas 1 ou 2 vídeos finais.
-Se algum campo novo não se aplicar, retorne null, string vazia ou lista vazia.
+Retorne `final_videos` com até 3 vídeos finais bem conectados e prontos para montagem.
+Cada item de `final_videos` deve ter seu próprio `post` e 1 ou 2 cortes principais em `shorts_content`.
+Se não houver material forte para 3 vídeos bons, retorne apenas 1 ou 2.
+Se algum campo não se aplicar, retorne null, string vazia ou lista vazia.
 """
 
     def _build_speaker_guidance(self, has_named_speakers: bool) -> str:

@@ -177,6 +177,9 @@ class RenderPlanBuilder:
         if preview is None:
             return {"enabled": False}
 
+        if preview["relative_start_sec"] <= 1.0:
+            return {"enabled": False}
+
         return {
             "enabled": True,
             "source_clip_index": source_clip_index,
