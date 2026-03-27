@@ -26,8 +26,16 @@ def build_transcript_context(
     if len(full_text) <= max_chars:
         return full_text
 
+    full_limited_segments = _limit_transcript_segments(
+        transcript,
+        max_segment_duration_sec=40.0,
+    )
+    full_limited_text = _format_transcript_segments(full_limited_segments)
+    if len(full_limited_text) <= max_chars:
+        return full_limited_text
+
     if not candidates:
-        return _truncate_lines(_format_transcript_segments(_limit_transcript_segments(transcript)), max_chars)
+        return _truncate_lines(full_limited_text, max_chars)
 
     prioritized_candidates = _prioritize_prompt_candidates(
         candidates,
@@ -66,7 +74,10 @@ def build_transcript_context(
         min_total_segments=min_total_segments,
     )
     selected_segments.sort(key=lambda item: float(item["start"]))
-    focused_segments = _limit_transcript_segments(selected_segments)
+    focused_segments = _limit_transcript_segments(
+        selected_segments,
+        max_segment_duration_sec=40.0,
+    )
     focused_text = _format_transcript_segments(focused_segments)
 
     if len(focused_text) <= max_chars:
