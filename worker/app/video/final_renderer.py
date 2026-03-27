@@ -279,6 +279,7 @@ class FinalVideoRenderer:
             video_filters.extend(
                 [
                     "eq=contrast=1.07:brightness=0.03:saturation=1.12:gamma=0.97",
+                    "vignette=angle=PI/18",
                     "unsharp=5:5:0.5:5:5:0.0",
                     "noise=alls=3:allf=t+u",
                 ]
