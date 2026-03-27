@@ -129,11 +129,11 @@ Each `final_videos[i]` should preferably contain 2 connected cuts in `shorts_con
 Use a single cut only when one block alone already delivers hook, development and closure within the target duration.
 Do not mechanically replicate the number of items shown in the JSON example.
 Choose the real number of cuts based on context and narrative strength.
-Prefer final videos around 55 to 75 seconds when the material supports it.
-Only go below 55 seconds when the subject clearly closes earlier and there is no strong continuation.
+Prefer final videos around 60 to 90 seconds when the material supports it.
+Only go below 60 seconds when there is truly no strong continuation available in the material.
 You may go beyond 75 seconds only when that extension is necessary to conclude the subject clearly.
 Prefer concluding the idea correctly even if that pushes the final video beyond 1 minute.
-Validate the total duration of each `final_video` before responding: it must stay between 25 and 120 seconds.
+Validate the total duration of each `final_video` before responding: it must stay between 60 and 120 seconds.
 If any `final_video` exceeds 120 seconds, shorten the last cut of that video before responding.
 `final_videos[i].hook_source_cut_index` must point to the cut index inside `final_videos[i].shorts_content` that fully contains the main hook.
 `final_videos[i].shorts_content[0]` must fully contain the main hook for that final video.

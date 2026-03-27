@@ -225,6 +225,10 @@ class Settings(BaseSettings):
         default=25,
         alias="RENDER_MIN_CLIP_DURATION_SEC"
     )
+    render_min_final_video_duration_sec: int = Field(
+        default=60,
+        alias="RENDER_MIN_FINAL_VIDEO_DURATION_SEC"
+    )
     render_min_internal_cut_duration_sec: int = Field(
         default=12,
         alias="RENDER_MIN_INTERNAL_CUT_DURATION_SEC"

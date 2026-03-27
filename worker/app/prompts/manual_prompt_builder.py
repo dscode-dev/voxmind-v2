@@ -152,7 +152,7 @@ Cada item de `final_videos` deve trazer diretamente:
 `title`, `hook`, `hook_start`, `hook_end`, `description`, `hashtags`, `thumbnail`, `soundtrack_suggestion`, `speaker_focus` e `shorts_content`.
 Cada item de `final_videos` deve ter preferencialmente 2 cortes conectados em `shorts_content` quando houver continuação forte.
 Use uma parte em segundos dos cortes escolhidos para servir de hook na tentativa de chamar a atenção do usuário nos primeiros segundos
-Valide a duração total de cada `final_video` antes de responder: o total precisa ficar entre 25 e 120 segundos.
+Valide a duração total de cada `final_video` antes de responder: o total precisa ficar entre 60 e 120 segundos.
 Se algum `final_video` passar de 120 segundos, encurte o último corte desse vídeo antes de responder.
 Prefira fechar o assunto corretamente, mesmo que isso leve o vídeo para além de 1 minuto.
 Você pode ir até 120 segundos apenas quando essa extensão for necessária para concluir a ideia sem cortar o assunto.
@@ -236,11 +236,11 @@ FORMATO: PORTRAIT
             return f"""
 REGRAS DE DURAÇÃO
 
-- Cada vídeo final deve ter no mínimo {min_duration} segundos no total.
-- Para este modo, prefira vídeos finais entre 55 e 75 segundos.
+- Cada vídeo final deve ter no mínimo 60 segundos no total.
+- Para este modo, prefira vídeos finais entre 60 e 90 segundos.
 - Se usar 2 cortes conectados no mesmo vídeo final, cada corte interno deve ter pelo menos 12 segundos.
 - Cada vídeo final pode usar 1 ou 2 cortes conectados se isso melhorar hook, contexto e fechamento.
-- Só fique abaixo de 55 segundos se o assunto realmente fechar antes disso e não houver continuação forte no material.
+- Só fique abaixo de 60 segundos se realmente não houver continuação forte no material.
 - Você pode ultrapassar 75 segundos somente quando isso for necessário para concluir o assunto com clareza.
 - Nunca exceda {max_duration} segundos.
 """

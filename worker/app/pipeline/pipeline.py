@@ -2397,7 +2397,7 @@ para continuar o processamento.
             for cut in adjusted
         )
 
-        target_min_total = 55.0
+        target_min_total = float(settings.render_min_final_video_duration_sec)
         max_total = float(settings.qa_max_clip_duration_sec)
 
         last = adjusted[-1]
