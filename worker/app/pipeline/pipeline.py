@@ -2173,7 +2173,6 @@ para continuar o processamento.
             transcript_segments=transcript_segments,
             output_path=output_path,
             lead_in_sec=self._cold_open_lead_in_seconds(render_plan),
-            cold_open=((render_plan.get("clips") or [{}])[0].get("cold_open") if (render_plan.get("clips") or []) else None),
         )
         if subtitle_path is None:
             self._mark_step("final_reel_subtitles", "skipped", reason="no_subtitle_entries")
@@ -2285,7 +2284,6 @@ para continuar o processamento.
                     transcript_segments=transcript_segments,
                     output_path=subtitle_output,
                     lead_in_sec=self._cold_open_lead_in_seconds(local_render_plan),
-                    cold_open=((local_render_plan.get("clips") or [{}])[0].get("cold_open") if (local_render_plan.get("clips") or []) else None),
                 )
                 rendered_path = self.final_renderer.render(
                     cut_files=local_cut_files,

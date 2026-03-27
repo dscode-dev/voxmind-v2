@@ -1,0 +1,198 @@
+
+JOB_ID: c86a0483-d1dd-465a-bfc0-0c2f8ef89b60
+
+Você é um editor sênior de vídeo curto.
+Sua tarefa é analisar as transcrições e escolher os melhores pedaços para montar vídeos curtos com alto potencial de retenção.
+Os pedaços escolhidos precisam pertencer ao mesmo contexto ou se conectar de forma natural.
+Em cada vídeo final, você também deve escolher um trecho específico que funcione como hook e chame a atenção do usuário nos primeiros segundos.
+
+RETORNO
+
+- Retorne apenas JSON válido.
+- Não use markdown.
+- Não escreva texto fora do JSON.
+- Não use aspas duplas dentro de valores de string, a menos que estejam escapadas.
+
+CONFIGURAÇÃO
+
+job_id: c86a0483-d1dd-465a-bfc0-0c2f8ef89b60
+clip_mode: short_serie
+video_ratio: portrait
+
+
+MODO: SHORT_SERIE
+
+- Gere cortes conectados que formem uma sequência coesa.
+- Os cortes podem depender do anterior, mas juntos precisam fechar a ideia.
+- Todos os trechos relacionados devem compartilhar merge_group.
+- Pense em setup, desenvolvimento e payoff.
+
+
+
+FORMATO: PORTRAIT
+
+- Considere um vídeo vertical com alta exigência de retenção rápida.
+- Prefira trechos mais diretos, claros e fortes logo no início.
+
+
+
+REGRAS DE DURAÇÃO
+
+- Cada vídeo final deve ter no mínimo 60 segundos no total.
+- Para este modo, prefira vídeos finais entre 60 e 90 segundos.
+- Se usar 2 cortes conectados no mesmo vídeo final, cada corte interno deve ter pelo menos 12 segundos.
+- Cada vídeo final pode usar 1 ou 2 cortes conectados se isso melhorar hook, contexto e fechamento.
+- Só fique abaixo de 60 segundos se realmente não houver continuação forte no material.
+- Você pode ultrapassar 75 segundos somente quando isso for necessário para concluir o assunto com clareza.
+- Nunca exceda 120 segundos.
+
+
+O QUE VOCÊ DEVE FAZER
+
+- Escolha os melhores trechos do transcript para montar até 3 vídeos finais.
+- Cada vídeo final deve contar uma ideia clara do começo ao fim.
+- Os cortes de um mesmo vídeo final devem compartilhar o mesmo contexto ou se conectar de forma natural.
+- Cada vídeo final deve ter um hook forte no começo, desenvolvimento claro e fechamento real.
+- Prefira menos vídeos bons do que vários vídeos fracos.
+- Use o transcript como contexto principal.
+- Você pode ajustar timestamps em aproximadamente ±8 segundos para capturar início natural e fechamento.
+
+REGRAS EDITORIAIS
+
+- Nunca comece no meio de frase.
+- Nunca termine no meio do assunto.
+- Não corte no meio de uma troca de speaker se isso quebrar o sentido.
+- Prefira blocos completos e cronologicamente coerentes.
+- Evite saltos grandes de tempo sem ponte narrativa clara.
+- Evite vídeos redundantes entre si.
+- Se houver dúvida entre vários vídeos desconexos e menos vídeos fortes, prefira menos vídeos fortes.
+- Se usar 2 cortes no mesmo vídeo final, o segundo deve continuar naturalmente o primeiro e aprofundar o mesmo assunto.
+- Em `short_serie`, prefira 2 cortes conectados por vídeo final quando houver continuação forte no material.
+- Só use 1 corte único quando um bloco sozinho já entregar hook, desenvolvimento e fechamento dentro da duração ideal.
+- O hook deve ser uma frase falada forte, completa e reconhecível.
+- O `post.hook` deve estar totalmente dentro do primeiro corte.
+- Informe também `hook_start` e `hook_end` com a minutagem exata, em segundos, onde esse hook aparece.
+- Não descreva um hook sem informar a minutagem exata dele.
+- `hook_start` deve marcar o começo real da frase do hook e `hook_end` o fim real dessa frase, sem janela folgada.
+- Prefira hooks com cerca de 3 a 8 segundos de fala contínua.
+- `shorts_content[0]` deve começar antes ou exatamente no ponto em que o hook começa.
+- O último corte deve fechar a ideia com payoff, conclusão ou fechamento verbal claro.
+
+
+REGRAS ESPECÍFICAS DE LOCUTOR
+
+- O transcript inclui speaker labels como SPEAKER_01, SPEAKER_02, etc.
+- Use esses labels para entender diálogos, mudanças de contexto e continuidade.
+- Prefira cortes que respeitem a conclusão do speaker atual.
+- Evite trocar de speaker exatamente no início ou no fim do corte sem contexto suficiente.
+
+
+OUTPUT JSON
+
+A estrutura abaixo é apenas um exemplo de formato.
+Não copie a quantidade de itens do exemplo por padrão.
+Você deve decidir quantos vídeos finais retornar e quantos cortes usar em cada `shorts_content`, de acordo com o material.
+
+{
+  "job_id": "c86a0483-d1dd-465a-bfc0-0c2f8ef89b60",
+  "final_videos": [
+    {
+      "video_index": 1,
+      "title": "título principal do vídeo final 1",
+      "hook": "gancho principal do vídeo final 1",
+      "hook_source_cut_index": 0,
+      "hook_start": 10.5,
+      "hook_end": 16.8,
+      "description": "descrição final para postagem",
+      "hashtags": ["#tag1", "#tag2", "#tag3"],
+      "thumbnail": "ideia de thumbnail principal",
+      "soundtrack_suggestion": "political_tension | mystery_tension | finance_tension | generic",
+      "speaker_focus": "SPEAKER_01 | SPEAKER_02 | null",
+      "shorts_content": [
+        {
+          "start": 10.5,
+          "end": 45.3,
+          "safe_start": 10.5,
+          "safe_end": 45.3,
+          "reason": "por que este trecho respeita narrativa, contexto e continuidade",
+          "narrative_role": "hook | setup | development | payoff",
+          "merge_group": "story_1",
+          "continuity_note": "como este corte se conecta ao restante do vídeo final",
+          "speaker_focus": "SPEAKER_01 | SPEAKER_02 | null",
+          "transition_after": "hard_cut | punch_in | whoosh | fade | none"
+        }
+      ]
+    }
+  ]
+}
+
+CONTEXTO PRINCIPAL
+
+TRANSCRIPT RELEVANTE COM SPEAKERS
+
+[00:00 - 00:04] SPEAKER_00: Bom, e aí, Tarcísio? Porra, desculpa, mas nós vamos ter que falar de eleição de 2026, cara.
+[00:05 - 00:07] SPEAKER_00: Vamos lá. Tá com muita pressa pra ser presidente?
+[00:08 - 00:10] SPEAKER_01: Não. Eu nem penso nisso. É?
+[00:10 - 00:12] SPEAKER_01: Igor, a minha mãe é empregada doméstica, cara.
+[00:13 - 00:19] SPEAKER_01: Meu pai carregou muita caixa de sapato no mercado. Eu nunca pensei em ser o que eu sou, tá onde eu tô.
+[00:21 - 00:26] SPEAKER_01: Eu tinha outra ambição e eu não tenho esse tipo de coisa. Pô, eu preciso ser isso? Não preciso ser nada.
+[00:26 - 00:35] SPEAKER_01: Eu sou servidor, eu tô aqui pra servir. E eu nunca imaginei que ia ser um dia governador de São Paulo. A população me deu esse privilégio de poder tentar contribuir
+[00:36 - 00:44] SPEAKER_01: tentar ajudar em alguma coisa, tentar se doar. E eu tô fazendo isso com esse grupo, com esse time que me acompanha. A gente tá procurando entregar resultados.
+[00:45 - 00:47] SPEAKER_01: Acho que a gente tem umas coisas muito legais pra mostrar.
+[00:47 - 00:51] SPEAKER_01: O pessoal dizia que não dava pra acabar a Cracolândia, a gente disse que mostrou que pode.
+[00:51 - 00:57] SPEAKER_01: A pessoa achava que não ia dar pra acabar a Rodanel, a gente vai acabar. Achava que não ia dar pra concluir aquela linha 17 lá, aquele monotrilho.
+[00:58 - 01:00] SPEAKER_01: E a gente vai entrar. A gente vai entregar, a linha C a gente vai entregar.
+[01:01 - 01:05] SPEAKER_01: A gente fazia 700 mil cirurgias por ano em São Paulo, agora a gente faz 1 milhão e 400.
+[01:05 - 01:09] SPEAKER_01: São Paulo entregava 20, 30 mil habitações a cada período de 4 anos.
+[01:10 - 01:14] SPEAKER_01: Eu já entreguei 73 mil e eu tenho 114 mil em obra.
+[01:14 - 01:21] SPEAKER_01: Então a gente tá se encaminhando pra passar das 200 porque eu tô com 42 mil em autorização barra licitação.
+[01:22 - 01:38] SPEAKER_01: A gente deve crescer no IDEB, porque nós fizemos um esforço muito grande pra isso. Eu tô mandando os alunos pro exterior pra fazer intercâmbio. Eu tenho o Provão Paulista que conecta eles com o ensino superior. Então eu tenho as vagas exclusivas e o vestibular seriado.
+[01:39 - 01:51] SPEAKER_01: Nós tínhamos aí 9% dos nossos alunos de ensino médio no ensino profissionalizante. Ano que vem eu vou ter 42%. Esse ano a gente já operou com 30%. A alfabetização na idade certa cresceu 30% e por aí vai.
+[01:51 - 02:06] SPEAKER_01: Eu tinha um programa de investimentos que eu queria contratar 220 bilhões, nós contratamos 370. Então tem. Agora, é uma forma de retribuir a confiança que a população de São Paulo me deu. E o mais interessante é que a maioria das entregas, ou as entregas relevantes
+[02:06 - 02:14] SPEAKER_01: vão estar no próximo período, que você planta muito agora pra colher depois. E eu, sinceramente, gostaria de ver isso tudo florescendo e acontecendo.
+[02:15 - 02:16] SPEAKER_01: Não tenho essa ambição.
+[02:17 - 02:19] SPEAKER_01: Eu acho que a gente precisa de um bom projeto pro Brasil.
+[02:20 - 02:25] SPEAKER_01: E a gente precisa reunir esse grupo que pensa o Brasil, que tá afim de mudar o Brasil. O Brasil é um país fantástico.
+[02:26 - 02:29] SPEAKER_01: Potencial demais. A gente pode entregar muita coisa.
+[02:30 - 02:39] SPEAKER_01: A gente não pode ser eternamente o país do futuro porque a gente sempre tem que pensar qual é o legado que a nossa geração vai deixar pros filhos, pros netos.
+[02:39 - 02:49] SPEAKER_01: A gente pode aproveitar um potencial enorme que a gente tem na área da economia do conhecimento na área da inteligência artificial, algo que pode diminuir o nosso gap pra países ricos.
+[02:49 - 03:11] SPEAKER_01: O potencial que nós temos na questão da transição energética, com o biometano com o etanol de primeira e segunda geração, com o hidrogênio verde com o combustível sustentável de aviação, com a substituição do bunker de navegação pelo etanol. Enfim, é tanta coisa. A gente é o parceiro confiável do mundo na área da segurança alimentar.
+[03:11 - 03:33] SPEAKER_01: A gente pode trazer pra cá os componentes e as cadeias dos semicondutores. A gente tem muita coisa pra fazer. A gente pode ter uma infraestrutura muito melhor do que a gente tem. A gente pode ter uma educação muito melhor do que a gente tem. A gente pode enfrentar diferentes problemas do subfinanciamento da saúde. E oferecer pro cidadão o mesmo serviço no SUS que ele tem no privado. Enfim, tem muita coisa legal.
+[03:33 - 03:55] SPEAKER_01: E eu acho que a gente pode estruturar um projeto de Brasil pra isso. E estruturar com várias cabeças. E aí o protagonista disso, ou o condutor, é o menos importante. O projeto estando bem construído. O plano, né, governador? O plano estando bem construído é o que vai dar certo. E aí a missão, por exemplo, de ficar em São Paulo e tentar ajudar aqui, pra mim, tá tranquilo, tá excelente.
+[03:55 - 04:15] SPEAKER_00: Então não tem essa ambição. Entendi. Até não perco muito tempo pensando ou discutindo isso. A gente tá muito focado no resultado e vamos fazer isso até o final do mandato. Isso é uma boa resposta no sentido de. Se a gente for pensar. E aqui eu. Você comenta o que você quiser, viu? Não quero te colocar em série de justiça também, não.
+[04:15 - 04:30] SPEAKER_00: Mas olhando pro cenário eleitoral que a gente tá agora. O que tá se desenhando é uma eleição que a gente vai ter. Que a gente deve chegar num segundo turno. Aqui. Projetando, não é dado, não é informação, não é nada. Viajando aqui. É.
+[04:30 - 04:51] SPEAKER_00: Um segundo turno que a gente vai ter o Lula, provavelmente, que já disse que será candidato várias vezes, em várias oportunidades. E um candidato que represente anti-Lula, de certa forma. É. Provavelmente alguém alinhado a uma direita bem clara, né? Mas também. Mas ainda é um cenário muito incerto.
+[04:51 - 05:12] SPEAKER_00: Especialmente porque o ex-presidente Bolsonaro tá pra. Bom, já tá julgado, já tá condenado. Agora tá esperando o trânsito em julgado. Ainda tem alguns trâmites. Mas a verdade é que muito provavelmente não participará das eleições ano que vem. E isso deixa um. Uma. Um eleitorado inteiro um tanto órfão.
+[05:12 - 05:33] SPEAKER_00: E que esse eleitorado será, com certeza, disputado pelos representantes dessa direita. Que provavelmente fará oposição ao Lula num segundo turno no ano que vem. É. Essa disputa coloca. Tem algumas. Algumas coisas interessantes ali. E na minha opinião, a mais interessante de todas.
+[05:33 - 05:55] SPEAKER_00: E de novo, não precisa comentar. Mas a mais interessante de todas é uma tentativa de defesa do capital político por. Por. Por conta do. Da família Bolsonaro. O que eu quero dizer com isso? Que. E aqui é uma conjectura. Caso Tarcísio, por exemplo. Por exemplo. Seja candidato à presidência do ano que vem.
+[05:55 - 06:17] SPEAKER_00: E seja eleito. E faça um bom trabalho. Esse capital. Esse capital político seria. Transferido. Do pessoal à direita. Pra um novo avatar. Que hoje tá. É. Em poder, de certa forma, da família Bolsonaro. Né? E vê-se, no Brasil.
+[06:17 - 06:38] SPEAKER_00: Uma disputa. Por esse eleitorado. Porque ele é importante, numeroso. Representativo. E tudo mais. Né? É. Entrar numa disputa como essa. Que. É. Especialmente a oposição vê. Que desse lado aqui bate-se cabeça. Parece ser. Uma estratégia ruim.
+[06:38 - 06:59] SPEAKER_00: Eu acho que o que você tá falando faria mais sentido. Se todos vocês. Anti-PT. Fossem capazes de sentar numa sala e trocar uma ideia. E chegar numa conclusão. É. Política racional. De enfrentamento político mesmo. Sabe? Mas é. Eu acho que.
+[06:59 - 07:20] SPEAKER_01: Tá se caminhando pra isso. A. Se engana quem pensa que isso não acontece. Se engana quem pensa que essa direita não vai se unir. Que não vai ser competitiva. É. E é por isso que eu falo tanto em projeto. Né? O Brasil precisa de um projeto. Precisa de uma linha clara. Né? Até pra romper com esse ciclo de. É. De desgoverno.
+[07:20 - 07:42] SPEAKER_01: Ou de descaminho que a gente tá andando. Pra onde que a gente vai parar? É. Tem pessoas que se animam um pouco. Olha. O presidente ficou mais popular. É imbatível. Não é. A eleição tá absolutamente aberta. Tem outra coisa que é importante. Aí. Pras pessoas que são mais entusiasmadas com o governo que tá aí. Eu digo. Olha. Pode até ser que ele. Eventualmente ganhe a eleição. Só que aí.
+[07:42 - 08:03] SPEAKER_01: Vocês vão ter um encontro inescapável com 2027. Um encontro inescapável. Com as mazelas do. Que. Vocês mesmos estão construindo. É. A matemática é impiedosa. Aritmética e ideologia não se misturam. O Brasil sempre arrecadou de 19. De 16 a 19% do PIB. Tá arrecadando 21,5% fazendo déficit primário.
+[08:03 - 08:25] SPEAKER_01: E um déficit nominal importante. A. A dívida brasileira tá crescendo a passos largos. E a gente tá caminhando pra. Pra ver o que a gente viu no governo de 1 a 2. Recessão importante. É. Fechamento de empresa. Perda de emprego. Não tem jeito. É o que acontece com governos que são irresponsáveis. E gastam muito. Então é este o cenário. Se nada for feito.
+[08:25 - 08:47] SPEAKER_01: Se um grupo não tiver a coragem de mexer as alavancas. Que precisam ser mexidas. Né. E eu vejo que. Do. Do lado de cá. No campo da. Da direita. Da centro-direita. A Tuma tem essa. Tem isso muito claro. Então. Nós temos. É. Perfis muito arrumados. É. Que tem condição de oferecer isso pro Brasil. De of.
+[08:47 - 09:09] SPEAKER_01: De ofertar um projeto. Que seja mais ou menos um projeto muito uniforme. E detalhe. Nessas pessoas. Você não vê aquela ambição desmedida. Tem que ser eu. Tem que ser fulano. Tem que. A gente vê uma. Uma certa posição. Olha. Não. Eu preciso contribuir com o país. Eu quero estar embarcado num projeto de transformação. Não importa o protagonista. Você pode falar. Qualquer um desses caras hoje. Que estão sendo ventilados. E nada vai apagar o mérito.
+[09:09 - 09:31] SPEAKER_01: Que o Bolsonaro teve. De construir esse movimento. De ser o grande arquiteto. E o grande condutor desse movimento. De ter essa. Essa. Essa. C behave a sua. A sua bunda. É melhor que. Não, lá. Tirar o processo. De transformar. Uma questão que. Procurar uma mudança. Mais. Mais нельзя. Para sealuar. Mais. E uma espécie. Um espírito. Um espírito.
+[09:31 - 09:51] SPEAKER_01: Eligível. Um espírito que não aconde. Vamos anunciar. É bem Society! Os. São. São. Santa José. Ele é. Que? Father Messi. Ele tem. Que. São. That. que entenda o valor da família, então um Estado conservador, liberal, enfim.
+[09:52 - 09:59] SPEAKER_01: Bolsonaro conduziu esse movimento, ele libertou o nó que estava na garganta porque parece que a direita tinha um determinado sentimento de culpa que não deveria ter.
+[10:00 - 10:17] SPEAKER_01: E isso foi libertado, a direita se libertou das narrativas, da narrativa de derrota e o Bolsonaro foi o condutor desse movimento. Por isso que eu entendo que invariavelmente, independente do que acontecer esse legado está preservado e nunca isso vai ser tirado dessa grande liderança chamada Jair Messias Bolsonaro.
+[10:18 - 10:28] SPEAKER_01: E aí é questão de se arrumar a casa e também ter pragmatismo porque o que pode resolver e equacionar uma série de coisas no país é a vitória deste campo.
+
+INSTRUÇÃO FINAL
+
+Retorne apenas o JSON final.
+Retorne `final_videos` com até 3 vídeos finais bem conectados e prontos para montagem.
+Cada item de `final_videos` deve trazer diretamente:
+`title`, `hook`, `hook_start`, `hook_end`, `description`, `hashtags`, `thumbnail`, `soundtrack_suggestion`, `speaker_focus` e `shorts_content`.
+Cada item de `final_videos` deve ter preferencialmente 2 cortes conectados em `shorts_content` quando houver continuação forte.
+Use uma parte em segundos dos cortes escolhidos para servir de hook na tentativa de chamar a atenção do usuário nos primeiros segundos
+Valide a duração total de cada `final_video` antes de responder: o total precisa ficar entre 60 e 120 segundos.
+Se algum `final_video` passar de 120 segundos, encurte o último corte desse vídeo antes de responder.
+Prefira fechar o assunto corretamente, mesmo que isso leve o vídeo para além de 1 minuto.
+Você pode ir até 120 segundos apenas quando essa extensão for necessária para concluir a ideia sem cortar o assunto.
+Não replique mecanicamente a quantidade de itens mostrada no exemplo do `OUTPUT JSON`.
+Decida a quantidade real de cortes com base no contexto e na força narrativa do material.
+Se não houver material forte para 3 vídeos bons, retorne apenas 1 ou 2.
+Se algum campo não se aplicar, retorne null, string vazia ou lista vazia.

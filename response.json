@@ -1,0 +1,83 @@
+{
+“job_id”: “c86a0483-d1dd-465a-bfc0-0c2f8ef89b60”,
+“final_videos”: [
+{
+“video_index”: 1,
+“title”: “De onde eu vim e por que não penso em ser presidente”,
+“hook”: “Igor, a minha mãe é empregada doméstica, cara. Meu pai carregou muita caixa de sapato no mercado.”,
+“hook_source_cut_index”: 0,
+“hook_start”: 10.0,
+“hook_end”: 16.5,
+“description”: “Uma resposta direta sobre ambição política que vira uma história de origem, propósito e entrega de resultados. Do passado humilde às conquistas no governo.”,
+“hashtags”: [”#política”, “#históriadevida”, “#liderança”, “#Brasil”, “#motivação”],
+“thumbnail”: “Close no rosto com expressão séria + texto: Eu nunca pensei em ser presidente”,
+“soundtrack_suggestion”: “political_tension”,
+“speaker_focus”: “SPEAKER_01”,
+“shorts_content”: [
+{
+“start”: 5.0,
+“end”: 51.0,
+“safe_start”: 5.0,
+“safe_end”: 51.0,
+“reason”: “Começa com a pergunta sobre presidência e entra diretamente na origem humilde, criando conexão emocional e autoridade narrativa.”,
+“narrative_role”: “hook”,
+“merge_group”: “story_1”,
+“continuity_note”: “Introduz a mentalidade e o passado que justificam a visão de serviço público”,
+“speaker_focus”: “SPEAKER_01”,
+“transition_after”: “punch_in”
+},
+{
+“start”: 51.0,
+“end”: 81.0,
+“safe_start”: 51.0,
+“safe_end”: 81.0,
+“reason”: “Continuação direta com exemplos concretos de resultados e entregas, fechando com prova prática do discurso inicial.”,
+“narrative_role”: “payoff”,
+“merge_group”: “story_1”,
+“continuity_note”: “Transforma a narrativa pessoal em evidência de competência e entrega”,
+“speaker_focus”: “SPEAKER_01”,
+“transition_after”: “none”
+}
+]
+},
+{
+“video_index”: 2,
+“title”: “A eleição não está decidida e o Brasil pode mudar”,
+“hook”: “Se engana quem pensa que essa direita não vai se unir. A eleição tá absolutamente aberta.”,
+“hook_source_cut_index”: 0,
+“hook_start”: 419.0,
+“hook_end”: 425.5,
+“description”: “Uma análise direta sobre o cenário político, os riscos econômicos e por que a eleição ainda está em aberto.”,
+“hashtags”: [”#eleições”, “#política2026”, “#economia”, “#Brasil”, “#análise”],
+“thumbnail”: “Expressão intensa + texto: A eleição está aberta”,
+“soundtrack_suggestion”: “political_tension”,
+“speaker_focus”: “SPEAKER_01”,
+“shorts_content”: [
+{
+“start”: 419.0,
+“end”: 462.0,
+“safe_start”: 419.0,
+“safe_end”: 462.0,
+“reason”: “Começa com uma afirmação forte que quebra expectativa e apresenta tese central sobre união política e cenário aberto.”,
+“narrative_role”: “hook”,
+“merge_group”: “story_2”,
+“continuity_note”: “Estabelece o contexto político e prepara para aprofundamento econômico”,
+“speaker_focus”: “SPEAKER_01”,
+“transition_after”: “whoosh”
+},
+{
+“start”: 462.0,
+“end”: 527.0,
+“safe_start”: 462.0,
+“safe_end”: 527.0,
+“reason”: “Aprofunda com argumentos econômicos e consequências futuras, entregando um fechamento forte e lógico.”,
+“narrative_role”: “payoff”,
+“merge_group”: “story_2”,
+“continuity_note”: “Expande a tese com dados e previsão de impacto, encerrando com alerta claro”,
+“speaker_focus”: “SPEAKER_01”,
+“transition_after”: “none”
+}
+]
+}
+]
+}
