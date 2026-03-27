@@ -34,8 +34,12 @@ def test_manual_prompt_builder_includes_speakers_and_mode_rules():
     assert "TRANSCRIPT RELEVANTE COM SPEAKERS" in prompt
     assert "TIMELINE GERAL DO VÍDEO" in prompt
     assert "VIZINHANÇA DOS CANDIDATOS" in prompt
-    assert '"story_map"' in prompt
-    assert '"post"' in prompt
+    assert '"final_videos"' in prompt
+    assert '"title"' in prompt
+    assert '"description"' in prompt
+    assert '"hashtags"' in prompt
+    assert '"thumbnail"' in prompt
+    assert '"soundtrack_suggestion"' in prompt
     assert '"safe_start"' in prompt
     assert '"safe_end"' in prompt
     assert '"speaker_focus"' in prompt
@@ -133,3 +137,42 @@ def test_pipeline_parse_manual_response_tolerates_smart_quotes_and_code_fences()
 
     assert parsed["job_id"] == "job-json-fix"
     assert parsed["shorts_content"][0]["title"] == "Teste"
+
+
+def test_pipeline_parse_manual_response_tolerates_single_quotes_and_json_like_literals():
+    pipeline = Pipeline(
+        video_url="https://example.com/video",
+        job_id="job-json-like-fix",
+        manual_response={},
+    )
+
+    payload = """{
+  'job_id': 'job-json-like-fix',
+  'final_videos': [
+    {
+      'video_index': 1,
+      'title': 'Teste',
+      'hook': 'Quem decide esse tipo de coisa?',
+      'description': null,
+      'hashtags': ['#tag1'],
+      'thumbnail': 'thumbnail',
+      'soundtrack_suggestion': 'political_tension',
+      'speaker_focus': null,
+      'shorts_content': [
+        {
+          'start': 10.0,
+          'end': 40.0,
+          'merge_group': 'story_1',
+          'transition_after': 'fade'
+        }
+      ]
+    }
+  ],
+  'approved': true
+}"""
+
+    parsed = pipeline._parse_manual_response(payload)
+
+    assert parsed["job_id"] == "job-json-like-fix"
+    assert parsed["final_videos"][0]["title"] == "Teste"
+    assert parsed["final_videos"][0]["description"] is None

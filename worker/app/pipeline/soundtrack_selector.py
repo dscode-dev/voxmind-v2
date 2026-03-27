@@ -11,9 +11,9 @@ class SoundtrackSelector:
         self,
         *,
         cuts: List[Dict],
-        long_video_script: Dict | None,
+        post_payload: Dict | None = None,
     ) -> Dict:
-        theme = self._detect_theme(cuts, long_video_script)
+        theme = self._detect_theme(cuts, post_payload)
         candidates = [
             self.soundtrack_dir / f"{theme}_bed.mp3",
             self.soundtrack_dir / f"{theme}.mp3",
@@ -41,7 +41,11 @@ class SoundtrackSelector:
             "ducking": "voice_priority",
         }
 
-    def _detect_theme(self, cuts: List[Dict], long_video_script: Dict | None) -> str:
+    def _detect_theme(self, cuts: List[Dict], post_payload: Dict | None) -> str:
+        suggested = str((post_payload or {}).get("soundtrack_suggestion") or "").strip().lower()
+        if suggested in {"finance_tension", "mystery_tension", "political_tension", "generic"}:
+            return suggested
+
         text_parts: List[str] = []
         for cut in cuts:
             text_parts.extend(
@@ -52,12 +56,12 @@ class SoundtrackSelector:
                 ]
             )
 
-        if long_video_script:
+        if post_payload:
             text_parts.extend(
                 [
-                    str(long_video_script.get("title") or ""),
-                    str(long_video_script.get("hook") or ""),
-                    str(long_video_script.get("context") or ""),
+                    str(post_payload.get("title") or ""),
+                    str(post_payload.get("hook") or ""),
+                    str(post_payload.get("description") or ""),
                 ]
             )
 

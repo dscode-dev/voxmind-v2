@@ -172,6 +172,7 @@ class PublishPackageBuilder:
                         "description": str(post.get("description") or cut.get("description") or "").strip(),
                         "hashtags": hashtags,
                         "thumbnail": str(post.get("thumbnail") or cut.get("thumbnail") or "").strip(),
+                        "soundtrack_suggestion": str(post.get("soundtrack_suggestion") or "").strip() or None,
                         "speaker_focus": str(post.get("speaker_focus") or cut.get("speaker_focus") or "").strip() or None,
                     },
                     "final_clip": {

@@ -1,3 +1,4 @@
+import ast
 import json
 import re
 from pathlib import Path
@@ -871,7 +872,7 @@ para continuar o processamento.
             if not isinstance(cuts, list) or not cuts:
                 continue
 
-            post = self._normalize_post_payload(video.get("post"), cuts)
+            post = self._normalize_post_payload(self._extract_video_post_payload(video), cuts)
             video_index = int(video.get("video_index") or index)
             normalized_videos.append(
                 {
@@ -901,9 +902,50 @@ para continuar o processamento.
 
         return normalized
 
+    def _extract_video_post_payload(self, video_payload: dict | None) -> dict:
+        payload = dict((video_payload or {}).get("post") or {})
+        source = video_payload or {}
+        direct_fields = {
+            "title": source.get("title"),
+            "hook": source.get("hook"),
+            "hook_source_cut_index": source.get("hook_source_cut_index"),
+            "description": source.get("description"),
+            "hashtags": source.get("hashtags"),
+            "thumbnail": source.get("thumbnail"),
+            "thumbnails": source.get("thumbnails"),
+            "speaker_focus": source.get("speaker_focus"),
+            "soundtrack_suggestion": source.get("soundtrack_suggestion"),
+            "tracksound_suggestion": source.get("tracksound_suggestion"),
+            "tracksound": source.get("tracksound"),
+        }
+        for key, value in direct_fields.items():
+            if value in (None, "", []):
+                continue
+            payload.setdefault(key, value)
+        return payload
+
     def _normalize_post_payload(self, post_payload: dict | None, cuts: list[dict]) -> dict:
         payload = dict(post_payload or {})
         first_cut = cuts[0] if cuts else {}
+
+        if not str(payload.get("thumbnail") or "").strip():
+            thumbnails = payload.get("thumbnails")
+            if isinstance(thumbnails, list):
+                for item in thumbnails:
+                    value = str(item).strip()
+                    if value:
+                        payload["thumbnail"] = value
+                        break
+            elif str(thumbnails or "").strip():
+                payload["thumbnail"] = str(thumbnails).strip()
+
+        soundtrack_suggestion = (
+            payload.get("soundtrack_suggestion")
+            or payload.get("tracksound_suggestion")
+            or payload.get("tracksound")
+        )
+        if soundtrack_suggestion not in (None, ""):
+            payload["soundtrack_suggestion"] = str(soundtrack_suggestion).strip()
 
         normalized_hashtags = []
         for item in payload.get("hashtags") or first_cut.get("hashtags") or []:
@@ -1078,16 +1120,79 @@ para continuar o processamento.
     def _parse_manual_response(self, text: str) -> dict:
         sanitized = self._sanitize_json_text(text)
 
-        try:
-            return json.loads(sanitized)
-        except json.JSONDecodeError:
-            start = sanitized.find("{")
-            end = sanitized.rfind("}")
-            if start != -1 and end != -1 and end > start:
-                extracted = sanitized[start : end + 1]
-                extracted = re.sub(r",(\s*[}\]])", r"\1", extracted)
-                return json.loads(extracted)
-            raise
+        candidates = [sanitized]
+        start = sanitized.find("{")
+        end = sanitized.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            extracted = sanitized[start : end + 1]
+            extracted = re.sub(r",(\s*[}\]])", r"\1", extracted)
+            candidates.append(extracted)
+
+        for candidate in candidates:
+            try:
+                parsed = json.loads(candidate)
+                if isinstance(parsed, dict):
+                    return parsed
+            except json.JSONDecodeError:
+                pass
+
+        for candidate in candidates:
+            repaired = self._convert_json_literals_for_python(candidate)
+            try:
+                parsed = ast.literal_eval(repaired)
+                if isinstance(parsed, dict):
+                    return parsed
+            except (ValueError, SyntaxError):
+                continue
+
+        raise json.JSONDecodeError("Unable to parse AI response JSON", sanitized, 0)
+
+    def _convert_json_literals_for_python(self, text: str) -> str:
+        result: list[str] = []
+        in_string = False
+        escaped = False
+        quote_char = ""
+        index = 0
+
+        while index < len(text):
+            char = text[index]
+
+            if in_string:
+                result.append(char)
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == quote_char:
+                    in_string = False
+                    quote_char = ""
+                index += 1
+                continue
+
+            if char in {'"', "'"}:
+                in_string = True
+                quote_char = char
+                result.append(char)
+                index += 1
+                continue
+
+            if text.startswith("true", index):
+                result.append("True")
+                index += 4
+                continue
+            if text.startswith("false", index):
+                result.append("False")
+                index += 5
+                continue
+            if text.startswith("null", index):
+                result.append("None")
+                index += 4
+                continue
+
+            result.append(char)
+            index += 1
+
+        return "".join(result)
 
     def _short_serie_continuity_gaps(self, cuts: list[dict]) -> list[dict]:
         if self.clip_mode != "short_serie" or len(cuts) < 2:
@@ -1756,7 +1861,7 @@ para continuar o processamento.
         self._mark_step("render_plan", "started")
         soundtrack = self.soundtrack_selector.select(
             cuts=filtered_cuts,
-            long_video_script=self.manual_response.get("long_video_script"),
+            post_payload=self.manual_response.get("post"),
         )
         plan = self.render_plan_builder.build(
             job_id=self.job_id,
@@ -1813,7 +1918,7 @@ para continuar o processamento.
                 local_cut_files = self.cutter.cut(video_path, spec["cuts"])
                 soundtrack = self.soundtrack_selector.select(
                     cuts=spec["cuts"],
-                    long_video_script=self.manual_response.get("long_video_script"),
+                    post_payload=spec["post"],
                 )
                 local_render_plan = self.render_plan_builder.build(
                     job_id=self.job_id,

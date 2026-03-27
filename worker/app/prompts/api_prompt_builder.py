@@ -113,31 +113,17 @@ Return ONLY valid JSON in this format:
 
 {{
   "job_id": "{job_id}",
-  "clip_mode": "{clip_mode}",
-  "video_ratio": "{video_ratio}",
-  "story_map": {{
-    "core_topic": "main subject of the full video",
-    "central_conflict": "main tension or question driving the story",
-    "hook_strategy": "why the chosen hook is the best opening",
-    "sequence_logic": [
-      "how cut 1 sets the stage",
-      "how cut 2 develops the idea",
-      "how the final cut closes the subject"
-    ],
-    "final_payoff": "the closing line or conclusion the final video should end on"
-  }},
   "final_videos": [
     {{
       "video_index": 1,
-      "post": {{
-        "title": "main final video title",
-        "hook": "main hook used in the opening of this final video",
-        "hook_source_cut_index": 0,
-        "description": "final posting description",
-        "hashtags": ["#tag1", "#tag2", "#tag3"],
-        "thumbnail": "thumbnail idea",
-        "speaker_focus": "SPEAKER_01 | SPEAKER_02 | null"
-      }},
+      "title": "main final video title",
+      "hook": "main hook used in the opening of this final video",
+      "hook_source_cut_index": 0,
+      "description": "final posting description",
+      "hashtags": ["#tag1", "#tag2", "#tag3"],
+      "thumbnail": "thumbnail idea",
+      "soundtrack_suggestion": "political_tension | mystery_tension | finance_tension | generic",
+      "speaker_focus": "SPEAKER_01 | SPEAKER_02 | null",
       "shorts_content": [
         {{
           "start": 10.5,
@@ -158,10 +144,11 @@ Return ONLY valid JSON in this format:
 
 Use transcript, timeline, heuristic candidates and ClipsAI candidates as strong context, but keep editorial autonomy if a better sequence is clearly supported by the material.
 Return `final_videos` with up to 3 separate final videos.
+Each `final_videos[i]` must directly include `title`, `hook`, `description`, `hashtags`, `thumbnail`, `soundtrack_suggestion`, `speaker_focus` and `shorts_content`.
 Each `final_videos[i]` should usually contain 1 or 2 connected cuts in `shorts_content`.
 Prefer final videos around 55 to 75 seconds when the material supports it.
 Only go below 55 seconds when the subject clearly closes earlier and there is no strong continuation.
-`final_videos[i].post.hook_source_cut_index` must point to the cut index inside `final_videos[i].shorts_content` that fully contains the main hook.
+`final_videos[i].hook_source_cut_index` must point to the cut index inside `final_videos[i].shorts_content` that fully contains the main hook.
 `final_videos[i].shorts_content[0]` must fully contain the main hook for that final video.
 If there is only enough strong material for 1 or 2 good final videos, return only 1 or 2.
 """

@@ -117,31 +117,17 @@ OUTPUT JSON
 
 {{
   "job_id": "{job_id}",
-  "clip_mode": "{clip_mode}",
-  "video_ratio": "{video_ratio}",
-  "story_map": {{
-    "core_topic": "assunto central do vídeo",
-    "central_conflict": "qual tensão ou pergunta move a narrativa",
-    "hook_strategy": "por que o hook escolhido é o melhor para abrir o vídeo final",
-    "sequence_logic": [
-      "como o corte 1 prepara o terreno",
-      "como o corte 2 desenvolve a ideia",
-      "como o corte final fecha o assunto"
-    ],
-    "final_payoff": "qual frase, revelação ou conclusão deve encerrar o vídeo"
-  }},
   "final_videos": [
     {{
       "video_index": 1,
-      "post": {{
-        "title": "título principal do vídeo final 1",
-        "hook": "gancho principal do vídeo final 1",
-        "hook_source_cut_index": 0,
-        "description": "descrição final para postagem",
-        "hashtags": ["#tag1", "#tag2", "#tag3"],
-        "thumbnail": "ideia de thumbnail principal",
-        "speaker_focus": "SPEAKER_01 | SPEAKER_02 | null"
-      }},
+      "title": "título principal do vídeo final 1",
+      "hook": "gancho principal do vídeo final 1",
+      "hook_source_cut_index": 0,
+      "description": "descrição final para postagem",
+      "hashtags": ["#tag1", "#tag2", "#tag3"],
+      "thumbnail": "ideia de thumbnail principal",
+      "soundtrack_suggestion": "political_tension | mystery_tension | finance_tension | generic",
+      "speaker_focus": "SPEAKER_01 | SPEAKER_02 | null",
       "shorts_content": [
         {{
           "start": 10.5,
@@ -182,7 +168,9 @@ INSTRUÇÃO FINAL
 
 Retorne apenas o JSON final.
 Retorne `final_videos` com até 3 vídeos finais bem conectados e prontos para montagem.
-Cada item de `final_videos` deve ter seu próprio `post` e 1 ou 2 cortes principais em `shorts_content`.
+Cada item de `final_videos` deve trazer diretamente:
+`title`, `hook`, `description`, `hashtags`, `thumbnail`, `soundtrack_suggestion`, `speaker_focus` e `shorts_content`.
+Cada item de `final_videos` deve ter 1 ou 2 cortes principais em `shorts_content`.
 Se não houver material forte para 3 vídeos bons, retorne apenas 1 ou 2.
 Se algum campo não se aplicar, retorne null, string vazia ou lista vazia.
 """

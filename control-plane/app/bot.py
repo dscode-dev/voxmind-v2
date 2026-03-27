@@ -1,3 +1,4 @@
+import ast
 import json
 import logging
 import uuid
@@ -225,7 +226,7 @@ Exemplo:
             if not isinstance(cuts, list) or not cuts:
                 continue
 
-            post = video.get("post") or {}
+            post = self._extract_video_post_payload(video)
             video_index = int(video.get("video_index") or index)
             normalized_videos.append(
                 {
@@ -254,6 +255,28 @@ Exemplo:
             normalized["post"] = normalized_videos[0].get("post", {})
 
         return normalized
+
+    def _extract_video_post_payload(self, video_payload: dict | None) -> dict:
+        payload = dict((video_payload or {}).get("post") or {})
+        source = video_payload or {}
+        for key in (
+            "title",
+            "hook",
+            "hook_source_cut_index",
+            "description",
+            "hashtags",
+            "thumbnail",
+            "thumbnails",
+            "speaker_focus",
+            "soundtrack_suggestion",
+            "tracksound_suggestion",
+            "tracksound",
+        ):
+            value = source.get(key)
+            if value in (None, "", []):
+                continue
+            payload.setdefault(key, value)
+        return payload
 
     def _sanitize_json_text(self, text: str) -> str:
         replacements = {
@@ -323,16 +346,79 @@ Exemplo:
     def _parse_json_payload(self, text: str) -> dict:
         sanitized = self._sanitize_json_text(text)
 
-        try:
-            return json.loads(sanitized)
-        except json.JSONDecodeError:
-            start = sanitized.find("{")
-            end = sanitized.rfind("}")
-            if start != -1 and end != -1 and end > start:
-                extracted = sanitized[start : end + 1]
-                extracted = re.sub(r",(\s*[}\]])", r"\1", extracted)
-                return json.loads(extracted)
-            raise
+        candidates = [sanitized]
+        start = sanitized.find("{")
+        end = sanitized.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            extracted = sanitized[start : end + 1]
+            extracted = re.sub(r",(\s*[}\]])", r"\1", extracted)
+            candidates.append(extracted)
+
+        for candidate in candidates:
+            try:
+                parsed = json.loads(candidate)
+                if isinstance(parsed, dict):
+                    return parsed
+            except json.JSONDecodeError:
+                pass
+
+        for candidate in candidates:
+            repaired = self._convert_json_literals_for_python(candidate)
+            try:
+                parsed = ast.literal_eval(repaired)
+                if isinstance(parsed, dict):
+                    return parsed
+            except (ValueError, SyntaxError):
+                continue
+
+        raise json.JSONDecodeError("Unable to parse finalize payload", sanitized, 0)
+
+    def _convert_json_literals_for_python(self, text: str) -> str:
+        result: list[str] = []
+        in_string = False
+        escaped = False
+        quote_char = ""
+        index = 0
+
+        while index < len(text):
+            char = text[index]
+
+            if in_string:
+                result.append(char)
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == quote_char:
+                    in_string = False
+                    quote_char = ""
+                index += 1
+                continue
+
+            if char in {'"', "'"}:
+                in_string = True
+                quote_char = char
+                result.append(char)
+                index += 1
+                continue
+
+            if text.startswith("true", index):
+                result.append("True")
+                index += 4
+                continue
+            if text.startswith("false", index):
+                result.append("False")
+                index += 5
+                continue
+            if text.startswith("null", index):
+                result.append("None")
+                index += 4
+                continue
+
+            result.append(char)
+            index += 1
+
+        return "".join(result)
 
     def _resolve_video_url(self, data: dict, job_id: str) -> str | None:
         video_url = data.get("video_url")
