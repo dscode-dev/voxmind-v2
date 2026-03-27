@@ -152,10 +152,13 @@ class RenderPlanBuilder:
         if not hook_text:
             return {"enabled": False}
 
+        preferred_cut_index = self._preferred_hook_cut_index(post_payload, cuts)
+
         best_segment = self._find_best_hook_segment(
             hook_text=hook_text,
             cuts=cuts,
             transcript_segments=transcript_segments,
+            preferred_cut_index=preferred_cut_index,
         )
         if best_segment is None:
             return {"enabled": False}
@@ -196,6 +199,7 @@ class RenderPlanBuilder:
         hook_text: str,
         cuts: List[Dict],
         transcript_segments: List[Dict],
+        preferred_cut_index: int | None = None,
     ) -> Dict | None:
         hook_tokens = set(self._tokenize(hook_text))
         if not hook_tokens:
@@ -205,6 +209,8 @@ class RenderPlanBuilder:
         best_score = 0.0
 
         for cut_index, cut in enumerate(cuts, start=1):
+            if preferred_cut_index is not None and cut_index != preferred_cut_index:
+                continue
             clip_start = float(cut.get("safe_start", cut.get("start", 0.0)) or 0.0)
             clip_end = float(cut.get("safe_end", cut.get("end", 0.0)) or 0.0)
             if clip_end <= clip_start:
@@ -233,6 +239,22 @@ class RenderPlanBuilder:
                     }
 
         return best_segment
+
+    def _preferred_hook_cut_index(self, post_payload: Dict, cuts: List[Dict]) -> int | None:
+        raw_index = post_payload.get("hook_source_cut_index")
+        if raw_index in (None, ""):
+            return 1
+
+        try:
+            index = int(raw_index)
+        except (TypeError, ValueError):
+            return 1
+
+        if 0 <= index < len(cuts):
+            return index + 1
+        if 1 <= index <= len(cuts):
+            return index
+        return 1
 
     def _build_hook_preview_window(
         self,

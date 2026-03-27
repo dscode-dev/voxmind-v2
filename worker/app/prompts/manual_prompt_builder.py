@@ -117,6 +117,11 @@ REGRAS EDITORIAIS
 
 OUTPUT JSON
 
+A estrutura abaixo é apenas um exemplo de formato.
+Não copie a quantidade de itens do exemplo por padrão.
+Você deve decidir quantos vídeos finais retornar e quantos cortes usar em cada `shorts_content`, de acordo com o material.
+Use 1 ou 2 cortes por vídeo final conforme a necessidade real da narrativa.
+
 {{
   "job_id": "{job_id}",
   "final_videos": [
@@ -133,25 +138,13 @@ OUTPUT JSON
       "shorts_content": [
         {{
           "start": 10.5,
-          "end": 34.0,
+          "end": 45.3,
           "safe_start": 10.5,
-          "safe_end": 34.0,
-          "reason": "por que este primeiro trecho abre o assunto com hook claro e setup forte",
+          "safe_end": 45.3,
+          "reason": "por que este trecho respeita narrativa, contexto e continuidade",
           "narrative_role": "hook | setup | development | payoff",
           "merge_group": "story_1",
-          "continuity_note": "como este primeiro corte prepara naturalmente o próximo trecho",
-          "speaker_focus": "SPEAKER_01 | SPEAKER_02 | null",
-          "transition_after": "hard_cut | punch_in | whoosh | fade | none"
-        }},
-        {{
-          "start": 34.0,
-          "end": 58.0,
-          "safe_start": 34.0,
-          "safe_end": 58.0,
-          "reason": "por que este segundo trecho aprofunda a mesma ideia e entrega fechamento",
-          "narrative_role": "hook | setup | development | payoff",
-          "merge_group": "story_1",
-          "continuity_note": "como este segundo corte continua o anterior e fecha o assunto",
+          "continuity_note": "como este corte se conecta ao restante do vídeo final",
           "speaker_focus": "SPEAKER_01 | SPEAKER_02 | null",
           "transition_after": "hard_cut | punch_in | whoosh | fade | none"
         }}
@@ -186,6 +179,8 @@ Cada item de `final_videos` deve trazer diretamente:
 `title`, `hook`, `description`, `hashtags`, `thumbnail`, `soundtrack_suggestion`, `speaker_focus` e `shorts_content`.
 Cada item de `final_videos` deve ter preferencialmente 2 cortes conectados em `shorts_content` quando houver continuação forte.
 Use 1 corte único apenas quando ele sozinho já entregar hook, desenvolvimento e fechamento dentro da faixa ideal.
+Não replique mecanicamente a quantidade de itens mostrada no exemplo do `OUTPUT JSON`.
+Decida a quantidade real de cortes com base no contexto e na força narrativa do material.
 Se não houver material forte para 3 vídeos bons, retorne apenas 1 ou 2.
 Se algum campo não se aplicar, retorne null, string vazia ou lista vazia.
 """

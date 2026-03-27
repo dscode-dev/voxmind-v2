@@ -557,6 +557,18 @@ class FinalVideoRenderer:
             stderr=subprocess.DEVNULL,
         )
 
+        if source_idx != 0:
+            prepared_files = [teaser_path, *prepared_files]
+            prepared_durations = [actual_duration, *prepared_durations]
+            transition_plans = [
+                {
+                    "transition_after": str(cold_open.get("transition_after") or "fade"),
+                    "transition_duration_ms": int(cold_open.get("transition_duration_ms") or 180),
+                },
+                *transition_plans,
+            ]
+            return prepared_files, prepared_durations, transition_plans, True
+
         intro_main_path = self.render_dir / "prepared_01_intro_main.mp4"
         intro_resume_sec = min(
             source_duration,
@@ -568,7 +580,7 @@ class FinalVideoRenderer:
             "-ss",
             str(intro_resume_sec),
             "-i",
-            str(prepared_files[0]),
+            str(prepared_files[source_idx]),
             "-c:v",
             "libx264",
             "-preset",

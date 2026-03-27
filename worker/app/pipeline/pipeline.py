@@ -2028,7 +2028,7 @@ para continuar o processamento.
                 }
             )
 
-        return self._augment_final_video_specs(specs, transcript_segments)
+        return specs
 
     def _split_single_cut_for_short_serie(
         self,
