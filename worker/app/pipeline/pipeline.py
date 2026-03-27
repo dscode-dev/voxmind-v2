@@ -2309,6 +2309,9 @@ para continuar o processamento.
 
             post = self._reconcile_post_hook_to_transcript(post, adjusted_cuts, transcript_segments)
             adjusted_cuts = self._align_first_cut_to_global_hook(adjusted_cuts, transcript_segments, post)
+            adjusted_cuts = self._strengthen_final_video_cuts(adjusted_cuts, transcript_segments, post)
+            adjusted_cuts = self._cap_final_video_total_duration(adjusted_cuts, transcript_segments)
+            post = self._strengthen_post_hook(post, adjusted_cuts, transcript_segments)
 
             deduped.append(
                 {
@@ -2413,7 +2416,7 @@ para continuar o processamento.
             last["safe_end"] = round(strengthened_end, 2)
             total_duration += strengthened_end - last_end
 
-        if total_duration >= target_min_total or len(adjusted) >= 2:
+        if total_duration >= target_min_total:
             return adjusted
 
         continuation = self._build_followup_cut(
