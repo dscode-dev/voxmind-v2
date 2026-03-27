@@ -2343,7 +2343,7 @@ para continuar o processamento.
                 max(float(cut.get("safe_end", cut.get("end", 0.0))) for cut in adjusted_cuts),
             )
 
-        return deduped or specs
+        return deduped if len(deduped) == len(specs) else specs
 
     def _split_single_cut_for_short_serie(
         self,

@@ -214,7 +214,7 @@ PlayResY: 1920
 
 [V4+ Styles]
 Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding
-Style: VoxMind,DejaVu Sans,42,&H00000000,&H00000000,&H00000000,&H00FFFFFF,1,0,0,0,100,100,0.3,0,3,0,0,8,120,120,420,1
+Style: VoxMind,DejaVu Sans,46,&H00000000,&H00000000,&H00000000,&H00FFFFFF,1,0,0,0,100,100,0.6,0,3,0,0,2,110,110,290,1
 
 [Events]
 Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
