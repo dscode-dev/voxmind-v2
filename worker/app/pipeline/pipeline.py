@@ -1383,8 +1383,15 @@ para continuar o processamento.
             and explicit_hook_end <= cut_end
         ):
             updated = dict(post_payload)
-            updated["hook_start"] = round(explicit_hook_start, 2)
-            updated["hook_end"] = round(explicit_hook_end, 2)
+            tightened = self._tighten_hook_window_to_text(
+                hook_text=hook_text,
+                cut=source_cut,
+                transcript_segments=transcript_segments,
+                fallback_start=explicit_hook_start,
+                fallback_end=explicit_hook_end,
+            )
+            updated["hook_start"] = round(float(tightened["start"]), 2)
+            updated["hook_end"] = round(float(tightened["end"]), 2)
             updated["hook_source_cut_index"] = source_cut_index
             return updated
 
@@ -1398,10 +1405,106 @@ para continuar o processamento.
 
         updated = dict(post_payload)
         updated["hook"] = str(matched_segment.get("text") or hook_text).strip()
-        updated["hook_start"] = round(float(matched_segment.get("start", 0.0)), 2)
-        updated["hook_end"] = round(float(matched_segment.get("end", 0.0)), 2)
+        tightened = self._tighten_hook_window_to_text(
+            hook_text=hook_text,
+            cut=source_cut,
+            transcript_segments=transcript_segments,
+            fallback_start=float(matched_segment.get("start", 0.0)),
+            fallback_end=float(matched_segment.get("end", 0.0)),
+        )
+        updated["hook_start"] = round(float(tightened["start"]), 2)
+        updated["hook_end"] = round(float(tightened["end"]), 2)
         updated["hook_source_cut_index"] = source_cut_index
         return updated
+
+    def _tighten_hook_window_to_text(
+        self,
+        *,
+        hook_text: str,
+        cut: dict,
+        transcript_segments: list[dict],
+        fallback_start: float,
+        fallback_end: float,
+    ) -> dict:
+        matched_segment = self._find_best_matching_segment_in_cut(
+            hook_text=hook_text,
+            cut=cut,
+            transcript_segments=transcript_segments,
+        )
+        if matched_segment is None:
+            return {"start": fallback_start, "end": fallback_end}
+
+        tightened = self._estimate_text_window_within_segment(hook_text, matched_segment)
+        if tightened is None:
+            return {
+                "start": float(matched_segment.get("start", fallback_start)),
+                "end": float(matched_segment.get("end", fallback_end)),
+            }
+
+        start = max(float(matched_segment.get("start", fallback_start)), float(tightened["start"]))
+        end = min(float(matched_segment.get("end", fallback_end)), float(tightened["end"]))
+        if end <= start:
+            return {"start": fallback_start, "end": fallback_end}
+        return {"start": start, "end": end}
+
+    def _estimate_text_window_within_segment(self, hook_text: str, segment: dict) -> dict | None:
+        segment_text = str(segment.get("text") or "").strip()
+        if not hook_text or not segment_text:
+            return None
+
+        normalized_segment, segment_map = self._normalized_text_with_map(segment_text)
+        normalized_hook, _ = self._normalized_text_with_map(hook_text)
+        if not normalized_segment or not normalized_hook:
+            return None
+
+        start_idx = normalized_segment.find(normalized_hook)
+        if start_idx < 0:
+            return None
+
+        end_idx = start_idx + len(normalized_hook)
+        segment_duration = float(segment.get("end", 0.0)) - float(segment.get("start", 0.0))
+        if segment_duration <= 0:
+            return None
+
+        start_ratio = segment_map[start_idx] / max(1, len(segment_text))
+        end_anchor = segment_map[min(len(segment_map) - 1, end_idx - 1)] + 1
+        end_ratio = end_anchor / max(1, len(segment_text))
+        segment_start = float(segment.get("start", 0.0))
+        segment_end = float(segment.get("end", 0.0))
+
+        estimated_start = segment_start + (segment_duration * start_ratio)
+        estimated_end = segment_start + (segment_duration * end_ratio)
+        estimated_start = max(segment_start, estimated_start)
+        estimated_end = min(segment_end, estimated_end)
+        if estimated_end <= estimated_start:
+            return None
+        return {"start": estimated_start, "end": estimated_end}
+
+    def _normalized_text_with_map(self, text: str) -> tuple[str, list[int]]:
+        normalized_chars: list[str] = []
+        index_map: list[int] = []
+        previous_space = True
+
+        for index, char in enumerate(text.lower()):
+            normalized_char = char if char.isalnum() else " "
+            if normalized_char == " ":
+                if previous_space:
+                    continue
+                previous_space = True
+            else:
+                previous_space = False
+
+            normalized_chars.append(normalized_char)
+            index_map.append(index)
+
+        normalized = "".join(normalized_chars).strip()
+        if not normalized:
+            return "", []
+
+        leading_trim = len("".join(normalized_chars)) - len("".join(normalized_chars).lstrip())
+        if leading_trim > 0:
+            index_map = index_map[leading_trim:]
+        return normalized, index_map
 
     def _prune_disconnected_short_serie_cuts(self, cuts: list[dict]) -> list[dict]:
         if self.clip_mode != "short_serie" or len(cuts) < 2:
