@@ -3,7 +3,6 @@ from typing import Dict, List
 from app.prompts.prompt_context import (
     build_candidate_context,
     build_candidate_neighborhood_context,
-    build_timeline_context,
     build_transcript_context,
 )
 
@@ -32,29 +31,31 @@ class ManualPromptBuilder:
         clip_mode: str = "short_serie",
         video_ratio: str = "portrait",
     ) -> str:
+        prompt_candidates = [
+            candidate
+            for candidate in candidates
+            if str(candidate.get("source") or "").strip().lower() == "clipsai"
+        ] or candidates
+
         has_named_speakers = any(
             (segment.get("speaker") or "").strip().upper() not in {"", "UNKNOWN"}
             for segment in transcript
         )
         transcript_context = build_transcript_context(
             transcript=transcript,
-            candidates=candidates,
-            max_chars=int(self.max_context_chars * 0.42),
+            candidates=prompt_candidates,
+            max_chars=int(self.max_context_chars * 0.58),
             max_candidates=self.prompt_max_candidates,
             max_segments_per_candidate=self.prompt_max_segments_per_candidate,
         )
-        timeline_context = build_timeline_context(
-            transcript=transcript,
-            max_chars=int(self.max_context_chars * 0.18),
-        )
         neighborhood_context = build_candidate_neighborhood_context(
             transcript=transcript,
-            candidates=candidates,
-            max_chars=int(self.max_context_chars * 0.22),
+            candidates=prompt_candidates,
+            max_chars=int(self.max_context_chars * 0.24),
             max_candidates=max(self.prompt_max_candidates, 6),
         )
         candidate_context = build_candidate_context(
-            candidates=candidates,
+            candidates=prompt_candidates,
             max_chars=int(self.max_context_chars * 0.18),
         )
 
@@ -92,8 +93,8 @@ O QUE VOCÊ DEVE FAZER
 - Os cortes de um mesmo vídeo final devem compartilhar o mesmo contexto ou se conectar de forma natural.
 - Cada vídeo final deve ter um hook forte no começo, desenvolvimento claro e fechamento real.
 - Prefira menos vídeos bons do que vários vídeos fracos.
-- Use transcript, timeline e candidatos como contexto forte.
-- Dê atenção especial aos candidatos com `source = clipsai`.
+- Use o transcript como contexto principal.
+- Use os candidatos do ClipsAI como pistas fortes para encontrar os melhores blocos narrativos.
 - Você pode ajustar timestamps em aproximadamente ±8 segundos para capturar início natural e fechamento.
 
 REGRAS EDITORIAIS
@@ -158,10 +159,6 @@ CONTEXTO PRINCIPAL
 TRANSCRIPT RELEVANTE COM SPEAKERS
 
 {transcript_context}
-
-TIMELINE GERAL DO VÍDEO
-
-{timeline_context}
 
 VIZINHANÇA DOS CANDIDATOS
 

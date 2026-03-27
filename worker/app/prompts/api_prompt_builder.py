@@ -3,7 +3,6 @@ from typing import Dict, List
 from app.prompts.prompt_context import (
     build_candidate_context,
     build_candidate_neighborhood_context,
-    build_timeline_context,
     build_transcript_context,
 )
 
@@ -27,23 +26,25 @@ class ApiPromptBuilder:
         clip_mode: str = "short_serie",
         video_ratio: str = "portrait",
     ) -> str:
+        prompt_candidates = [
+            candidate
+            for candidate in candidates
+            if str(candidate.get("source") or "").strip().lower() == "clipsai"
+        ] or candidates
+
         transcript_context = build_transcript_context(
             transcript=transcript,
-            candidates=candidates,
-            max_chars=int(self.max_context_chars * 0.42),
-        )
-        timeline_context = build_timeline_context(
-            transcript=transcript,
-            max_chars=int(self.max_context_chars * 0.18),
+            candidates=prompt_candidates,
+            max_chars=int(self.max_context_chars * 0.58),
         )
         neighborhood_context = build_candidate_neighborhood_context(
             transcript=transcript,
-            candidates=candidates,
-            max_chars=int(self.max_context_chars * 0.22),
+            candidates=prompt_candidates,
+            max_chars=int(self.max_context_chars * 0.24),
             max_candidates=6,
         )
         candidate_context = build_candidate_context(
-            candidates=candidates,
+            candidates=prompt_candidates,
             max_chars=int(self.max_context_chars * 0.18),
         )
 
@@ -67,8 +68,8 @@ MANDATORY RULES
 - Never start in the middle of a sentence.
 - Never end before the idea concludes.
 - Respect speaker continuity when dialogue is important.
-- Use candidates as strong and prioritized hints, not strict boundaries.
-- Give special attention to candidates with `source = clipsai`, because they represent narrative blocks detected directly from the transcript.
+- Use the transcript as the primary context.
+- Use ClipsAI candidates as strong narrative hints, not strict boundaries.
 - You may adjust timestamps slightly to preserve complete meaning.
 - Prefer editorially complete cuts over merely loud or sensational ones.
 - Avoid redundant cuts that repeat the same narrative beat.
@@ -98,10 +99,6 @@ MODE RULES
 TRANSCRIPT WITH SPEAKERS
 
 {transcript_context}
-
-FULL VIDEO TIMELINE
-
-{timeline_context}
 
 CANDIDATE NEIGHBORHOODS
 
@@ -149,7 +146,7 @@ Use 1 or 2 cuts per final video according to the real narrative need.
   ]
 }}
 
-Use transcript, timeline, heuristic candidates and ClipsAI candidates as strong context, but keep editorial autonomy if a better sequence is clearly supported by the material.
+Use the transcript as the main context and the ClipsAI candidates as strong narrative hints, but keep editorial autonomy if a better sequence is clearly supported by the material.
 Return `final_videos` with up to 3 separate final videos.
 Each `final_videos[i]` must directly include `title`, `hook`, `description`, `hashtags`, `thumbnail`, `soundtrack_suggestion`, `speaker_focus` and `shorts_content`.
 Each `final_videos[i]` should preferably contain 2 connected cuts in `shorts_content` when strong continuation exists.

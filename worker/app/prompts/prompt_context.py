@@ -17,9 +17,10 @@ def build_transcript_context(
     transcript: List[Dict],
     candidates: List[Dict],
     max_chars: int,
-    context_padding_sec: int = 14,
+    context_padding_sec: int = 22,
     max_candidates: int = 5,
-    max_segments_per_candidate: int = 10,
+    max_segments_per_candidate: int = 14,
+    min_total_segments: int = 18,
 ) -> str:
     full_text = _format_transcript_segments(transcript)
     if len(full_text) <= max_chars:
@@ -59,6 +60,11 @@ def build_transcript_context(
             if included_for_candidate >= max_segments_per_candidate:
                 break
 
+    selected_segments = _expand_selected_segments(
+        transcript=transcript,
+        selected_segments=selected_segments,
+        min_total_segments=min_total_segments,
+    )
     selected_segments.sort(key=lambda item: float(item["start"]))
     focused_segments = _limit_transcript_segments(selected_segments)
     focused_text = _format_transcript_segments(focused_segments)
@@ -67,6 +73,58 @@ def build_transcript_context(
         return focused_text
 
     return _truncate_lines(focused_text, max_chars)
+
+
+def _expand_selected_segments(
+    *,
+    transcript: List[Dict],
+    selected_segments: List[Dict],
+    min_total_segments: int,
+) -> List[Dict]:
+    if len(selected_segments) >= min_total_segments or not transcript or not selected_segments:
+        return selected_segments
+
+    positions = {
+        (float(segment.get("start", 0.0)), float(segment.get("end", 0.0))): index
+        for index, segment in enumerate(transcript)
+    }
+    selected_keys = {
+        (float(segment.get("start", 0.0)), float(segment.get("end", 0.0)))
+        for segment in selected_segments
+    }
+
+    frontier = sorted(
+        positions[key]
+        for key in selected_keys
+        if key in positions
+    )
+    if not frontier:
+        return selected_segments
+
+    left = frontier[0] - 1
+    right = frontier[-1] + 1
+    expanded = list(selected_segments)
+
+    while len(expanded) < min_total_segments and (left >= 0 or right < len(transcript)):
+        if left >= 0:
+            segment = transcript[left]
+            key = (float(segment.get("start", 0.0)), float(segment.get("end", 0.0)))
+            if key not in selected_keys:
+                expanded.append(segment)
+                selected_keys.add(key)
+                if len(expanded) >= min_total_segments:
+                    break
+            left -= 1
+
+        if right < len(transcript):
+            segment = transcript[right]
+            key = (float(segment.get("start", 0.0)), float(segment.get("end", 0.0)))
+            if key not in selected_keys:
+                expanded.append(segment)
+                selected_keys.add(key)
+            right += 1
+
+    return expanded
 
 
 def build_candidate_context(candidates: List[Dict], max_chars: int) -> str:
