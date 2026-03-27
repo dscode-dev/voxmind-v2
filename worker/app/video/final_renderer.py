@@ -273,14 +273,30 @@ class FinalVideoRenderer:
         output_path: Path,
         clip_plan: Dict,
     ) -> None:
+        video_filters: List[str] = ["fps=30", "format=yuv420p"]
+
         if not bool(clip_plan.get("overlay_enabled", False)):
             command = [
                 "ffmpeg",
                 "-y",
                 "-i",
                 str(input_path),
-                "-c",
-                "copy",
+                "-vf",
+                ",".join(video_filters),
+                "-c:v",
+                "libx264",
+                "-preset",
+                "fast",
+                "-crf",
+                "22",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "-ar",
+                "48000",
+                "-movflags",
+                "+faststart",
                 str(output_path),
             ]
             subprocess.run(
@@ -298,8 +314,22 @@ class FinalVideoRenderer:
                 "-y",
                 "-i",
                 str(input_path),
-                "-c",
-                "copy",
+                "-vf",
+                ",".join(video_filters),
+                "-c:v",
+                "libx264",
+                "-preset",
+                "fast",
+                "-crf",
+                "22",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "-ar",
+                "48000",
+                "-movflags",
+                "+faststart",
                 str(output_path),
             ]
             subprocess.run(
@@ -323,6 +353,7 @@ class FinalVideoRenderer:
             caption_style=caption_style,
             text_timing=text_timing,
         )
+        video_filters.append(drawtext)
 
         command = [
             "ffmpeg",
@@ -330,15 +361,19 @@ class FinalVideoRenderer:
             "-i",
             str(input_path),
             "-vf",
-            drawtext,
+            ",".join(video_filters),
             "-c:v",
             "libx264",
             "-preset",
             "fast",
             "-crf",
             "22",
+            "-pix_fmt",
+            "yuv420p",
             "-c:a",
             "aac",
+            "-ar",
+            "48000",
             "-movflags",
             "+faststart",
             str(output_path),
