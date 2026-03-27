@@ -1370,6 +1370,24 @@ para continuar o processamento.
 
         source_cut_index = self._resolve_hook_cut_index(post_payload, cuts)
         source_cut = cuts[source_cut_index]
+        explicit_hook_start = self._coerce_optional_float(post_payload.get("hook_start"))
+        explicit_hook_end = self._coerce_optional_float(post_payload.get("hook_end"))
+        cut_start = float(source_cut.get("safe_start", source_cut.get("start", 0.0)) or 0.0)
+        cut_end = float(source_cut.get("safe_end", source_cut.get("end", 0.0)) or 0.0)
+
+        if (
+            explicit_hook_start is not None
+            and explicit_hook_end is not None
+            and explicit_hook_end > explicit_hook_start
+            and explicit_hook_start >= cut_start
+            and explicit_hook_end <= cut_end
+        ):
+            updated = dict(post_payload)
+            updated["hook_start"] = round(explicit_hook_start, 2)
+            updated["hook_end"] = round(explicit_hook_end, 2)
+            updated["hook_source_cut_index"] = source_cut_index
+            return updated
+
         matched_segment = self._find_best_matching_segment_in_cut(
             hook_text=hook_text,
             cut=source_cut,
