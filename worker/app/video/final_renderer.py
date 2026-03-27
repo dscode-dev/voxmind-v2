@@ -535,8 +535,12 @@ class FinalVideoRenderer:
             "fast",
             "-crf",
             "22",
+            "-pix_fmt",
+            "yuv420p",
             "-c:a",
             "aac",
+            "-ar",
+            "48000",
             "-movflags",
             "+faststart",
             str(output_path),
@@ -693,7 +697,18 @@ class FinalVideoRenderer:
         return prepared_files, prepared_durations, transition_plans, True
 
     def _subtitle_filter(self, subtitle_path: Path) -> str:
-        subtitle_file = str(subtitle_path).replace("\\", "\\\\").replace(":", "\\:")
+        try:
+            subtitle_file = str(subtitle_path.resolve().relative_to(self.render_dir.resolve()))
+        except ValueError:
+            subtitle_file = str(subtitle_path.resolve())
+        subtitle_file = (
+            subtitle_file.replace("\\", "\\\\")
+            .replace(":", "\\:")
+            .replace("'", r"\'")
+            .replace(",", r"\,")
+            .replace("[", r"\[")
+            .replace("]", r"\]")
+        )
         if subtitle_path.suffix.lower() == ".ass":
             return f"subtitles='{subtitle_file}'"
         style = (

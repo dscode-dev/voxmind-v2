@@ -3,7 +3,6 @@ FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
 ARG POETRY_INSTALL_GROUPS="diarization"
 ARG TORCH_VERSION="2.5.1"
 ARG TORCHAUDIO_VERSION="2.5.1"
-ARG TORCHVISION_VERSION="0.20.1"
 ARG POETRY_VERSION="2.0.1"
 ARG PYTHON_VERSION="3.11"
 ARG TORCH_FLAVOR="gpu"
@@ -14,7 +13,6 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
     PIP_DEFAULT_TIMEOUT=300 \
     PIP_RETRIES=10 \
-    NLTK_DATA=/usr/local/share/nltk_data \
     POETRY_VIRTUALENVS_CREATE=false \
     POETRY_NO_INTERACTION=1 \
     POETRY_INSTALLER_PARALLEL=false \
@@ -27,9 +25,6 @@ RUN apt-get update && \
         software-properties-common \
         curl \
         git \
-        file \
-        libmagic1 \
-        libmagic-dev \
         ffmpeg \
         build-essential && \
     add-apt-repository ppa:deadsnakes/ppa && \
@@ -61,26 +56,18 @@ RUN if [ -n "$POETRY_INSTALL_GROUPS" ]; then \
     fi && \
     rm -rf /tmp/poetry-cache
 
-RUN python - <<'PY'
-import nltk
-nltk.download("punkt", download_dir="/usr/local/share/nltk_data")
-nltk.download("punkt_tab", download_dir="/usr/local/share/nltk_data")
-PY
-
 RUN if echo "$POETRY_INSTALL_GROUPS" | grep -Eq '(^|,| )diarization($|,| )'; then \
-        python -m pip uninstall -y torch torchaudio torchvision torchtext || true; \
+        python -m pip uninstall -y torch torchaudio torchtext || true; \
         if [ "$TORCH_FLAVOR" = "gpu" ]; then \
             python -m pip install --no-cache-dir \
                 --index-url https://download.pytorch.org/whl/cu124 \
                 "torch==${TORCH_VERSION}" \
-                "torchaudio==${TORCHAUDIO_VERSION}" \
-                "torchvision==${TORCHVISION_VERSION}"; \
+                "torchaudio==${TORCHAUDIO_VERSION}"; \
         else \
             python -m pip install --no-cache-dir \
                 --index-url https://download.pytorch.org/whl/cpu \
                 "torch==${TORCH_VERSION}" \
-                "torchaudio==${TORCHAUDIO_VERSION}" \
-                "torchvision==${TORCHVISION_VERSION}"; \
+                "torchaudio==${TORCHAUDIO_VERSION}"; \
         fi; \
     fi
 

@@ -25,11 +25,7 @@ class ApiPromptBuilder:
         clip_mode: str = "short_serie",
         video_ratio: str = "portrait",
     ) -> str:
-        prompt_candidates = [
-            candidate
-            for candidate in candidates
-            if str(candidate.get("source") or "").strip().lower() == "clipsai"
-        ] or candidates
+        prompt_candidates = candidates
 
         transcript_context = build_transcript_context(
             transcript=transcript,
@@ -62,7 +58,7 @@ MANDATORY RULES
 - Never end before the idea concludes.
 - Respect speaker continuity when dialogue is important.
 - Use the transcript as the primary context.
-- Use ClipsAI candidates as strong narrative hints, not strict boundaries.
+- Use the prioritized candidates as useful hints, but choose the sequence that best closes the narrative.
 - You may adjust timestamps slightly to preserve complete meaning.
 - Prefer editorially complete cuts over merely loud or sensational ones.
 - Avoid redundant cuts that repeat the same narrative beat.
@@ -141,7 +137,7 @@ Use 1 or 2 cuts per final video according to the real narrative need.
   ]
 }}
 
-Use the transcript as the main context and the ClipsAI candidates as strong narrative hints, but keep editorial autonomy if a better sequence is clearly supported by the material.
+Use the transcript as the main context and the prioritized candidates as helpful hints, but keep editorial autonomy if a better sequence is clearly supported by the material.
 Return `final_videos` with up to 3 separate final videos.
 Each `final_videos[i]` must directly include `title`, `hook`, `hook_start`, `hook_end`, `description`, `hashtags`, `thumbnail`, `soundtrack_suggestion`, `speaker_focus` and `shorts_content`.
 Each `final_videos[i]` should preferably contain 2 connected cuts in `shorts_content` when strong continuation exists.

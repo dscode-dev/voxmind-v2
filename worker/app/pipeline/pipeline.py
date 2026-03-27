@@ -15,7 +15,6 @@ from app.video.qa import ClipQA
 from app.pipeline.chunker import Chunker
 from app.pipeline.auto_review import AutoReviewPolicy
 from app.pipeline.candidate_builder import CandidateBuilder
-from app.pipeline.clipsai_candidate_provider import ClipsAICandidateProvider
 from app.pipeline.delivery_package_builder import DeliveryPackageBuilder
 from app.pipeline.publish_package_builder import PublishPackageBuilder
 from app.pipeline.soundtrack_selector import SoundtrackSelector
@@ -92,14 +91,6 @@ class Pipeline:
 
         self.chunker = self._build_chunker()
         self.builder = self._build_candidate_builder()
-        self.clipsai_candidate_provider = ClipsAICandidateProvider(
-            enabled=settings.clipsai_enabled,
-            device=settings.clipsai_device,
-            max_candidates=settings.clipsai_max_candidates,
-            min_duration_sec=settings.clipsai_min_candidate_duration_sec,
-            max_duration_sec=settings.clipsai_max_candidate_duration_sec,
-            fallback_to_cpu_on_oom=settings.clipsai_fallback_to_cpu_on_oom,
-        )
         self.scorer = self._build_scorer()
         self.delivery_package_builder = DeliveryPackageBuilder()
         self.publish_package_builder = PublishPackageBuilder()
@@ -389,24 +380,7 @@ ERROR:
         candidates = self.builder.build(chunks)
         self._mark_step("candidate_build", "completed", candidate_count=len(candidates))
 
-        self._log("🧩 Segmenting transcript with ClipsAI...")
-        self._mark_step("clipsai_candidate_build", "started")
-
-        clipsai_candidates, clipsai_diagnostics = self.clipsai_candidate_provider.build(segments)
-        if settings.clipsai_enabled and not clipsai_diagnostics.get("available"):
-            reason = clipsai_diagnostics.get("reason", "unknown")
-            self._mark_step("clipsai_candidate_build", "failed", reason=reason)
-            raise RuntimeError(f"ClipsAI candidate generation failed: {reason}")
-
-        self._mark_step(
-            "clipsai_candidate_build",
-            "completed",
-            candidate_count=len(clipsai_candidates),
-            device=clipsai_diagnostics.get("resolved_device"),
-        )
-        self.clipsai_candidate_provider.release_resources()
-
-        combined_candidates = self._merge_candidate_sources(candidates, clipsai_candidates)
+        combined_candidates = candidates
 
         self._log("📊 Ranking candidates...")
         self._mark_step("candidate_score", "started")
@@ -440,16 +414,6 @@ ERROR:
             "candidates.json",
             ranked,
             "candidates",
-        )
-        clipsai_candidates_path = self._write_json_artifact(
-            "clipsai_candidates.json",
-            clipsai_candidates,
-            "clipsai_candidates",
-        )
-        clipsai_diagnostics_path = self._write_json_artifact(
-            "clipsai_diagnostics.json",
-            clipsai_diagnostics,
-            "clipsai_diagnostics",
         )
         prompt_path = self._write_text_artifact(
             "prompt.txt",
@@ -500,8 +464,6 @@ para continuar o processamento.
             "transcript_path": str(transcript_path),
             "transcript_with_speakers_path": str(transcript_with_speakers_path),
             "candidates_path": str(candidates_path),
-            "clipsai_candidates_path": str(clipsai_candidates_path),
-            "clipsai_diagnostics_path": str(clipsai_diagnostics_path),
             "prompt_path": str(prompt_path),
             "runtime_status_path": str(self.runtime.runtime_path),
             "artifacts_manifest_path": str(self.artifacts.manifest_path),
@@ -634,7 +596,6 @@ para continuar o processamento.
         for component in (
             self.transcriber,
             self.diarizer,
-            self.clipsai_candidate_provider,
         ):
             try:
                 component.release_resources()

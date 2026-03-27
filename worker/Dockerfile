@@ -34,7 +34,7 @@ RUN if [ -n "$POETRY_INSTALL_GROUPS" ]; then \
 
 # Force CPU-only torch stack for diarization builds so pyannote does not pull CUDA runtime.
 RUN if echo "$POETRY_INSTALL_GROUPS" | grep -Eq '(^|,| )diarization($|,| )'; then \
-        pip uninstall -y torch torchaudio torchvision torchtext || true; \
+        pip uninstall -y torch torchaudio torchtext || true; \
         pip install --no-cache-dir \
             --index-url https://download.pytorch.org/whl/cpu \
             "torch==${TORCH_VERSION}" \

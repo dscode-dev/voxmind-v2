@@ -30,11 +30,7 @@ class ManualPromptBuilder:
         clip_mode: str = "short_serie",
         video_ratio: str = "portrait",
     ) -> str:
-        prompt_candidates = [
-            candidate
-            for candidate in candidates
-            if str(candidate.get("source") or "").strip().lower() == "clipsai"
-        ] or candidates
+        prompt_candidates = candidates
 
         has_named_speakers = any(
             (segment.get("speaker") or "").strip().upper() not in {"", "UNKNOWN"}
@@ -87,7 +83,7 @@ O QUE VOCÊ DEVE FAZER
 - Cada vídeo final deve ter um hook forte no começo, desenvolvimento claro e fechamento real.
 - Prefira menos vídeos bons do que vários vídeos fracos.
 - Use o transcript como contexto principal.
-- Use os candidatos do ClipsAI como pistas fortes para encontrar os melhores blocos narrativos.
+- Use os candidatos priorizados como pistas úteis, mas decida pelos trechos que melhor fecham a narrativa.
 - Você pode ajustar timestamps em aproximadamente ±8 segundos para capturar início natural e fechamento.
 
 REGRAS EDITORIAIS

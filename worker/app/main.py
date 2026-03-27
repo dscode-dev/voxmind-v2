@@ -141,8 +141,6 @@ def run_pipeline(job: dict):
             transcript_path = result.get("transcript_path")
             transcript_with_speakers_path = result.get("transcript_with_speakers_path")
             candidates_path = result.get("candidates_path")
-            clipsai_candidates_path = result.get("clipsai_candidates_path")
-            clipsai_diagnostics_path = result.get("clipsai_diagnostics_path")
             prompt_path = result.get("prompt_path")
             runtime_status_path = result.get("runtime_status_path")
             artifacts_manifest_path = result.get("artifacts_manifest_path")
@@ -173,22 +171,6 @@ def run_pipeline(job: dict):
                     pipeline_stage,
                     f"jobs/{job_id}/candidates.json",
                     candidates_path,
-                )
-
-            if _upload_if_exists(storage, clipsai_candidates_path, f"jobs/{job_id}/clipsai_candidates.json"):
-                pipeline.artifacts.mark_remote(
-                    "clipsai_candidates",
-                    pipeline_stage,
-                    f"jobs/{job_id}/clipsai_candidates.json",
-                    clipsai_candidates_path,
-                )
-
-            if _upload_if_exists(storage, clipsai_diagnostics_path, f"jobs/{job_id}/clipsai_diagnostics.json"):
-                pipeline.artifacts.mark_remote(
-                    "clipsai_diagnostics",
-                    pipeline_stage,
-                    f"jobs/{job_id}/clipsai_diagnostics.json",
-                    clipsai_diagnostics_path,
                 )
 
             if _upload_if_exists(storage, prompt_path, f"jobs/{job_id}/prompt.txt"):

@@ -271,51 +271,19 @@ def _select_focus_candidates(candidates: List[Dict]) -> List[Dict]:
         return []
 
     primary_cluster = _select_dominant_candidate_cluster(candidates)
-    selected = list(primary_cluster)
-    selected_ids = {candidate.get("candidate_id") for candidate in selected}
-
-    clipsai_candidates = [
-        candidate
-        for candidate in candidates
-        if candidate.get("source") == "clipsai" and candidate.get("candidate_id") not in selected_ids
-    ][:2]
-    selected.extend(clipsai_candidates)
-
-    return sorted(selected, key=lambda item: float(item.get("start", 0.0)))
+    return sorted(primary_cluster, key=lambda item: float(item.get("start", 0.0)))
 
 
 def _prioritize_prompt_candidates(candidates: List[Dict], max_candidates: int) -> List[Dict]:
     if not candidates:
         return []
 
-    clipsai_candidates = sorted(
-        [candidate for candidate in candidates if candidate.get("source") == "clipsai"],
+    prioritized = sorted(
+        candidates,
         key=lambda item: item.get("total_score", 0.0),
         reverse=True,
     )
-    heuristic_candidates = sorted(
-        [candidate for candidate in candidates if candidate.get("source") != "clipsai"],
-        key=lambda item: item.get("total_score", 0.0),
-        reverse=True,
-    )
-
-    prioritized: List[Dict] = []
-    clipsai_quota = min(2, max_candidates)
-    heuristic_quota = max_candidates - clipsai_quota
-
-    prioritized.extend(clipsai_candidates[:clipsai_quota])
-    prioritized.extend(heuristic_candidates[:max(heuristic_quota, 0)])
-
-    if len(prioritized) < max_candidates:
-        overflow = clipsai_candidates[clipsai_quota:] + heuristic_candidates[max(heuristic_quota, 0):]
-        for candidate in overflow:
-            if candidate in prioritized:
-                continue
-            prioritized.append(candidate)
-            if len(prioritized) >= max_candidates:
-                break
-
-    return prioritized
+    return prioritized[:max_candidates]
 
 
 def _format_transcript_segments(segments: List[Dict]) -> str:

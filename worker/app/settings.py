@@ -177,31 +177,6 @@ class Settings(BaseSettings):
         alias="DIARIZATION_MIN_OVERLAP_SEC"
     )
 
-    clipsai_enabled: bool = Field(
-        default=True,
-        alias="CLIPSAI_ENABLED"
-    )
-    clipsai_device: str = Field(
-        default="cuda",
-        alias="CLIPSAI_DEVICE"
-    )
-    clipsai_fallback_to_cpu_on_oom: bool = Field(
-        default=True,
-        alias="CLIPSAI_FALLBACK_TO_CPU_ON_OOM"
-    )
-    clipsai_max_candidates: int = Field(
-        default=6,
-        alias="CLIPSAI_MAX_CANDIDATES"
-    )
-    clipsai_min_candidate_duration_sec: int = Field(
-        default=26,
-        alias="CLIPSAI_MIN_CANDIDATE_DURATION_SEC"
-    )
-    clipsai_max_candidate_duration_sec: int = Field(
-        default=80,
-        alias="CLIPSAI_MAX_CANDIDATE_DURATION_SEC"
-    )
-
     qa_enabled: bool = Field(
         default=True,
         alias="QA_ENABLED"
