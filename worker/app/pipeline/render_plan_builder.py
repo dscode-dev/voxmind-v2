@@ -97,9 +97,9 @@ class RenderPlanBuilder:
         mapping = {
             "none": 0,
             "hard_cut": 0,
-            "punch_in": 120,
-            "whoosh": 180,
-            "fade": 220,
+            "punch_in": 180,
+            "whoosh": 240,
+            "fade": 320,
         }
         return mapping.get(self._normalized_transition(transition_after), 0)
 
@@ -180,7 +180,7 @@ class RenderPlanBuilder:
         if preview is None:
             return {"enabled": False}
 
-        if preview["relative_start_sec"] <= 1.0:
+        if source_clip_index == 1 and preview["relative_start_sec"] <= 0.25:
             return {"enabled": False}
 
         return {

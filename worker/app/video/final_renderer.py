@@ -141,10 +141,6 @@ class FinalVideoRenderer:
             for index in range(1, len(prepared_files))
         )
 
-        if cold_open_inserted:
-            self._concat_prepared_files(prepared_files, output_path)
-            return
-
         if len(prepared_files) == 1 or not use_fade:
             self._concat_prepared_files(prepared_files, output_path)
             return
