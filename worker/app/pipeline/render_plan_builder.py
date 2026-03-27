@@ -293,16 +293,18 @@ class RenderPlanBuilder:
         if hook_start > clip_end or hook_end < clip_start:
             return None
 
-        absolute_start = max(clip_start, hook_start - DEFAULT_COLD_OPEN_LEAD_IN_SEC)
+        # When the LLM gives us an explicit hook window, trust its beginning and
+        # avoid adding extra setup before the phrase.
+        absolute_start = max(clip_start, hook_start)
         absolute_end = min(
             clip_end,
             max(
-                hook_end + DEFAULT_COLD_OPEN_TAIL_SEC,
-                absolute_start + DEFAULT_COLD_OPEN_MIN_DURATION_SEC,
+                hook_end + 0.18,
+                absolute_start + 1.1,
             ),
         )
         duration_sec = max(0.0, absolute_end - absolute_start)
-        if duration_sec < 1.8:
+        if duration_sec < 0.8:
             return None
 
         return {
