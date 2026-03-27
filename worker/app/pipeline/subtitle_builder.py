@@ -125,16 +125,6 @@ class SubtitleBuilder:
             cut_end=source_end,
         )
         for segment in segments:
-            word_events = self._word_level_events_for_segment(
-                segment=segment,
-                source_start=source_start,
-                source_end=source_end,
-                timeline_offset=timeline_offset,
-            )
-            if word_events:
-                events.extend(word_events)
-                continue
-
             clipped_start = max(source_start, float(segment.get("start", 0.0)))
             clipped_end = min(source_end, float(segment.get("end", 0.0)))
             local_start = max(0.0, clipped_start - source_start) / self.playback_speed
@@ -168,16 +158,6 @@ class SubtitleBuilder:
             cut_end=end,
         )
         for segment in segments:
-            word_events = self._word_level_events_for_segment(
-                segment=segment,
-                source_start=start,
-                source_end=end,
-                timeline_offset=0.0,
-            )
-            if word_events:
-                events.extend(word_events)
-                continue
-
             local_start = max(0.0, float(segment.get("start", 0.0)) - start) / self.playback_speed
             local_end = (min(end, float(segment.get("end", 0.0))) - start) / self.playback_speed
             if local_end <= local_start:
@@ -243,59 +223,6 @@ class SubtitleBuilder:
 
         return self._merge_adjacent_events(events)
 
-    def _word_level_events_for_segment(
-        self,
-        *,
-        segment: Dict,
-        source_start: float,
-        source_end: float,
-        timeline_offset: float,
-    ) -> List[Dict]:
-        raw_words = list(segment.get("words") or [])
-        if not raw_words:
-            return []
-
-        clipped_words: List[Dict] = []
-        for word in raw_words:
-            word_start = float(word.get("start", 0.0))
-            word_end = float(word.get("end", 0.0))
-            word_text = str(word.get("text") or "").strip()
-            if not word_text:
-                continue
-            if word_end <= source_start or word_start >= source_end:
-                continue
-            clipped_words.append(
-                {
-                    "start": max(source_start, word_start),
-                    "end": min(source_end, word_end),
-                    "text": word_text,
-                }
-            )
-
-        if not clipped_words:
-            return []
-
-        chunks = self._chunk_words([word["text"] for word in clipped_words], max_words=2, max_chars=14)
-        events: List[Dict] = []
-        cursor = 0
-        for chunk in chunks:
-            chunk_words = clipped_words[cursor : cursor + len(chunk)]
-            cursor += len(chunk)
-            if not chunk_words:
-                continue
-            local_start = max(0.0, float(chunk_words[0]["start"]) - source_start) / self.playback_speed
-            local_end = max(0.0, float(chunk_words[-1]["end"]) - source_start) / self.playback_speed
-            if local_end <= local_start:
-                continue
-            events.append(
-                {
-                    "start": round(timeline_offset + local_start, 3),
-                    "end": round(timeline_offset + local_end, 3),
-                    "text": " ".join(word["text"] for word in chunk_words).upper(),
-                }
-            )
-
-        return self._merge_adjacent_events(events)
 
     def _tokenize_words(self, text: str) -> List[str]:
         cleaned = re.sub(r"\s+", " ", str(text or "").strip())

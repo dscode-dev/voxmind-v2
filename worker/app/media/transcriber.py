@@ -92,7 +92,6 @@ class Transcriber:
                 language=self.language,
                 beam_size=self.beam_size,
                 vad_filter=self.vad_filter,
-                word_timestamps=True,
             )
 
             chunk_segments: List[Dict] = []
@@ -104,27 +103,11 @@ class Transcriber:
                 if not text:
                     continue
 
-                words = []
-                for word in list(getattr(segment, "words", []) or []):
-                    word_text = self._normalize_text((getattr(word, "word", "") or "").strip())
-                    word_start = getattr(word, "start", None)
-                    word_end = getattr(word, "end", None)
-                    if not word_text or word_start is None or word_end is None:
-                        continue
-                    words.append(
-                        {
-                            "start": float(word_start) + start_offset,
-                            "end": float(word_end) + start_offset,
-                            "text": word_text,
-                        }
-                    )
-
                 chunk_segments.append(
                     {
                         "start": float(segment.start) + start_offset,
                         "end": float(segment.end) + start_offset,
                         "text": text,
-                        "words": words,
                     }
                 )
 
