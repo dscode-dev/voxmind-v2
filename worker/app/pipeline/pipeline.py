@@ -2216,9 +2216,11 @@ para continuar o processamento.
             return 0.0
 
         try:
-            return max(0.0, float(cold_open.get("duration_sec") or 0.0))
+            lead_in = max(0.0, float(cold_open.get("duration_sec") or 0.0))
         except (TypeError, ValueError):
             return 0.0
+        playback_speed = max(0.5, float(settings.render_playback_speed or 1.0))
+        return lead_in / playback_speed
 
     def _render_final_reel(
         self,
@@ -2374,7 +2376,10 @@ para continuar o processamento.
             filtered = self._split_single_cut_for_short_serie(filtered, transcript_segments)
             filtered = self._strengthen_final_video_cuts(filtered, transcript_segments, post)
             filtered = self._cap_final_video_total_duration(filtered, transcript_segments)
+            post = self._reconcile_post_hook_to_transcript(post, filtered, transcript_segments)
+            filtered = self._align_first_cut_to_global_hook(filtered, transcript_segments, post)
             post = self._strengthen_post_hook(post, filtered, transcript_segments)
+            filtered = self._align_first_cut_to_global_hook(filtered, transcript_segments, post)
             filtered = self._assign_default_transitions(filtered)
 
             specs.append(
@@ -2437,7 +2442,9 @@ para continuar o processamento.
             adjusted_cuts = self._align_first_cut_to_global_hook(adjusted_cuts, transcript_segments, post)
             adjusted_cuts = self._strengthen_final_video_cuts(adjusted_cuts, transcript_segments, post)
             adjusted_cuts = self._cap_final_video_total_duration(adjusted_cuts, transcript_segments)
+            post = self._reconcile_post_hook_to_transcript(post, adjusted_cuts, transcript_segments)
             post = self._strengthen_post_hook(post, adjusted_cuts, transcript_segments)
+            adjusted_cuts = self._align_first_cut_to_global_hook(adjusted_cuts, transcript_segments, post)
 
             deduped.append(
                 {
