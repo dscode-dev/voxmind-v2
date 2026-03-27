@@ -21,6 +21,7 @@ class DeliveryPackageBuilder:
         render_plan: Dict | None,
         artifacts_manifest: Dict | None,
         response_validation: Dict | None = None,
+        final_video_specs: List[Dict] | None = None,
     ) -> Dict:
         clips = []
         videos = []
@@ -55,15 +56,30 @@ class DeliveryPackageBuilder:
                     "automation": automation_by_index.get(clip_index),
                 }
             )
-            videos.append(
-                {
-                    "video_index": clip_index,
-                    "post": cut.get("_post") or post_payload or {},
-                    "clip_index": clip_index,
-                    "final_file_name": final_clip_file.name if final_clip_file else None,
-                    "final_local_path": str(final_clip_file) if final_clip_file else None,
-                }
-            )
+        if final_video_specs:
+            for index, spec in enumerate(final_video_specs, start=1):
+                final_clip_file = final_clip_files[index - 1] if index - 1 < len(final_clip_files) else None
+                videos.append(
+                    {
+                        "video_index": int(spec.get("video_index") or index),
+                        "post": spec.get("post") or post_payload or {},
+                        "clip_count": len(spec.get("cuts") or []),
+                        "final_file_name": final_clip_file.name if final_clip_file else None,
+                        "final_local_path": str(final_clip_file) if final_clip_file else None,
+                    }
+                )
+        else:
+            for index, cut in enumerate(cuts, start=1):
+                final_clip_file = final_clip_files[index - 1] if index - 1 < len(final_clip_files) else None
+                videos.append(
+                    {
+                        "video_index": index,
+                        "post": cut.get("_post") or post_payload or {},
+                        "clip_index": index,
+                        "final_file_name": final_clip_file.name if final_clip_file else None,
+                        "final_local_path": str(final_clip_file) if final_clip_file else None,
+                    }
+                )
 
         return {
             "job_id": job_id,

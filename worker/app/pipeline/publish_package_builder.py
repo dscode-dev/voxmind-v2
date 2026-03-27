@@ -17,6 +17,7 @@ class PublishPackageBuilder:
         subtitle_path: Path | None,
         qa_report: Dict | None,
         automation_report: Dict | None,
+        final_video_specs: List[Dict] | None = None,
     ) -> Dict:
         primary_clip = cuts[0] if cuts else {}
         post_payload = post_payload or {}
@@ -26,7 +27,7 @@ class PublishPackageBuilder:
         description = str(post_payload.get("description") or primary_clip.get("description") or "").strip()
         thumbnail_text = str(post_payload.get("thumbnail") or primary_clip.get("thumbnail") or "").strip()
         speaker_focus = str(post_payload.get("speaker_focus") or primary_clip.get("speaker_focus") or "").strip()
-        videos = self._build_video_payloads(cuts, final_clip_files, post_payload)
+        videos = self._build_video_payloads(cuts, final_clip_files, post_payload, final_video_specs or [])
 
         return {
             "job_id": job_id,
@@ -156,7 +157,42 @@ class PublishPackageBuilder:
             )
         return payload
 
-    def _build_video_payloads(self, cuts: List[Dict], final_clip_files: List[Path], fallback_post: Dict) -> List[Dict]:
+    def _build_video_payloads(
+        self,
+        cuts: List[Dict],
+        final_clip_files: List[Path],
+        fallback_post: Dict,
+        final_video_specs: List[Dict],
+    ) -> List[Dict]:
+        if final_video_specs:
+            videos: List[Dict] = []
+            for index, spec in enumerate(final_video_specs, start=1):
+                post = spec.get("post") or fallback_post or {}
+                spec_cuts = list(spec.get("cuts") or [])
+                hashtags = self._collect_hashtags(spec_cuts, post)
+                final_clip = final_clip_files[index - 1] if index - 1 < len(final_clip_files) else None
+                videos.append(
+                    {
+                        "video_index": int(spec.get("video_index") or index),
+                        "post": {
+                            "title": str(post.get("title") or "").strip(),
+                            "hook": str(post.get("hook") or "").strip(),
+                            "hook_source_cut_index": int(post.get("hook_source_cut_index") or 0),
+                            "description": str(post.get("description") or "").strip(),
+                            "hashtags": hashtags,
+                            "thumbnail": str(post.get("thumbnail") or "").strip(),
+                            "soundtrack_suggestion": str(post.get("soundtrack_suggestion") or "").strip() or None,
+                            "speaker_focus": str(post.get("speaker_focus") or "").strip() or None,
+                        },
+                        "final_clip": {
+                            "status": "generated" if final_clip and final_clip.exists() else "missing",
+                            "file_name": final_clip.name if final_clip else None,
+                            "local_path": str(final_clip) if final_clip else None,
+                        },
+                    }
+                )
+            return videos
+
         videos: List[Dict] = []
         for index, cut in enumerate(cuts, start=1):
             post = cut.get("_post") or fallback_post or {}

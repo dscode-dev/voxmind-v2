@@ -762,6 +762,7 @@ para continuar o processamento.
             filtered_cuts,
             transcript_segments,
         )
+        self.manual_response["_final_video_specs"] = self._build_final_video_specs(transcript_segments)
         final_clip_files = self._render_final_clips(
             video_path,
             filtered_cuts,
@@ -1795,6 +1796,7 @@ para continuar o processamento.
             render_plan=render_plan,
             artifacts_manifest=self.artifacts.read(),
             response_validation=self.manual_response.get("_response_validation"),
+            final_video_specs=self.manual_response.get("_final_video_specs"),
         )
         self._mark_step(
             "delivery_package",
@@ -1825,6 +1827,7 @@ para continuar o processamento.
             subtitle_path=subtitle_path,
             qa_report=qa_report,
             automation_report=automation_report,
+            final_video_specs=self.manual_response.get("_final_video_specs"),
         )
         self._mark_step(
             "publish_package",
@@ -1911,7 +1914,9 @@ para continuar o processamento.
         self._mark_step("final_clips", "started")
         final_clips_dir = self.work_dir / "final_clips"
         final_clips_dir.mkdir(parents=True, exist_ok=True)
-        final_video_specs = self._build_final_video_specs(transcript_segments)
+        final_video_specs = list(self.manual_response.get("_final_video_specs") or [])
+        if not final_video_specs:
+            final_video_specs = self._build_final_video_specs(transcript_segments)
         if final_video_specs:
             outputs: list[Path] = []
             for index, spec in enumerate(final_video_specs, start=1):
@@ -1987,7 +1992,7 @@ para continuar o processamento.
             if not cuts:
                 continue
 
-            post = self._normalize_post_payload(video.get("post"), cuts)
+            post = self._normalize_post_payload(self._extract_video_post_payload(video), cuts)
             normalized_cuts = self._normalize_cuts_to_transcript(cuts, transcript_segments)
             normalized_cuts = self._align_first_cut_to_global_hook(
                 normalized_cuts,
@@ -2010,6 +2015,7 @@ para continuar o processamento.
             if not filtered:
                 continue
 
+            filtered = self._split_single_cut_for_short_serie(filtered, transcript_segments)
             filtered = self._strengthen_final_video_cuts(filtered, transcript_segments, post)
             post = self._strengthen_post_hook(post, filtered, transcript_segments)
             filtered = self._assign_default_transitions(filtered)
@@ -2023,6 +2029,61 @@ para continuar o processamento.
             )
 
         return self._augment_final_video_specs(specs, transcript_segments)
+
+    def _split_single_cut_for_short_serie(
+        self,
+        cuts: list[dict],
+        transcript_segments: list[dict],
+    ) -> list[dict]:
+        if self.clip_mode != "short_serie" or len(cuts) != 1:
+            return cuts
+
+        cut = dict(cuts[0])
+        start = float(cut.get("safe_start", cut.get("start", 0.0)))
+        end = float(cut.get("safe_end", cut.get("end", 0.0)))
+        duration = end - start
+        min_internal = float(settings.render_min_internal_cut_duration_sec)
+
+        if duration < 62.0:
+            return cuts
+
+        midpoint = start + (duration / 2.0)
+        candidate_boundaries: list[float] = []
+
+        for segment in transcript_segments:
+            segment_start = float(segment.get("start", 0.0))
+            segment_end = float(segment.get("end", 0.0))
+            if segment_start <= start or segment_end >= end:
+                continue
+            if (segment_end - start) < min_internal or (end - segment_start) < min_internal:
+                continue
+            if self._segment_has_strong_ending(segment):
+                candidate_boundaries.append(segment_end)
+            elif self._segment_starts_cleanly(segment):
+                candidate_boundaries.append(segment_start)
+
+        if not candidate_boundaries:
+            return cuts
+
+        split_point = min(candidate_boundaries, key=lambda boundary: abs(boundary - midpoint))
+        if (split_point - start) < min_internal or (end - split_point) < min_internal:
+            return cuts
+
+        first = dict(cut)
+        first["end"] = round(split_point, 2)
+        first["safe_end"] = round(split_point, 2)
+        first["narrative_role"] = str(first.get("narrative_role") or "hook")
+        first["continuity_note"] = "primeira parte do mesmo contexto, preparando continuação natural"
+        first["transition_after"] = "fade"
+
+        second = dict(cut)
+        second["start"] = round(split_point, 2)
+        second["safe_start"] = round(split_point, 2)
+        second["narrative_role"] = "development"
+        second["continuity_note"] = "segunda parte do mesmo contexto, aprofundando e fechando o assunto"
+        second["transition_after"] = str(second.get("transition_after") or "fade")
+
+        return [first, second]
 
     def _strengthen_final_video_cuts(
         self,

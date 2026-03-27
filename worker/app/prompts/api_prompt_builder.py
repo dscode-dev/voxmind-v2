@@ -78,6 +78,8 @@ MANDATORY RULES
 - Do not split one incomplete thought across different final videos.
 - Prefer fewer strong final videos over 3 weak or incomplete ones.
 - Prefer 2 connected cuts inside the same final video when that gives a stronger hook, better context and more competitive duration.
+- In `short_serie`, prefer 2 connected cuts per final video whenever there is a strong continuation in the material.
+- Use a single cut only when one continuous block already delivers hook, development and closure within the target duration.
 - `post.hook` must be fully contained inside the first selected cut.
 - The first cut must start before or exactly where the hook phrase begins.
 - If a strong hook sits outside the first cut, either move the first cut to include it or choose a different hook.
@@ -127,13 +129,25 @@ Return ONLY valid JSON in this format:
       "shorts_content": [
         {{
           "start": 10.5,
-          "end": 45.3,
+          "end": 34.0,
           "safe_start": 10.5,
-          "safe_end": 45.3,
-          "reason": "why this cut is good and respects speaker continuity and requested mode",
+          "safe_end": 34.0,
+          "reason": "why this first cut opens the topic with a strong hook and setup",
           "narrative_role": "hook | setup | development | payoff",
           "merge_group": "story_1",
-          "continuity_note": "how this final video stands on its own",
+          "continuity_note": "how this first cut prepares the next connected cut",
+          "speaker_focus": "SPEAKER_01 | SPEAKER_02 | null",
+          "transition_after": "hard_cut | punch_in | whoosh | fade | none"
+        }},
+        {{
+          "start": 34.0,
+          "end": 58.0,
+          "safe_start": 34.0,
+          "safe_end": 58.0,
+          "reason": "why this second cut deepens the same idea and closes the subject",
+          "narrative_role": "hook | setup | development | payoff",
+          "merge_group": "story_1",
+          "continuity_note": "how this second cut naturally continues the first and delivers closure",
           "speaker_focus": "SPEAKER_01 | SPEAKER_02 | null",
           "transition_after": "hard_cut | punch_in | whoosh | fade | none"
         }}
@@ -145,7 +159,8 @@ Return ONLY valid JSON in this format:
 Use transcript, timeline, heuristic candidates and ClipsAI candidates as strong context, but keep editorial autonomy if a better sequence is clearly supported by the material.
 Return `final_videos` with up to 3 separate final videos.
 Each `final_videos[i]` must directly include `title`, `hook`, `description`, `hashtags`, `thumbnail`, `soundtrack_suggestion`, `speaker_focus` and `shorts_content`.
-Each `final_videos[i]` should usually contain 1 or 2 connected cuts in `shorts_content`.
+Each `final_videos[i]` should preferably contain 2 connected cuts in `shorts_content` when strong continuation exists.
+Use a single cut only when one block alone already delivers hook, development and closure within the target duration.
 Prefer final videos around 55 to 75 seconds when the material supports it.
 Only go below 55 seconds when the subject clearly closes earlier and there is no strong continuation.
 `final_videos[i].hook_source_cut_index` must point to the cut index inside `final_videos[i].shorts_content` that fully contains the main hook.

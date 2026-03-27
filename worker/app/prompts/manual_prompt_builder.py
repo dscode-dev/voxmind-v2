@@ -106,6 +106,8 @@ REGRAS EDITORIAIS
 - Evite vídeos redundantes entre si.
 - Se houver dúvida entre vários vídeos desconexos e menos vídeos fortes, prefira menos vídeos fortes.
 - Se usar 2 cortes no mesmo vídeo final, o segundo deve continuar naturalmente o primeiro e aprofundar o mesmo assunto.
+- Em `short_serie`, prefira 2 cortes conectados por vídeo final quando houver continuação forte no material.
+- Só use 1 corte único quando um bloco sozinho já entregar hook, desenvolvimento e fechamento dentro da duração ideal.
 - O hook deve ser uma frase falada forte, completa e reconhecível.
 - O `post.hook` deve estar totalmente dentro do primeiro corte.
 - `shorts_content[0]` deve começar antes ou exatamente no ponto em que o hook começa.
@@ -131,13 +133,25 @@ OUTPUT JSON
       "shorts_content": [
         {{
           "start": 10.5,
-          "end": 45.3,
+          "end": 34.0,
           "safe_start": 10.5,
-          "safe_end": 45.3,
-          "reason": "por que esse trecho respeita narrativa, speaker continuity e clip_mode",
+          "safe_end": 34.0,
+          "reason": "por que este primeiro trecho abre o assunto com hook claro e setup forte",
           "narrative_role": "hook | setup | development | payoff",
           "merge_group": "story_1",
-          "continuity_note": "como este vídeo se sustenta sozinho",
+          "continuity_note": "como este primeiro corte prepara naturalmente o próximo trecho",
+          "speaker_focus": "SPEAKER_01 | SPEAKER_02 | null",
+          "transition_after": "hard_cut | punch_in | whoosh | fade | none"
+        }},
+        {{
+          "start": 34.0,
+          "end": 58.0,
+          "safe_start": 34.0,
+          "safe_end": 58.0,
+          "reason": "por que este segundo trecho aprofunda a mesma ideia e entrega fechamento",
+          "narrative_role": "hook | setup | development | payoff",
+          "merge_group": "story_1",
+          "continuity_note": "como este segundo corte continua o anterior e fecha o assunto",
           "speaker_focus": "SPEAKER_01 | SPEAKER_02 | null",
           "transition_after": "hard_cut | punch_in | whoosh | fade | none"
         }}
@@ -170,7 +184,8 @@ Retorne apenas o JSON final.
 Retorne `final_videos` com até 3 vídeos finais bem conectados e prontos para montagem.
 Cada item de `final_videos` deve trazer diretamente:
 `title`, `hook`, `description`, `hashtags`, `thumbnail`, `soundtrack_suggestion`, `speaker_focus` e `shorts_content`.
-Cada item de `final_videos` deve ter 1 ou 2 cortes principais em `shorts_content`.
+Cada item de `final_videos` deve ter preferencialmente 2 cortes conectados em `shorts_content` quando houver continuação forte.
+Use 1 corte único apenas quando ele sozinho já entregar hook, desenvolvimento e fechamento dentro da faixa ideal.
 Se não houver material forte para 3 vídeos bons, retorne apenas 1 ou 2.
 Se algum campo não se aplicar, retorne null, string vazia ou lista vazia.
 """
