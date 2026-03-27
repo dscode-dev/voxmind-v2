@@ -1391,6 +1391,36 @@ para continuar o processamento.
         updated = [first, *cuts[1:]]
         return self._remove_adjacent_overlap(updated, transcript_segments)
 
+    def _reconcile_post_hook_to_transcript(
+        self,
+        post_payload: dict,
+        cuts: list[dict],
+        transcript_segments: list[dict],
+    ) -> dict:
+        if not post_payload or not cuts or not transcript_segments:
+            return post_payload
+
+        hook_text = str(post_payload.get("hook") or "").strip()
+        if not hook_text:
+            return post_payload
+
+        source_cut_index = self._resolve_hook_cut_index(post_payload, cuts)
+        source_cut = cuts[source_cut_index]
+        matched_segment = self._find_best_matching_segment_in_cut(
+            hook_text=hook_text,
+            cut=source_cut,
+            transcript_segments=transcript_segments,
+        )
+        if matched_segment is None:
+            return post_payload
+
+        updated = dict(post_payload)
+        updated["hook"] = str(matched_segment.get("text") or hook_text).strip()
+        updated["hook_start"] = round(float(matched_segment.get("start", 0.0)), 2)
+        updated["hook_end"] = round(float(matched_segment.get("end", 0.0)), 2)
+        updated["hook_source_cut_index"] = source_cut_index
+        return updated
+
     def _prune_disconnected_short_serie_cuts(self, cuts: list[dict]) -> list[dict]:
         if self.clip_mode != "short_serie" or len(cuts) < 2:
             return cuts
@@ -1842,6 +1872,42 @@ para continuar o processamento.
             return None
         return best_segment
 
+    def _find_best_matching_segment_in_cut(
+        self,
+        *,
+        hook_text: str,
+        cut: dict,
+        transcript_segments: list[dict],
+    ) -> dict | None:
+        cut_start = float(cut.get("safe_start", cut.get("start", 0.0)) or 0.0)
+        cut_end = float(cut.get("safe_end", cut.get("end", 0.0)) or 0.0)
+        if cut_end <= cut_start:
+            return None
+
+        candidate_segments = [
+            segment
+            for segment in transcript_segments
+            if float(segment.get("end", 0.0)) > cut_start and float(segment.get("start", 0.0)) < cut_end
+        ]
+        if not candidate_segments:
+            return None
+
+        return self._find_best_matching_segment(hook_text, candidate_segments)
+
+    def _resolve_hook_cut_index(self, post_payload: dict, cuts: list[dict]) -> int:
+        raw_index = post_payload.get("hook_source_cut_index")
+        if raw_index in (None, ""):
+            return 0
+        try:
+            index = int(raw_index)
+        except (TypeError, ValueError):
+            return 0
+        if 0 <= index < len(cuts):
+            return index
+        if 1 <= index <= len(cuts):
+            return index - 1
+        return 0
+
     def _text_belongs_to_cut(self, text: str, cut: dict) -> bool:
         cut_text = str(cut.get("reason") or "") + " " + str(cut.get("hook") or "")
         token_overlap = self._token_overlap_ratio(text, cut_text)
@@ -2167,6 +2233,11 @@ para continuar o processamento.
 
             post = self._normalize_post_payload(self._extract_video_post_payload(video), cuts)
             normalized_cuts = self._normalize_cuts_to_transcript(cuts, transcript_segments)
+            post = self._reconcile_post_hook_to_transcript(
+                post,
+                normalized_cuts,
+                transcript_segments,
+            )
             normalized_cuts = self._align_first_cut_to_global_hook(
                 normalized_cuts,
                 transcript_segments,
