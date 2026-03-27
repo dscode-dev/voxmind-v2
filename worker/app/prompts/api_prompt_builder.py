@@ -35,17 +35,17 @@ class ApiPromptBuilder:
         transcript_context = build_transcript_context(
             transcript=transcript,
             candidates=prompt_candidates,
-            max_chars=int(self.max_context_chars * 0.58),
+            max_chars=int(self.max_context_chars * 0.64),
         )
         neighborhood_context = build_candidate_neighborhood_context(
             transcript=transcript,
             candidates=prompt_candidates,
-            max_chars=int(self.max_context_chars * 0.24),
+            max_chars=int(self.max_context_chars * 0.22),
             max_candidates=6,
         )
         candidate_context = build_candidate_context(
             candidates=prompt_candidates,
-            max_chars=int(self.max_context_chars * 0.18),
+            max_chars=int(self.max_context_chars * 0.14),
         )
 
         return f"""

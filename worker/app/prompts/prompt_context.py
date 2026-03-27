@@ -17,10 +17,10 @@ def build_transcript_context(
     transcript: List[Dict],
     candidates: List[Dict],
     max_chars: int,
-    context_padding_sec: int = 22,
-    max_candidates: int = 5,
-    max_segments_per_candidate: int = 14,
-    min_total_segments: int = 18,
+    context_padding_sec: int = 32,
+    max_candidates: int = 8,
+    max_segments_per_candidate: int = 18,
+    min_total_segments: int = 28,
 ) -> str:
     full_text = _format_transcript_segments(transcript)
     if len(full_text) <= max_chars:
@@ -183,8 +183,8 @@ def build_candidate_neighborhood_context(
     transcript: List[Dict],
     candidates: List[Dict],
     max_chars: int,
-    max_candidates: int = 4,
-    neighbor_segments: int = 4,
+    max_candidates: int = 6,
+    neighbor_segments: int = 7,
 ) -> str:
     if not transcript or not candidates:
         return ""

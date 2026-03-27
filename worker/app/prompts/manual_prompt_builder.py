@@ -44,19 +44,19 @@ class ManualPromptBuilder:
         transcript_context = build_transcript_context(
             transcript=transcript,
             candidates=prompt_candidates,
-            max_chars=int(self.max_context_chars * 0.58),
+            max_chars=int(self.max_context_chars * 0.64),
             max_candidates=self.prompt_max_candidates,
             max_segments_per_candidate=self.prompt_max_segments_per_candidate,
         )
         neighborhood_context = build_candidate_neighborhood_context(
             transcript=transcript,
             candidates=prompt_candidates,
-            max_chars=int(self.max_context_chars * 0.24),
+            max_chars=int(self.max_context_chars * 0.22),
             max_candidates=max(self.prompt_max_candidates, 6),
         )
         candidate_context = build_candidate_context(
             candidates=prompt_candidates,
-            max_chars=int(self.max_context_chars * 0.18),
+            max_chars=int(self.max_context_chars * 0.14),
         )
 
         return f"""
@@ -121,7 +121,6 @@ OUTPUT JSON
 A estrutura abaixo é apenas um exemplo de formato.
 Não copie a quantidade de itens do exemplo por padrão.
 Você deve decidir quantos vídeos finais retornar e quantos cortes usar em cada `shorts_content`, de acordo com o material.
-Use 1 ou 2 cortes por vídeo final conforme a necessidade real da narrativa.
 
 {{
   "job_id": "{job_id}",

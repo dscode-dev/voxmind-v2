@@ -78,15 +78,15 @@ class Settings(BaseSettings):
     )
 
     llm_max_chars: int = Field(
-        default=18000,
+        default=26000,
         alias="LLM_MAX_CHARS"
     )
     prompt_max_candidates: int = Field(
-        default=5,
+        default=8,
         alias="PROMPT_MAX_CANDIDATES"
     )
     prompt_max_segments_per_candidate: int = Field(
-        default=10,
+        default=18,
         alias="PROMPT_MAX_SEGMENTS_PER_CANDIDATE"
     )
 
