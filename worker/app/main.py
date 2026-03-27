@@ -332,12 +332,12 @@ def run_pipeline(job: dict):
             if _upload_if_exists(
                 storage,
                 subtitle_path,
-                f"jobs/{job_id}/final_reel.srt",
+                f"jobs/{job_id}/{Path(subtitle_path).name}" if subtitle_path else f"jobs/{job_id}/final_reel.ass",
             ):
                 pipeline.artifacts.mark_remote(
                     "final_reel_subtitles",
                     pipeline_stage,
-                    f"jobs/{job_id}/final_reel.srt",
+                    f"jobs/{job_id}/{Path(subtitle_path).name}" if subtitle_path else f"jobs/{job_id}/final_reel.ass",
                     subtitle_path,
                 )
 

@@ -2,6 +2,8 @@ import subprocess
 from pathlib import Path
 from typing import Dict, List
 
+from app.settings import settings
+
 
 class FinalVideoRenderer:
 
@@ -271,7 +273,20 @@ class FinalVideoRenderer:
         output_path: Path,
         clip_plan: Dict,
     ) -> None:
-        video_filters: List[str] = ["fps=30", "format=yuv420p"]
+        video_filters: List[str] = ["fps=30"]
+        if settings.render_visual_filter_enabled:
+            video_filters.extend(
+                [
+                    "eq=contrast=1.04:brightness=0.02:saturation=1.08",
+                    "unsharp=5:5:0.45:5:5:0.0",
+                ]
+            )
+        if settings.render_playback_speed and abs(settings.render_playback_speed - 1.0) > 0.01:
+            video_filters.append(f"setpts=PTS/{settings.render_playback_speed}")
+        video_filters.append("format=yuv420p")
+        audio_filters: List[str] = []
+        if settings.render_playback_speed and abs(settings.render_playback_speed - 1.0) > 0.01:
+            audio_filters.append(f"atempo={settings.render_playback_speed}")
 
         if not bool(clip_plan.get("overlay_enabled", False)):
             command = [
@@ -281,22 +296,28 @@ class FinalVideoRenderer:
                 str(input_path),
                 "-vf",
                 ",".join(video_filters),
-                "-c:v",
-                "libx264",
-                "-preset",
-                "fast",
-                "-crf",
-                "22",
-                "-pix_fmt",
-                "yuv420p",
-                "-c:a",
-                "aac",
-                "-ar",
-                "48000",
-                "-movflags",
-                "+faststart",
-                str(output_path),
             ]
+            if audio_filters:
+                command.extend(["-af", ",".join(audio_filters)])
+            command.extend(
+                [
+                    "-c:v",
+                    "libx264",
+                    "-preset",
+                    "fast",
+                    "-crf",
+                    "22",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-c:a",
+                    "aac",
+                    "-ar",
+                    "48000",
+                    "-movflags",
+                    "+faststart",
+                    str(output_path),
+                ]
+            )
             subprocess.run(
                 command,
                 check=True,
@@ -314,22 +335,28 @@ class FinalVideoRenderer:
                 str(input_path),
                 "-vf",
                 ",".join(video_filters),
-                "-c:v",
-                "libx264",
-                "-preset",
-                "fast",
-                "-crf",
-                "22",
-                "-pix_fmt",
-                "yuv420p",
-                "-c:a",
-                "aac",
-                "-ar",
-                "48000",
-                "-movflags",
-                "+faststart",
-                str(output_path),
             ]
+            if audio_filters:
+                command.extend(["-af", ",".join(audio_filters)])
+            command.extend(
+                [
+                    "-c:v",
+                    "libx264",
+                    "-preset",
+                    "fast",
+                    "-crf",
+                    "22",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-c:a",
+                    "aac",
+                    "-ar",
+                    "48000",
+                    "-movflags",
+                    "+faststart",
+                    str(output_path),
+                ]
+            )
             subprocess.run(
                 command,
                 check=True,
@@ -360,22 +387,28 @@ class FinalVideoRenderer:
             str(input_path),
             "-vf",
             ",".join(video_filters),
-            "-c:v",
-            "libx264",
-            "-preset",
-            "fast",
-            "-crf",
-            "22",
-            "-pix_fmt",
-            "yuv420p",
-            "-c:a",
-            "aac",
-            "-ar",
-            "48000",
-            "-movflags",
-            "+faststart",
-            str(output_path),
         ]
+        if audio_filters:
+            command.extend(["-af", ",".join(audio_filters)])
+        command.extend(
+            [
+                "-c:v",
+                "libx264",
+                "-preset",
+                "fast",
+                "-crf",
+                "22",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "-ar",
+                "48000",
+                "-movflags",
+                "+faststart",
+                str(output_path),
+            ]
+        )
         subprocess.run(
             command,
             check=True,
@@ -661,6 +694,8 @@ class FinalVideoRenderer:
 
     def _subtitle_filter(self, subtitle_path: Path) -> str:
         subtitle_file = str(subtitle_path).replace("\\", "\\\\").replace(":", "\\:")
+        if subtitle_path.suffix.lower() == ".ass":
+            return f"subtitles='{subtitle_file}'"
         style = (
             "FontName=Arial,"
             "FontSize=10,"

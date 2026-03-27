@@ -134,14 +134,14 @@ class PublishPackageBuilder:
                 "status": "not_generated",
                 "file_name": None,
                 "local_path": None,
-                "format": "srt",
+                "format": None,
             }
 
         return {
             "status": "generated" if subtitle_path.exists() else "missing",
             "file_name": subtitle_path.name,
             "local_path": str(subtitle_path),
-            "format": "srt",
+            "format": subtitle_path.suffix.lstrip(".") or None,
         }
 
     def _final_clips_payload(self, final_clip_files: List[Path]) -> List[Dict]:

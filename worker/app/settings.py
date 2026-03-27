@@ -254,6 +254,14 @@ class Settings(BaseSettings):
         default=12,
         alias="RENDER_MIN_INTERNAL_CUT_DURATION_SEC"
     )
+    render_playback_speed: float = Field(
+        default=1.15,
+        alias="RENDER_PLAYBACK_SPEED"
+    )
+    render_visual_filter_enabled: bool = Field(
+        default=True,
+        alias="RENDER_VISUAL_FILTER_ENABLED"
+    )
     render_boundary_snap_tolerance_sec: float = Field(
         default=8.0,
         alias="RENDER_BOUNDARY_SNAP_TOLERANCE_SEC"

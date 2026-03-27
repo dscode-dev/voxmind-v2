@@ -104,7 +104,9 @@ class Pipeline:
         self.delivery_package_builder = DeliveryPackageBuilder()
         self.publish_package_builder = PublishPackageBuilder()
         self.soundtrack_selector = SoundtrackSelector()
-        self.subtitle_builder = SubtitleBuilder()
+        self.subtitle_builder = SubtitleBuilder(
+            playback_speed=settings.render_playback_speed,
+        )
         self.render_plan_builder = RenderPlanBuilder()
         self.auto_review_policy = AutoReviewPolicy(
             enabled=settings.auto_review_enabled,
@@ -2081,7 +2083,7 @@ para continuar o processamento.
         transcript_segments: list[dict],
     ) -> Path | None:
         self._mark_step("final_reel_subtitles", "started")
-        output_path = self.work_dir / "final_reel.srt"
+        output_path = self.work_dir / "final_reel.ass"
         subtitle_path = self.subtitle_builder.build_final_reel_srt(
             cuts=filtered_cuts,
             transcript_segments=transcript_segments,
@@ -2174,7 +2176,7 @@ para continuar o processamento.
                     soundtrack=soundtrack,
                     qa_report=None,
                 )
-                subtitle_output = final_clips_dir / f"final_clip_{index:02d}.srt"
+                subtitle_output = final_clips_dir / f"final_clip_{index:02d}.ass"
                 clip_subtitle_path = self.subtitle_builder.build_final_reel_srt(
                     cuts=spec["cuts"],
                     transcript_segments=transcript_segments,
@@ -2202,7 +2204,7 @@ para continuar o processamento.
         outputs: list[Path] = []
 
         for index, (cut, cut_file) in enumerate(zip(filtered_cuts, cut_files), start=1):
-            subtitle_output = final_clips_dir / f"final_clip_{index:02d}.srt"
+            subtitle_output = final_clips_dir / f"final_clip_{index:02d}.ass"
             clip_subtitle_path = self.subtitle_builder.build_clip_srt(
                 cut=cut,
                 transcript_segments=transcript_segments,
