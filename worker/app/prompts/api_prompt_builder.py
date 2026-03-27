@@ -77,6 +77,8 @@ MANDATORY RULES
 - `post.hook` must be fully contained inside the first selected cut.
 - Also provide `hook_start` and `hook_end` in seconds for the exact location of the hook.
 - Do not describe a hook without giving its exact timing.
+- `hook_start` must mark the real beginning of the hook sentence and `hook_end` the real end of that sentence, without a loose window.
+- Prefer hooks with roughly 3 to 8 seconds of continuous speech.
 - The first cut must start before or exactly where the hook phrase begins.
 - If a strong hook sits outside the first cut, either move the first cut to include it or choose a different hook.
 - The hook must be a complete spoken line that feels strong and recognizable in the first seconds of the final video.
@@ -148,6 +150,7 @@ Do not mechanically replicate the number of items shown in the JSON example.
 Choose the real number of cuts based on context and narrative strength.
 Prefer final videos around 55 to 75 seconds when the material supports it.
 Only go below 55 seconds when the subject clearly closes earlier and there is no strong continuation.
+Validate the total duration of each `final_video` before responding: it must stay between 25 and 90 seconds.
 `final_videos[i].hook_source_cut_index` must point to the cut index inside `final_videos[i].shorts_content` that fully contains the main hook.
 `final_videos[i].shorts_content[0]` must fully contain the main hook for that final video.
 If there is only enough strong material for 1 or 2 good final videos, return only 1 or 2.

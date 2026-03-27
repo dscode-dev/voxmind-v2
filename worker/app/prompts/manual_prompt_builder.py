@@ -106,6 +106,8 @@ REGRAS EDITORIAIS
 - O `post.hook` deve estar totalmente dentro do primeiro corte.
 - Informe também `hook_start` e `hook_end` com a minutagem exata, em segundos, onde esse hook aparece.
 - Não descreva um hook sem informar a minutagem exata dele.
+- `hook_start` deve marcar o começo real da frase do hook e `hook_end` o fim real dessa frase, sem janela folgada.
+- Prefira hooks com cerca de 3 a 8 segundos de fala contínua.
 - `shorts_content[0]` deve começar antes ou exatamente no ponto em que o hook começa.
 - O último corte deve fechar a ideia com payoff, conclusão ou fechamento verbal claro.
 
@@ -168,6 +170,7 @@ Cada item de `final_videos` deve trazer diretamente:
 `title`, `hook`, `hook_start`, `hook_end`, `description`, `hashtags`, `thumbnail`, `soundtrack_suggestion`, `speaker_focus` e `shorts_content`.
 Cada item de `final_videos` deve ter preferencialmente 2 cortes conectados em `shorts_content` quando houver continuação forte.
 Use uma parte em segundos dos cortes escolhidos para servir de hook na tentativa de chamar a atenção do usuário nos primeiros segundos
+Valide a duração total de cada `final_video` antes de responder: o total precisa ficar entre 25 e 90 segundos.
 Não replique mecanicamente a quantidade de itens mostrada no exemplo do `OUTPUT JSON`.
 Decida a quantidade real de cortes com base no contexto e na força narrativa do material.
 Se não houver material forte para 3 vídeos bons, retorne apenas 1 ou 2.

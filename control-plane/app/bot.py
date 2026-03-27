@@ -208,6 +208,11 @@ Exemplo:
                     f"Video {video_index} total duration too short ({total_duration:.2f}s). "
                     f"Minimum final video is {settings.min_cut_duration_sec}s"
                 )
+            if total_duration > settings.max_final_video_duration_sec:
+                raise RuntimeError(
+                    f"Video {video_index} total duration too long ({total_duration:.2f}s). "
+                    f"Maximum final video is {settings.max_final_video_duration_sec}s"
+                )
 
     def _normalize_finalize_payload(self, data: dict) -> dict:
         normalized = dict(data or {})

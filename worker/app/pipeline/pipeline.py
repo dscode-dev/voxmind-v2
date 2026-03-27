@@ -1002,11 +1002,33 @@ para continuar o processamento.
             if not self._text_belongs_to_cut(global_hook, first_cut):
                 warnings.append("post: hook_outside_first_cut")
 
+        hook_start = self._coerce_optional_float(post_payload.get("hook_start"))
+        hook_end = self._coerce_optional_float(post_payload.get("hook_end"))
+        if hook_start is not None and hook_end is not None:
+            hook_duration = hook_end - hook_start
+            if hook_duration <= 0:
+                warnings.append("post: invalid_hook_range")
+            elif hook_duration > 8.5:
+                warnings.append("post: loose_hook_window")
+            if cuts:
+                first_cut = cuts[0]
+                first_start = float(first_cut.get("safe_start", first_cut.get("start", 0.0)))
+                first_end = float(first_cut.get("safe_end", first_cut.get("end", 0.0)))
+                if hook_start < first_start or hook_end > first_end:
+                    warnings.append("post: timed_hook_outside_first_cut")
+
+        total_duration = 0.0
+
         for index, cut in enumerate(cuts, start=1):
             start = float(cut.get("start", 0.0) or 0.0)
             end = float(cut.get("end", 0.0) or 0.0)
             if end <= start:
                 warnings.append(f"cut_{index}: invalid_range")
+                continue
+            total_duration += end - start
+
+        if total_duration > float(settings.qa_max_clip_duration_sec):
+            warnings.append("video: over_max_duration")
 
         continuity_warnings = self._short_serie_continuity_gaps(cuts)
         warnings.extend(
@@ -2172,6 +2194,7 @@ para continuar o processamento.
 
             filtered = self._split_single_cut_for_short_serie(filtered, transcript_segments)
             filtered = self._strengthen_final_video_cuts(filtered, transcript_segments, post)
+            filtered = self._cap_final_video_total_duration(filtered, transcript_segments)
             post = self._strengthen_post_hook(post, filtered, transcript_segments)
             filtered = self._assign_default_transitions(filtered)
 
@@ -2285,6 +2308,46 @@ para continuar o processamento.
         if continuation is not None:
             adjusted.append(continuation)
 
+        return adjusted
+
+    def _cap_final_video_total_duration(
+        self,
+        cuts: list[dict],
+        transcript_segments: list[dict],
+    ) -> list[dict]:
+        if not cuts:
+            return cuts
+
+        max_total = float(settings.qa_max_clip_duration_sec)
+        adjusted = [dict(cut) for cut in cuts]
+        total_duration = sum(
+            max(
+                0.0,
+                float(cut.get("safe_end", cut.get("end", 0.0))) - float(cut.get("safe_start", cut.get("start", 0.0))),
+            )
+            for cut in adjusted
+        )
+        if total_duration <= max_total:
+            return adjusted
+
+        overflow = total_duration - max_total
+        last = adjusted[-1]
+        last_start = float(last.get("safe_start", last.get("start", 0.0)))
+        last_end = float(last.get("safe_end", last.get("end", 0.0)))
+        target_end = max(last_start, last_end - overflow)
+        strong_ending = self._find_previous_strong_ending(
+            transcript_segments,
+            start=last_start,
+            current_end=min(last_end, target_end + 2.0),
+        )
+        if strong_ending is not None and strong_ending >= last_start + float(settings.render_min_internal_cut_duration_sec):
+            target_end = min(target_end, strong_ending)
+
+        if (target_end - last_start) < float(settings.render_min_internal_cut_duration_sec):
+            target_end = last_start + float(settings.render_min_internal_cut_duration_sec)
+
+        last["end"] = round(min(last_end, target_end), 2)
+        last["safe_end"] = round(min(last_end, target_end), 2)
         return adjusted
 
     def _build_followup_cut(
