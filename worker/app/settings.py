@@ -78,7 +78,7 @@ class Settings(BaseSettings):
     )
 
     llm_max_chars: int = Field(
-        default=26000,
+        default=90000,
         alias="LLM_MAX_CHARS"
     )
     prompt_max_candidates: int = Field(

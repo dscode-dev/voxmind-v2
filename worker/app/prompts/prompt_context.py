@@ -149,12 +149,9 @@ def build_candidate_context(candidates: List[Dict], max_chars: int) -> str:
                 "start": candidate.get("start"),
                 "end": candidate.get("end"),
                 "duration": candidate.get("duration"),
-                "total_score": candidate.get("total_score"),
                 "narrative_role": candidate.get("narrative_role"),
                 "speakers": candidate.get("speakers", []),
-                "editorial_signals": candidate.get("editorial_signals", {}),
-                "reason_signals": candidate.get("score_breakdown", {}),
-                "text": _truncate_text(candidate.get("text", ""), 220),
+                "text": _truncate_text(candidate.get("text", ""), 140),
             }
         )
 

@@ -32,7 +32,6 @@ def test_manual_prompt_builder_includes_speakers_and_mode_rules():
     assert "SPEAKER_02" in prompt
     assert "MODO: SHORT_SERIE" in prompt
     assert "TRANSCRIPT RELEVANTE COM SPEAKERS" in prompt
-    assert "VIZINHANÇA DOS CANDIDATOS" in prompt
     assert '"final_videos"' in prompt
     assert '"title"' in prompt
     assert '"description"' in prompt

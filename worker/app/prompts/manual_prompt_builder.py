@@ -2,7 +2,6 @@ from typing import Dict, List
 
 from app.prompts.prompt_context import (
     build_candidate_context,
-    build_candidate_neighborhood_context,
     build_transcript_context,
 )
 
@@ -44,19 +43,13 @@ class ManualPromptBuilder:
         transcript_context = build_transcript_context(
             transcript=transcript,
             candidates=prompt_candidates,
-            max_chars=int(self.max_context_chars * 0.64),
+            max_chars=int(self.max_context_chars * 0.80),
             max_candidates=self.prompt_max_candidates,
             max_segments_per_candidate=self.prompt_max_segments_per_candidate,
         )
-        neighborhood_context = build_candidate_neighborhood_context(
-            transcript=transcript,
-            candidates=prompt_candidates,
-            max_chars=int(self.max_context_chars * 0.22),
-            max_candidates=max(self.prompt_max_candidates, 6),
-        )
         candidate_context = build_candidate_context(
             candidates=prompt_candidates,
-            max_chars=int(self.max_context_chars * 0.14),
+            max_chars=int(self.max_context_chars * 0.20),
         )
 
         return f"""
@@ -158,10 +151,6 @@ CONTEXTO PRINCIPAL
 TRANSCRIPT RELEVANTE COM SPEAKERS
 
 {transcript_context}
-
-VIZINHANÇA DOS CANDIDATOS
-
-{neighborhood_context}
 
 CANDIDATOS PRIORIZADOS
 

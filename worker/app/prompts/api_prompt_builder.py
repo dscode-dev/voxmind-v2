@@ -2,7 +2,6 @@ from typing import Dict, List
 
 from app.prompts.prompt_context import (
     build_candidate_context,
-    build_candidate_neighborhood_context,
     build_transcript_context,
 )
 
@@ -35,17 +34,11 @@ class ApiPromptBuilder:
         transcript_context = build_transcript_context(
             transcript=transcript,
             candidates=prompt_candidates,
-            max_chars=int(self.max_context_chars * 0.64),
-        )
-        neighborhood_context = build_candidate_neighborhood_context(
-            transcript=transcript,
-            candidates=prompt_candidates,
-            max_chars=int(self.max_context_chars * 0.22),
-            max_candidates=6,
+            max_chars=int(self.max_context_chars * 0.80),
         )
         candidate_context = build_candidate_context(
             candidates=prompt_candidates,
-            max_chars=int(self.max_context_chars * 0.14),
+            max_chars=int(self.max_context_chars * 0.20),
         )
 
         return f"""
@@ -99,10 +92,6 @@ MODE RULES
 TRANSCRIPT WITH SPEAKERS
 
 {transcript_context}
-
-CANDIDATE NEIGHBORHOODS
-
-{neighborhood_context}
 
 PRIORITIZED CANDIDATES
 
