@@ -733,6 +733,7 @@ para continuar o processamento.
             render_plan,
             transcript_segments,
         )
+        self._log(f"🎞️ Final videos generated: {len(final_clip_files)}")
         final_reel_path = None
         publish_package = self._build_publish_package(
             filtered_cuts,
@@ -2258,7 +2259,70 @@ para continuar o processamento.
                 }
             )
 
-        return specs
+        return self._dedupe_final_video_specs(specs, transcript_segments)
+
+    def _dedupe_final_video_specs(
+        self,
+        specs: list[dict],
+        transcript_segments: list[dict],
+    ) -> list[dict]:
+        if len(specs) < 2:
+            return specs
+
+        min_internal = float(settings.render_min_internal_cut_duration_sec)
+        overlap_guard_sec = 0.2
+        occupied_until = -1.0
+        deduped: list[dict] = []
+
+        for spec in specs:
+            post = dict(spec.get("post") or {})
+            adjusted_cuts: list[dict] = []
+
+            for cut_index, raw_cut in enumerate(spec.get("cuts") or []):
+                cut = dict(raw_cut)
+                start = float(cut.get("safe_start", cut.get("start", 0.0)))
+                end = float(cut.get("safe_end", cut.get("end", 0.0)))
+                if end <= start:
+                    continue
+
+                if occupied_until >= 0.0 and end <= occupied_until + overlap_guard_sec:
+                    continue
+
+                if occupied_until >= 0.0 and start < occupied_until + overlap_guard_sec:
+                    proposed_start = occupied_until + overlap_guard_sec
+                    hook_start = self._coerce_optional_float(post.get("hook_start"))
+                    if cut_index == 0 and hook_start is not None and start <= hook_start <= end:
+                        proposed_start = min(proposed_start, hook_start)
+                    start = proposed_start
+
+                if (end - start) < min_internal:
+                    continue
+
+                cut["start"] = round(start, 2)
+                cut["safe_start"] = round(start, 2)
+                cut["end"] = round(end, 2)
+                cut["safe_end"] = round(end, 2)
+                adjusted_cuts.append(cut)
+
+            if not adjusted_cuts:
+                continue
+
+            post = self._reconcile_post_hook_to_transcript(post, adjusted_cuts, transcript_segments)
+            adjusted_cuts = self._align_first_cut_to_global_hook(adjusted_cuts, transcript_segments, post)
+
+            deduped.append(
+                {
+                    **spec,
+                    "post": post,
+                    "cuts": adjusted_cuts,
+                }
+            )
+            occupied_until = max(
+                occupied_until,
+                max(float(cut.get("safe_end", cut.get("end", 0.0))) for cut in adjusted_cuts),
+            )
+
+        return deduped or specs
 
     def _split_single_cut_for_short_serie(
         self,

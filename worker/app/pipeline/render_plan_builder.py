@@ -8,7 +8,7 @@ DEFAULT_COLD_OPEN_DURATION_SEC = 2.0
 DEFAULT_COLD_OPEN_MIN_DURATION_SEC = 3.1
 DEFAULT_COLD_OPEN_MAX_DURATION_SEC = 7.2
 DEFAULT_COLD_OPEN_LEAD_IN_SEC = 0.45
-DEFAULT_COLD_OPEN_TAIL_SEC = 0.8
+DEFAULT_COLD_OPEN_TAIL_SEC = 1.0
 
 
 class RenderPlanBuilder:
@@ -171,7 +171,7 @@ class RenderPlanBuilder:
                     "relative_start_sec": round(explicit_preview["relative_start_sec"], 2),
                     "source_text": explicit_preview["source_text"],
                     "transition_after": "fade",
-                    "transition_duration_ms": 180,
+                    "transition_duration_ms": 90,
                 }
 
         best_segment = self._find_best_hook_segment(
@@ -207,7 +207,7 @@ class RenderPlanBuilder:
             "relative_start_sec": round(preview["relative_start_sec"], 2),
             "source_text": preview["source_text"],
             "transition_after": "fade",
-            "transition_duration_ms": 180,
+            "transition_duration_ms": 90,
         }
 
     def _find_best_hook_segment(

@@ -716,7 +716,7 @@ class FinalVideoRenderer:
             .replace("]", r"\]")
         )
         if subtitle_path.suffix.lower() == ".ass":
-            return f"subtitles='{subtitle_file}'"
+            return f"ass='{subtitle_file}'"
         style = (
             "FontName=Arial,"
             "FontSize=10,"
