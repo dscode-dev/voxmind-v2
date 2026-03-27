@@ -2353,7 +2353,7 @@ para continuar o processamento.
         )
 
         target_min_total = 55.0
-        max_total = min(75.0, float(settings.qa_max_clip_duration_sec))
+        max_total = float(settings.qa_max_clip_duration_sec)
 
         last = adjusted[-1]
         last_start = float(last.get("safe_start", last.get("start", 0.0)))

@@ -89,7 +89,7 @@ class Settings(BaseSettings):
         alias="MIN_INTERNAL_CUT_DURATION_SEC",
     )
     max_final_video_duration_sec: int = Field(
-        default=90,
+        default=120,
         alias="MAX_FINAL_VIDEO_DURATION_SEC",
     )
     short_serie_max_gap_sec: int = Field(

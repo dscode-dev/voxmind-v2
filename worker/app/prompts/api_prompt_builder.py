@@ -150,7 +150,9 @@ Do not mechanically replicate the number of items shown in the JSON example.
 Choose the real number of cuts based on context and narrative strength.
 Prefer final videos around 55 to 75 seconds when the material supports it.
 Only go below 55 seconds when the subject clearly closes earlier and there is no strong continuation.
-Validate the total duration of each `final_video` before responding: it must stay between 25 and 90 seconds.
+You may go beyond 75 seconds only when that extension is necessary to conclude the subject clearly.
+Prefer concluding the idea correctly even if that pushes the final video beyond 1 minute.
+Validate the total duration of each `final_video` before responding: it must stay between 25 and 120 seconds.
 `final_videos[i].hook_source_cut_index` must point to the cut index inside `final_videos[i].shorts_content` that fully contains the main hook.
 `final_videos[i].shorts_content[0]` must fully contain the main hook for that final video.
 If there is only enough strong material for 1 or 2 good final videos, return only 1 or 2.

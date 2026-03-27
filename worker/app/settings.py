@@ -217,7 +217,7 @@ class Settings(BaseSettings):
     )
 
     qa_max_clip_duration_sec: int = Field(
-        default=90,
+        default=120,
         alias="QA_MAX_CLIP_DURATION_SEC"
     )
 

@@ -609,7 +609,7 @@ class FinalVideoRenderer:
         intro_main_path = self.render_dir / "prepared_01_intro_main.mp4"
         intro_resume_sec = min(
             source_duration,
-            relative_start_sec + max(0.8, actual_duration - 0.2),
+            relative_start_sec + actual_duration,
         )
         intro_main_command = [
             "ffmpeg",

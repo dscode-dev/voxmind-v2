@@ -170,7 +170,9 @@ Cada item de `final_videos` deve trazer diretamente:
 `title`, `hook`, `hook_start`, `hook_end`, `description`, `hashtags`, `thumbnail`, `soundtrack_suggestion`, `speaker_focus` e `shorts_content`.
 Cada item de `final_videos` deve ter preferencialmente 2 cortes conectados em `shorts_content` quando houver continuação forte.
 Use uma parte em segundos dos cortes escolhidos para servir de hook na tentativa de chamar a atenção do usuário nos primeiros segundos
-Valide a duração total de cada `final_video` antes de responder: o total precisa ficar entre 25 e 90 segundos.
+Valide a duração total de cada `final_video` antes de responder: o total precisa ficar entre 25 e 120 segundos.
+Prefira fechar o assunto corretamente, mesmo que isso leve o vídeo para além de 1 minuto.
+Você pode ir até 120 segundos apenas quando essa extensão for necessária para concluir a ideia sem cortar o assunto.
 Não replique mecanicamente a quantidade de itens mostrada no exemplo do `OUTPUT JSON`.
 Decida a quantidade real de cortes com base no contexto e na força narrativa do material.
 Se não houver material forte para 3 vídeos bons, retorne apenas 1 ou 2.
@@ -256,6 +258,7 @@ REGRAS DE DURAÇÃO
 - Se usar 2 cortes conectados no mesmo vídeo final, cada corte interno deve ter pelo menos 12 segundos.
 - Cada vídeo final pode usar 1 ou 2 cortes conectados se isso melhorar hook, contexto e fechamento.
 - Só fique abaixo de 55 segundos se o assunto realmente fechar antes disso e não houver continuação forte no material.
+- Você pode ultrapassar 75 segundos somente quando isso for necessário para concluir o assunto com clareza.
 - Nunca exceda {max_duration} segundos.
 """
 
