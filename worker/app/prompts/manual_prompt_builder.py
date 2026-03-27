@@ -104,6 +104,8 @@ REGRAS EDITORIAIS
 - Só use 1 corte único quando um bloco sozinho já entregar hook, desenvolvimento e fechamento dentro da duração ideal.
 - O hook deve ser uma frase falada forte, completa e reconhecível.
 - O `post.hook` deve estar totalmente dentro do primeiro corte.
+- Informe também `hook_start` e `hook_end` com a minutagem exata, em segundos, onde esse hook aparece.
+- Não descreva um hook sem informar a minutagem exata dele.
 - `shorts_content[0]` deve começar antes ou exatamente no ponto em que o hook começa.
 - O último corte deve fechar a ideia com payoff, conclusão ou fechamento verbal claro.
 
@@ -123,6 +125,8 @@ Você deve decidir quantos vídeos finais retornar e quantos cortes usar em cada
       "title": "título principal do vídeo final 1",
       "hook": "gancho principal do vídeo final 1",
       "hook_source_cut_index": 0,
+      "hook_start": 10.5,
+      "hook_end": 16.8,
       "description": "descrição final para postagem",
       "hashtags": ["#tag1", "#tag2", "#tag3"],
       "thumbnail": "ideia de thumbnail principal",
@@ -161,9 +165,9 @@ INSTRUÇÃO FINAL
 Retorne apenas o JSON final.
 Retorne `final_videos` com até 3 vídeos finais bem conectados e prontos para montagem.
 Cada item de `final_videos` deve trazer diretamente:
-`title`, `hook`, `description`, `hashtags`, `thumbnail`, `soundtrack_suggestion`, `speaker_focus` e `shorts_content`.
+`title`, `hook`, `hook_start`, `hook_end`, `description`, `hashtags`, `thumbnail`, `soundtrack_suggestion`, `speaker_focus` e `shorts_content`.
 Cada item de `final_videos` deve ter preferencialmente 2 cortes conectados em `shorts_content` quando houver continuação forte.
-Use 1 corte único apenas quando ele sozinho já entregar hook, desenvolvimento e fechamento dentro da faixa ideal.
+Use uma parte em segundos dos cortes escolhidos para servir de hook na tentativa de chamar a atenção do usuário nos primeiros segundos
 Não replique mecanicamente a quantidade de itens mostrada no exemplo do `OUTPUT JSON`.
 Decida a quantidade real de cortes com base no contexto e na força narrativa do material.
 Se não houver material forte para 3 vídeos bons, retorne apenas 1 ou 2.

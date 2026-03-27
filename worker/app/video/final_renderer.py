@@ -151,11 +151,19 @@ class FinalVideoRenderer:
 
         video_labels: List[str] = []
         audio_labels: List[str] = []
-        for index in range(len(prepared_files)):
-            video_labels.append(f"[{index}:v]")
-            audio_labels.append(f"[{index}:a]")
-
         filter_parts: List[str] = []
+        for index in range(len(prepared_files)):
+            normalized_video = f"[v{index}_base]"
+            normalized_audio = f"[a{index}_base]"
+            filter_parts.append(
+                f"[{index}:v]fps=30,format=yuv420p,setsar=1,setpts=PTS-STARTPTS{normalized_video}"
+            )
+            filter_parts.append(
+                f"[{index}:a]aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS{normalized_audio}"
+            )
+            video_labels.append(normalized_video)
+            audio_labels.append(normalized_audio)
+
         current_video = video_labels[0]
         current_audio = audio_labels[0]
         elapsed = prepared_durations[0]
@@ -213,8 +221,12 @@ class FinalVideoRenderer:
                 "fast",
                 "-crf",
                 "22",
+                "-pix_fmt",
+                "yuv420p",
                 "-c:a",
                 "aac",
+                "-ar",
+                "48000",
                 "-movflags",
                 "+faststart",
                 str(output_path),
@@ -692,9 +704,17 @@ class FinalVideoRenderer:
             "-map",
             "[aout]",
             "-c:v",
-            "copy",
+            "libx264",
+            "-preset",
+            "fast",
+            "-crf",
+            "22",
+            "-pix_fmt",
+            "yuv420p",
             "-c:a",
             "aac",
+            "-ar",
+            "48000",
             "-movflags",
             "+faststart",
             str(output_path),

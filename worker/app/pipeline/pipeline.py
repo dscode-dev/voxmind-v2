@@ -910,6 +910,8 @@ para continuar o processamento.
             "title": source.get("title"),
             "hook": source.get("hook"),
             "hook_source_cut_index": source.get("hook_source_cut_index"),
+            "hook_start": source.get("hook_start"),
+            "hook_end": source.get("hook_end"),
             "description": source.get("description"),
             "hashtags": source.get("hashtags"),
             "thumbnail": source.get("thumbnail"),
@@ -947,6 +949,13 @@ para continuar o processamento.
         )
         if soundtrack_suggestion not in (None, ""):
             payload["soundtrack_suggestion"] = str(soundtrack_suggestion).strip()
+
+        hook_start = self._coerce_optional_float(payload.get("hook_start"))
+        hook_end = self._coerce_optional_float(payload.get("hook_end"))
+        if hook_start is not None:
+            payload["hook_start"] = round(hook_start, 2)
+        if hook_end is not None:
+            payload["hook_end"] = round(hook_end, 2)
 
         normalized_hashtags = []
         for item in payload.get("hashtags") or first_cut.get("hashtags") or []:
@@ -1328,15 +1337,21 @@ para continuar o processamento.
         first = dict(cuts[0])
         first_start = float(first.get("safe_start", first.get("start", 0.0)))
         first_end = float(first.get("safe_end", first.get("end", 0.0)))
-        if self._text_belongs_to_cut(hook_text, first):
-            return cuts
+        explicit_hook_start = self._coerce_optional_float(post_payload.get("hook_start"))
+        explicit_hook_end = self._coerce_optional_float(post_payload.get("hook_end"))
+        if explicit_hook_start is not None and explicit_hook_end is not None:
+            hook_start = explicit_hook_start
+            hook_end = explicit_hook_end
+        else:
+            if self._text_belongs_to_cut(hook_text, first):
+                return cuts
 
-        hook_segment = self._find_best_matching_segment(hook_text, transcript_segments)
-        if hook_segment is None:
-            return cuts
+            hook_segment = self._find_best_matching_segment(hook_text, transcript_segments)
+            if hook_segment is None:
+                return cuts
 
-        hook_start = float(hook_segment.get("start", first_start))
-        hook_end = float(hook_segment.get("end", first_end))
+            hook_start = float(hook_segment.get("start", first_start))
+            hook_end = float(hook_segment.get("end", first_end))
         if hook_start > first_end or hook_end < first_start:
             return cuts
 
@@ -1516,6 +1531,134 @@ para continuar o processamento.
             last["safe_end"] = round(extended_end, 2)
 
         return adjusted
+
+    def _compact_low_signal_spans(
+        self,
+        cuts: list[dict],
+        transcript_segments: list[dict],
+    ) -> list[dict]:
+        if not cuts or not transcript_segments:
+            return cuts
+
+        adjusted: list[dict] = []
+        min_internal = float(settings.render_min_internal_cut_duration_sec)
+
+        for cut in cuts:
+            meaningful_ranges = self._meaningful_ranges_for_cut(cut, transcript_segments)
+            if not meaningful_ranges:
+                adjusted.append(cut)
+                continue
+
+            if len(meaningful_ranges) == 1 or any((end - start) < min_internal for start, end in meaningful_ranges):
+                trimmed = dict(cut)
+                trimmed["start"] = round(meaningful_ranges[0][0], 2)
+                trimmed["safe_start"] = round(meaningful_ranges[0][0], 2)
+                trimmed["end"] = round(meaningful_ranges[-1][1], 2)
+                trimmed["safe_end"] = round(meaningful_ranges[-1][1], 2)
+                adjusted.append(trimmed)
+                continue
+
+            for index, (start, end) in enumerate(meaningful_ranges):
+                if (end - start) < min_internal:
+                    continue
+                fragment = dict(cut)
+                fragment["start"] = round(start, 2)
+                fragment["safe_start"] = round(start, 2)
+                fragment["end"] = round(end, 2)
+                fragment["safe_end"] = round(end, 2)
+                fragment["transition_after"] = (
+                    "fade" if index < len(meaningful_ranges) - 1 else str(cut.get("transition_after") or "fade")
+                )
+                adjusted.append(fragment)
+
+        return adjusted or cuts
+
+    def _meaningful_ranges_for_cut(
+        self,
+        cut: dict,
+        transcript_segments: list[dict],
+    ) -> list[tuple[float, float]]:
+        cut_start = float(cut.get("safe_start", cut.get("start", 0.0)))
+        cut_end = float(cut.get("safe_end", cut.get("end", 0.0)))
+        if cut_end <= cut_start:
+            return []
+
+        segments = [
+            segment
+            for segment in transcript_segments
+            if float(segment.get("end", 0.0)) > cut_start and float(segment.get("start", 0.0)) < cut_end
+        ]
+        if not segments:
+            return []
+
+        meaningful_segments = [
+            segment
+            for segment in segments
+            if not self._segment_is_low_signal(segment)
+        ]
+        if not meaningful_segments:
+            return []
+
+        ranges: list[tuple[float, float]] = []
+        current_start = max(cut_start, float(meaningful_segments[0].get("start", cut_start)) - 0.15)
+        current_end = min(cut_end, float(meaningful_segments[0].get("end", cut_end)) + 0.12)
+        split_gap = 1.35
+
+        for segment in meaningful_segments[1:]:
+            segment_start = max(cut_start, float(segment.get("start", cut_start)) - 0.15)
+            segment_end = min(cut_end, float(segment.get("end", cut_end)) + 0.12)
+            if segment_start - current_end > split_gap:
+                ranges.append((current_start, current_end))
+                current_start = segment_start
+                current_end = segment_end
+                continue
+
+            current_end = max(current_end, segment_end)
+
+        ranges.append((current_start, current_end))
+        return ranges
+
+    def _segment_is_low_signal(self, segment: dict | None) -> bool:
+        if not segment:
+            return False
+
+        text = str(segment.get("text") or "").strip().lower()
+        duration = max(0.0, float(segment.get("end", 0.0)) - float(segment.get("start", 0.0)))
+        if not text:
+            return duration >= 0.9
+
+        filler_words = {
+            "é",
+            "eh",
+            "e",
+            "ah",
+            "aham",
+            "hum",
+            "uh",
+            "hã",
+            "hãm",
+            "né",
+            "tipo",
+            "tá",
+            "ta",
+            "bom",
+        }
+        laugh_markers = ("risos", "haha", "kkkk", "kkk", "rsrs")
+        tokens = [token for token in re.findall(r"\w+", text) if token]
+        if not tokens:
+            return duration >= 0.9
+
+        unique_tokens = set(tokens)
+        if any(marker in text for marker in laugh_markers):
+            return True
+        if len(tokens) <= 4 and unique_tokens.issubset(filler_words):
+            return True
+        if len(unique_tokens) == 1 and next(iter(unique_tokens)) in filler_words:
+            return True
+        if duration >= 1.4 and len(tokens) <= 3 and unique_tokens.issubset(filler_words | {"sim", "não", "nao"}):
+            return True
+
+        return False
 
     def _cuts_share_sequence_context(self, left: dict, right: dict) -> bool:
         if self.clip_mode == "short_serie":
@@ -1700,6 +1843,14 @@ para continuar o processamento.
             for token in "".join(char.lower() if char.isalnum() else " " for char in text).split()
             if len(token) > 2
         }
+
+    def _coerce_optional_float(self, value: object) -> float | None:
+        if value in (None, ""):
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
 
     def _find_previous_segment_start(
         self,
@@ -1999,6 +2150,10 @@ para continuar o processamento.
                 transcript_segments,
                 post,
             )
+            normalized_cuts = self._compact_low_signal_spans(
+                normalized_cuts,
+                transcript_segments,
+            )
             if self.clip_mode == "short_serie":
                 normalized_cuts = self._prune_disconnected_short_serie_cuts(normalized_cuts)
 
@@ -2194,11 +2349,18 @@ para continuar o processamento.
 
         first_cut = cuts[0]
         current_hook = str(post.get("hook") or "").strip()
+        explicit_hook_start = self._coerce_optional_float(post.get("hook_start"))
+        explicit_hook_end = self._coerce_optional_float(post.get("hook_end"))
+        if current_hook and explicit_hook_start is not None and explicit_hook_end is not None:
+            return post
+
         candidate = self._derive_hook_from_cut(first_cut, transcript_segments)
         if candidate:
             updated = dict(post)
-            updated["hook"] = candidate
+            updated["hook"] = candidate["text"]
             updated["hook_source_cut_index"] = 0
+            updated["hook_start"] = round(candidate["start"], 2)
+            updated["hook_end"] = round(candidate["end"], 2)
             return updated
 
         if current_hook and self._hook_feels_strong(current_hook):
@@ -2206,7 +2368,7 @@ para continuar o processamento.
 
         return post
 
-    def _derive_hook_from_cut(self, cut: dict, transcript_segments: list[dict]) -> str | None:
+    def _derive_hook_from_cut(self, cut: dict, transcript_segments: list[dict]) -> dict | None:
         start = float(cut.get("safe_start", cut.get("start", 0.0)))
         end = float(cut.get("safe_end", cut.get("end", 0.0)))
         segments = [
@@ -2214,7 +2376,7 @@ para continuar o processamento.
             for segment in transcript_segments
             if float(segment.get("end", 0.0)) > start and float(segment.get("start", 0.0)) < min(end, start + 16.0)
         ]
-        best_text = None
+        best_segment = None
         best_score = -1.0
 
         for segment in segments:
@@ -2232,9 +2394,16 @@ para continuar o processamento.
                 score += 0.8
             if score > best_score:
                 best_score = score
-                best_text = text
+                best_segment = segment
 
-        return best_text
+        if best_segment is None:
+            return None
+
+        return {
+            "text": str(best_segment.get("text") or "").strip(),
+            "start": float(best_segment.get("start", start)),
+            "end": float(best_segment.get("end", end)),
+        }
 
     def _hook_feels_strong(self, hook: str) -> bool:
         lowered = hook.lower()

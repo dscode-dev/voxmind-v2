@@ -153,6 +153,26 @@ class RenderPlanBuilder:
             return {"enabled": False}
 
         preferred_cut_index = self._preferred_hook_cut_index(post_payload, cuts)
+        explicit_hook_start = self._coerce_optional_float(post_payload.get("hook_start"))
+        explicit_hook_end = self._coerce_optional_float(post_payload.get("hook_end"))
+        if explicit_hook_start is not None and explicit_hook_end is not None:
+            explicit_preview = self._build_explicit_hook_preview_window(
+                hook_text=hook_text,
+                cuts=cuts,
+                clip_index=preferred_cut_index or 1,
+                hook_start=explicit_hook_start,
+                hook_end=explicit_hook_end,
+            )
+            if explicit_preview is not None:
+                return {
+                    "enabled": True,
+                    "source_clip_index": explicit_preview["source_clip_index"],
+                    "duration_sec": round(explicit_preview["duration_sec"], 2),
+                    "relative_start_sec": round(explicit_preview["relative_start_sec"], 2),
+                    "source_text": explicit_preview["source_text"],
+                    "transition_after": "fade",
+                    "transition_duration_ms": 180,
+                }
 
         best_segment = self._find_best_hook_segment(
             hook_text=hook_text,
@@ -253,6 +273,45 @@ class RenderPlanBuilder:
             return index
         return 1
 
+    def _build_explicit_hook_preview_window(
+        self,
+        *,
+        hook_text: str,
+        cuts: List[Dict],
+        clip_index: int,
+        hook_start: float,
+        hook_end: float,
+    ) -> Dict | None:
+        if clip_index < 1 or clip_index > len(cuts):
+            return None
+
+        source_cut = cuts[clip_index - 1]
+        clip_start = float(source_cut.get("safe_start", source_cut.get("start", 0.0)) or 0.0)
+        clip_end = float(source_cut.get("safe_end", source_cut.get("end", 0.0)) or 0.0)
+        if clip_end <= clip_start:
+            return None
+        if hook_start > clip_end or hook_end < clip_start:
+            return None
+
+        absolute_start = max(clip_start, hook_start - DEFAULT_COLD_OPEN_LEAD_IN_SEC)
+        absolute_end = min(
+            clip_end,
+            max(
+                hook_end + DEFAULT_COLD_OPEN_TAIL_SEC,
+                absolute_start + DEFAULT_COLD_OPEN_MIN_DURATION_SEC,
+            ),
+        )
+        duration_sec = max(0.0, absolute_end - absolute_start)
+        if duration_sec < 1.8:
+            return None
+
+        return {
+            "source_clip_index": clip_index,
+            "relative_start_sec": max(0.0, absolute_start - clip_start),
+            "duration_sec": min(duration_sec, DEFAULT_COLD_OPEN_MAX_DURATION_SEC),
+            "source_text": hook_text,
+        }
+
     def _build_hook_preview_window(
         self,
         *,
@@ -333,3 +392,11 @@ class RenderPlanBuilder:
 
     def _tokenize(self, text: str) -> List[str]:
         return re.findall(r"\w+", text.lower())
+
+    def _coerce_optional_float(self, value: object) -> float | None:
+        if value in (None, ""):
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None

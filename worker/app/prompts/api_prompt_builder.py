@@ -75,6 +75,8 @@ MANDATORY RULES
 - In `short_serie`, prefer 2 connected cuts per final video whenever there is a strong continuation in the material.
 - Use a single cut only when one continuous block already delivers hook, development and closure within the target duration.
 - `post.hook` must be fully contained inside the first selected cut.
+- Also provide `hook_start` and `hook_end` in seconds for the exact location of the hook.
+- Do not describe a hook without giving its exact timing.
 - The first cut must start before or exactly where the hook phrase begins.
 - If a strong hook sits outside the first cut, either move the first cut to include it or choose a different hook.
 - The hook must be a complete spoken line that feels strong and recognizable in the first seconds of the final video.
@@ -112,6 +114,8 @@ Use 1 or 2 cuts per final video according to the real narrative need.
       "title": "main final video title",
       "hook": "main hook used in the opening of this final video",
       "hook_source_cut_index": 0,
+      "hook_start": 10.5,
+      "hook_end": 16.8,
       "description": "final posting description",
       "hashtags": ["#tag1", "#tag2", "#tag3"],
       "thumbnail": "thumbnail idea",
@@ -137,7 +141,7 @@ Use 1 or 2 cuts per final video according to the real narrative need.
 
 Use the transcript as the main context and the ClipsAI candidates as strong narrative hints, but keep editorial autonomy if a better sequence is clearly supported by the material.
 Return `final_videos` with up to 3 separate final videos.
-Each `final_videos[i]` must directly include `title`, `hook`, `description`, `hashtags`, `thumbnail`, `soundtrack_suggestion`, `speaker_focus` and `shorts_content`.
+Each `final_videos[i]` must directly include `title`, `hook`, `hook_start`, `hook_end`, `description`, `hashtags`, `thumbnail`, `soundtrack_suggestion`, `speaker_focus` and `shorts_content`.
 Each `final_videos[i]` should preferably contain 2 connected cuts in `shorts_content` when strong continuation exists.
 Use a single cut only when one block alone already delivers hook, development and closure within the target duration.
 Do not mechanically replicate the number of items shown in the JSON example.

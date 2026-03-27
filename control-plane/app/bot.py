@@ -263,6 +263,8 @@ Exemplo:
             "title",
             "hook",
             "hook_source_cut_index",
+            "hook_start",
+            "hook_end",
             "description",
             "hashtags",
             "thumbnail",
