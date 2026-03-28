@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
@@ -120,7 +120,7 @@ def start_auth(
         .first()
     )
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     if not user:
         user = User(
@@ -235,7 +235,7 @@ def verify_code(
     if user.status in {UserStatus.SUSPENDED, UserStatus.DELETED}:
         raise HTTPException(status_code=403, detail="Account unavailable")
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     if user.otp_locked_until and user.otp_locked_until > now:
         raise HTTPException(

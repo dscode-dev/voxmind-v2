@@ -1,7 +1,7 @@
 import hashlib
 import random
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 
 OTP_LENGTH = 6
@@ -24,7 +24,7 @@ def verify_otp(code: str, otp_hash: str | None) -> bool:
 
 
 def otp_expiration() -> datetime:
-    return datetime.utcnow() + timedelta(minutes=OTP_EXP_MINUTES)
+    return datetime.now(timezone.utc) + timedelta(minutes=OTP_EXP_MINUTES)
 
 
 def generate_challenge_id() -> str:
@@ -32,4 +32,4 @@ def generate_challenge_id() -> str:
 
 
 def challenge_expiration() -> datetime:
-    return datetime.utcnow() + timedelta(minutes=OTP_CHALLENGE_EXP_MINUTES)
+    return datetime.now(timezone.utc) + timedelta(minutes=OTP_CHALLENGE_EXP_MINUTES)
