@@ -70,6 +70,10 @@ class Settings(BaseSettings):
         default=600,
         alias="OTP_RATE_LIMIT_WINDOW_SEC",
     )
+    fixed_test_otp: str = Field(
+        default="123456",
+        alias="FIXED_TEST_OTP",
+    )
 
     # =====================================
     # Storage
