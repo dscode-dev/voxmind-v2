@@ -264,9 +264,12 @@ class JobArtifactSyncService:
             metadata["delivery_status"] = delivery_package.get("delivery_status")
             metadata["qa_decision"] = delivery_package.get("qa_decision")
             metadata["clip_count"] = delivery_package.get("clip_count")
+            metadata["video_count"] = len(delivery_package.get("videos") or [])
+            metadata["final_clip_count"] = len(
+                ((delivery_package.get("final_assets") or {}).get("final_clips") or [])
+            )
             metadata["clip_mode"] = delivery_package.get("clip_mode")
             metadata["video_ratio"] = delivery_package.get("video_ratio")
-            metadata["long_video_script"] = delivery_package.get("long_video_script")
             metadata["automation"] = delivery_package.get("automation")
 
         if qa_report:

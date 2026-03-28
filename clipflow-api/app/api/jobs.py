@@ -64,6 +64,35 @@ def _clip_review_summary(assets: list[ClipAsset]) -> dict[str, int]:
     return summary
 
 
+def _enrich_delivery_package(job_id: str, payload: dict | None) -> dict:
+    package = dict(payload or {})
+
+    videos = []
+    for video in package.get("videos") or []:
+        item = dict(video or {})
+        file_name = item.get("final_file_name")
+        if file_name:
+            storage_key = f"jobs/{job_id}/final_clips/{file_name}"
+            item["final_url"] = asset_url_service.build_signed_url(storage_key)
+            item["final_storage_key"] = storage_key
+        videos.append(item)
+    package["videos"] = videos
+
+    final_assets = dict(package.get("final_assets") or {})
+    final_clips = []
+    for clip in final_assets.get("final_clips") or []:
+        item = dict(clip or {})
+        file_name = item.get("file_name")
+        if file_name:
+            storage_key = f"jobs/{job_id}/final_clips/{file_name}"
+            item["storage_key"] = storage_key
+            item["url"] = asset_url_service.build_signed_url(storage_key)
+        final_clips.append(item)
+    final_assets["final_clips"] = final_clips
+    package["final_assets"] = final_assets
+    return package
+
+
 @router.post("/jobs")
 def create_job(
     source_url: str,
@@ -216,6 +245,12 @@ def job_delivery_package(
     if not job:
         raise HTTPException(status_code=404)
 
+    delivery_package_content = artifact_content_service.load_json(job.delivery_package_storage_key)
+    package_payload = _enrich_delivery_package(
+        str(job.id),
+        delivery_package_content if isinstance(delivery_package_content, dict) else {},
+    )
+
     assets = (
         db.query(ClipAsset)
         .filter(ClipAsset.job_id == job.id)
@@ -247,6 +282,9 @@ def job_delivery_package(
                 job.delivery_package_storage_key or (delivery_asset.storage_key if delivery_asset else None)
             ) or (delivery_asset.public_url if delivery_asset else None),
         },
+        "videos": package_payload.get("videos") or [],
+        "final_assets": package_payload.get("final_assets") or {},
+        "response_validation": package_payload.get("response_validation") or {},
         "qa_report": {
             "storage_key": job.qa_report_storage_key or (qa_asset.storage_key if qa_asset else None),
             "url": asset_url_service.build_signed_url(
