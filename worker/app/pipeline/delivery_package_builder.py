@@ -22,6 +22,7 @@ class DeliveryPackageBuilder:
         artifacts_manifest: Dict | None,
         response_validation: Dict | None = None,
         final_video_specs: List[Dict] | None = None,
+        language_metadata: Dict | None = None,
     ) -> Dict:
         clips = []
         videos = []
@@ -88,6 +89,7 @@ class DeliveryPackageBuilder:
             "delivery_status": self._resolve_delivery_status(qa_report),
             "qa_decision": qa_report.get("decision") if qa_report else None,
             "response_validation": response_validation or {},
+            "language": language_metadata or {},
             "automation": automation_report,
             "post": post_payload or {},
             "videos": videos,

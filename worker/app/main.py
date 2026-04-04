@@ -141,6 +141,7 @@ def run_pipeline(job: dict):
             transcript_path = result.get("transcript_path")
             transcript_with_speakers_path = result.get("transcript_with_speakers_path")
             candidates_path = result.get("candidates_path")
+            language_detection_path = result.get("language_detection_path")
             prompt_path = result.get("prompt_path")
             runtime_status_path = result.get("runtime_status_path")
             artifacts_manifest_path = result.get("artifacts_manifest_path")
@@ -171,6 +172,14 @@ def run_pipeline(job: dict):
                     pipeline_stage,
                     f"jobs/{job_id}/candidates.json",
                     candidates_path,
+                )
+
+            if _upload_if_exists(storage, language_detection_path, f"jobs/{job_id}/language_detection.json"):
+                pipeline.artifacts.mark_remote(
+                    "language_detection",
+                    pipeline_stage,
+                    f"jobs/{job_id}/language_detection.json",
+                    language_detection_path,
                 )
 
             if _upload_if_exists(storage, prompt_path, f"jobs/{job_id}/prompt.txt"):

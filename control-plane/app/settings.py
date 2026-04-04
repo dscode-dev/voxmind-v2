@@ -31,6 +31,16 @@ class Settings(BaseSettings):
     worker_cpu_limit: str = Field(default="2000m", alias="WORKER_CPU_LIMIT")
     worker_mem_request: str = Field(default="2Gi", alias="WORKER_MEM_REQUEST")
     worker_mem_limit: str = Field(default="4Gi", alias="WORKER_MEM_LIMIT")
+    worker_gpu_resource_key: str = Field(
+        default="nvidia.com/gpu",
+        alias="WORKER_GPU_RESOURCE_KEY",
+    )
+    worker_gpu_request: str = Field(default="1", alias="WORKER_GPU_REQUEST")
+    worker_gpu_limit: str = Field(default="1", alias="WORKER_GPU_LIMIT")
+    worker_cuda_visible_devices: str = Field(
+        default="all",
+        alias="WORKER_CUDA_VISIBLE_DEVICES",
+    )
 
     # =========================
     # MinIO (OBRIGATÓRIO)

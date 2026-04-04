@@ -37,6 +37,13 @@ class Transcriber:
         self.segment_duration_sec = segment_duration_sec
         self.max_merged_segment_duration_sec = max_merged_segment_duration_sec
         self.fallback_to_cpu_on_oom = fallback_to_cpu_on_oom
+        self.last_transcription_info: Dict = {
+            "requested_language": language,
+            "detected_language": None,
+            "language_probability": None,
+            "device": device,
+            "compute_type": compute_type,
+        }
 
     def transcribe(self, video_path: Path) -> List[Dict]:
         try:
@@ -87,12 +94,14 @@ class Transcriber:
             # TRANSCRIBE
             # ====================================
 
-            segments, _info = self.model.transcribe(
+            requested_language = self._requested_language_for_model()
+            segments, info = self.model.transcribe(
                 str(chunk_file),
-                language=self.language,
+                language=requested_language,
                 beam_size=self.beam_size,
                 vad_filter=self.vad_filter,
             )
+            self._update_transcription_info(info, requested_language)
 
             chunk_segments: List[Dict] = []
 
@@ -128,6 +137,9 @@ class Transcriber:
         if self.model is not None:
             return
 
+        if self._cuda_requested_but_unavailable():
+            self._fallback_to_cpu()
+
         self.model = WhisperModel(
             self.model_size,
             device=self.device,
@@ -135,6 +147,25 @@ class Transcriber:
             cpu_threads=self.cpu_threads,
             num_workers=self.parallel_workers,
         )
+        self.last_transcription_info["device"] = self.device
+        self.last_transcription_info["compute_type"] = self.compute_type
+
+    def _requested_language_for_model(self) -> str | None:
+        language = str(self.language or "").strip().lower()
+        if language in {"", "auto", "source"}:
+            return None
+        return language
+
+    def _update_transcription_info(self, info: object, requested_language: str | None) -> None:
+        detected_language = getattr(info, "language", None)
+        language_probability = getattr(info, "language_probability", None)
+        self.last_transcription_info = {
+            "requested_language": requested_language or "auto",
+            "detected_language": str(detected_language).strip().lower() if detected_language else None,
+            "language_probability": float(language_probability) if language_probability is not None else None,
+            "device": self.device,
+            "compute_type": self.compute_type,
+        }
 
     def _should_fallback_to_cpu(self, exc: Exception) -> bool:
         if not self.fallback_to_cpu_on_oom:
@@ -142,7 +173,24 @@ class Transcriber:
         if str(self.device).strip().lower() != "cuda":
             return False
         message = str(exc).lower()
-        return "cuda" in message and "out of memory" in message
+        return (
+            ("cuda" in message and "out of memory" in message)
+            or "no cuda-capable device is detected" in message
+            or "cuda-capable device" in message
+            or "no cuda devices are available" in message
+            or "cuda driver version is insufficient" in message
+            or "found no nvidia driver" in message
+        )
+
+    def _cuda_requested_but_unavailable(self) -> bool:
+        if str(self.device).strip().lower() != "cuda":
+            return False
+        try:
+            import torch
+
+            return not bool(torch.cuda.is_available())
+        except Exception:
+            return True
 
     def _fallback_to_cpu(self) -> None:
         self.model = None

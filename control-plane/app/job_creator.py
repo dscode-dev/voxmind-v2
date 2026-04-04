@@ -53,6 +53,14 @@ class JobCreator:
             client.V1EnvVar(name="MPLCONFIGDIR", value="/tmp/matplotlib"),
             client.V1EnvVar(name="XDG_CACHE_HOME", value="/tmp/.cache"),
             client.V1EnvVar(name="XDG_CONFIG_HOME", value="/tmp/.config"),
+            client.V1EnvVar(
+                name="CUDA_VISIBLE_DEVICES",
+                value=settings.worker_cuda_visible_devices,
+            ),
+            client.V1EnvVar(
+                name="NVIDIA_VISIBLE_DEVICES",
+                value=settings.worker_cuda_visible_devices,
+            ),
         ]
 
         if manual_response:
@@ -62,6 +70,22 @@ class JobCreator:
                     value=json.dumps(manual_response)
                 )
             )
+
+        resource_requests = {
+            "cpu": settings.worker_cpu_request,
+            "memory": settings.worker_mem_request,
+        }
+        resource_limits = {
+            "cpu": settings.worker_cpu_limit,
+            "memory": settings.worker_mem_limit,
+        }
+
+        gpu_resource_key = str(settings.worker_gpu_resource_key or "").strip()
+        gpu_request = str(settings.worker_gpu_request or "").strip()
+        gpu_limit = str(settings.worker_gpu_limit or "").strip()
+        if gpu_resource_key and gpu_limit and gpu_limit != "0":
+            resource_limits[gpu_resource_key] = gpu_limit
+            resource_requests[gpu_resource_key] = gpu_request or gpu_limit
 
         container = client.V1Container(
             name="worker",
@@ -76,14 +100,8 @@ class JobCreator:
                 )
             ],
             resources=client.V1ResourceRequirements(
-                requests={
-                    "cpu": settings.worker_cpu_request,
-                    "memory": settings.worker_mem_request,
-                },
-                limits={
-                    "cpu": settings.worker_cpu_limit,
-                    "memory": settings.worker_mem_limit,
-                },
+                requests=resource_requests,
+                limits=resource_limits,
             ),
             volume_mounts=[
                 client.V1VolumeMount(

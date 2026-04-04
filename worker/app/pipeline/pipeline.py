@@ -52,6 +52,14 @@ class Pipeline:
         self.clip_mode = clip_mode
         self.video_ratio = video_ratio
         self.build_ia = build_ia
+        self.language_metadata: dict = {
+            "language_mode": settings.language_mode,
+            "requested_language": settings.asr_language,
+            "source_language": None,
+            "output_language": None,
+            "subtitle_language": None,
+            "language_confidence": None,
+        }
 
         self.work_dir = Path(settings.work_dir) / job_id
         self.work_dir.mkdir(parents=True, exist_ok=True)
@@ -130,6 +138,12 @@ class Pipeline:
         if self.clip_mode == "short_serie" and self.video_ratio == "portrait":
             return Chunker(min_duration=26, target_duration=46, max_duration=68, overlap=5)
 
+        if self.clip_mode == "long" and self.video_ratio == "landscape":
+            return Chunker(min_duration=48, target_duration=90, max_duration=130, overlap=8)
+
+        if self.clip_mode == "long":
+            return Chunker(min_duration=42, target_duration=84, max_duration=125, overlap=8)
+
         if self.clip_mode == "short":
             return Chunker(min_duration=26, target_duration=48, max_duration=72, overlap=5)
 
@@ -169,6 +183,14 @@ class Pipeline:
                 min_candidate_duration_sec=28,
             )
 
+        if self.clip_mode == "long":
+            return CandidateBuilder(
+                max_candidate_duration_sec=120,
+                preferred_duration_sec=88,
+                min_candidate_duration_sec=40,
+                max_candidates_per_window=2,
+            )
+
         return CandidateBuilder(
             max_candidate_duration_sec=settings.candidate_max_duration_sec,
         )
@@ -184,6 +206,16 @@ class Pipeline:
                 min_start_gap=16,
                 prefer_thematic_continuity=True,
                 thematic_similarity_threshold=0.16,
+            )
+
+        if self.clip_mode == "long":
+            return Scorer(
+                max_candidates=6,
+                max_candidates_per_window=2,
+                min_start_gap=28,
+                overlap_iou_threshold=0.65,
+                prefer_thematic_continuity=True,
+                thematic_similarity_threshold=0.10,
             )
 
         return Scorer()
@@ -340,6 +372,7 @@ ERROR:
         self._mark_step("transcribe", "started")
 
         segments = self.transcriber.transcribe(video_path)
+        self.language_metadata = self._resolve_language_metadata(self.transcriber.last_transcription_info)
 
         if not segments:
             raise RuntimeError("Transcription returned no segments")
@@ -397,6 +430,7 @@ ERROR:
             self.job_id,
             clip_mode=self.clip_mode,
             video_ratio=self.video_ratio,
+            content_language=str(self.language_metadata.get("output_language") or self.language_metadata.get("source_language") or "pt"),
         )
         self._mark_step("prompt_build", "completed", prompt_chars=len(prompt))
 
@@ -414,6 +448,11 @@ ERROR:
             "candidates.json",
             ranked,
             "candidates",
+        )
+        language_detection_path = self._write_json_artifact(
+            "language_detection.json",
+            self.language_metadata,
+            "language_detection",
         )
         prompt_path = self._write_text_artifact(
             "prompt.txt",
@@ -464,6 +503,7 @@ para continuar o processamento.
             "transcript_path": str(transcript_path),
             "transcript_with_speakers_path": str(transcript_with_speakers_path),
             "candidates_path": str(candidates_path),
+            "language_detection_path": str(language_detection_path),
             "prompt_path": str(prompt_path),
             "runtime_status_path": str(self.runtime.runtime_path),
             "artifacts_manifest_path": str(self.artifacts.manifest_path),
@@ -677,7 +717,7 @@ para continuar o processamento.
 
         filtered_cuts = []
         min_cut_duration = (
-            settings.render_min_internal_cut_duration_sec
+            self._min_internal_cut_duration_sec()
             if self.manual_response.get("final_videos")
             else settings.render_min_clip_duration_sec
         )
@@ -1678,7 +1718,7 @@ para continuar o processamento.
             return cuts
 
         adjusted: list[dict] = []
-        min_internal = float(settings.render_min_internal_cut_duration_sec)
+        min_internal = self._min_internal_cut_duration_sec()
 
         for cut in cuts:
             meaningful_ranges = self._meaningful_ranges_for_cut(cut, transcript_segments)
@@ -2025,6 +2065,45 @@ para continuar o processamento.
         except (TypeError, ValueError):
             return None
 
+    def _resolve_language_metadata(self, transcription_info: dict | None) -> dict:
+        transcription_info = dict(transcription_info or {})
+        requested_language = str(transcription_info.get("requested_language") or settings.asr_language or "auto").strip().lower()
+        detected_language = str(transcription_info.get("detected_language") or "").strip().lower() or None
+        language_mode = str(settings.language_mode or "auto").strip().lower()
+        source_language = detected_language or (None if requested_language in {"", "auto", "source"} else requested_language)
+
+        if language_mode.startswith("force:"):
+            forced = language_mode.split(":", 1)[1].strip().lower() or source_language
+            output_language = forced
+            subtitle_language = forced
+        elif language_mode.startswith("translate:"):
+            translated = language_mode.split(":", 1)[1].strip().lower() or source_language
+            output_language = translated
+            subtitle_language = translated
+        else:
+            output_language = str(settings.output_language or source_language or "pt").strip().lower()
+            subtitle_language = str(settings.subtitle_language or output_language or source_language or "pt").strip().lower()
+
+        return {
+            "language_mode": language_mode,
+            "requested_language": requested_language,
+            "source_language": source_language,
+            "output_language": output_language,
+            "subtitle_language": subtitle_language,
+            "language_confidence": transcription_info.get("language_probability"),
+            "detection": transcription_info,
+        }
+
+    def _min_final_video_duration_sec(self) -> float:
+        if self.clip_mode == "long":
+            return float(settings.render_min_long_video_duration_sec)
+        return float(settings.render_min_final_video_duration_sec)
+
+    def _min_internal_cut_duration_sec(self) -> float:
+        if self.clip_mode == "long":
+            return float(settings.render_min_long_internal_cut_duration_sec)
+        return float(settings.render_min_internal_cut_duration_sec)
+
     def _find_previous_segment_start(
         self,
         transcript_segments: list[dict],
@@ -2121,6 +2200,7 @@ para continuar o processamento.
             artifacts_manifest=self.artifacts.read(),
             response_validation=self.manual_response.get("_response_validation"),
             final_video_specs=self.manual_response.get("_final_video_specs"),
+            language_metadata=self.language_metadata,
         )
         self._mark_step(
             "delivery_package",
@@ -2152,6 +2232,7 @@ para continuar o processamento.
             qa_report=qa_report,
             automation_report=automation_report,
             final_video_specs=self.manual_response.get("_final_video_specs"),
+            language_metadata=self.language_metadata,
         )
         self._mark_step(
             "publish_package",
@@ -2368,7 +2449,8 @@ para continuar o processamento.
                 end = float(cut.get("end", 0.0))
                 if end <= start:
                     continue
-                if (end - start) < settings.render_min_internal_cut_duration_sec:
+                min_internal_duration = self._min_internal_cut_duration_sec()
+                if (end - start) < min_internal_duration:
                     continue
                 filtered.append(cut)
 
@@ -2402,7 +2484,7 @@ para continuar o processamento.
         if len(specs) < 2:
             return specs
 
-        min_internal = float(settings.render_min_internal_cut_duration_sec)
+        min_internal = self._min_internal_cut_duration_sec()
         overlap_guard_sec = 0.2
         occupied_until = -1.0
         deduped: list[dict] = []
@@ -2474,7 +2556,7 @@ para continuar o processamento.
         start = float(cut.get("safe_start", cut.get("start", 0.0)))
         end = float(cut.get("safe_end", cut.get("end", 0.0)))
         duration = end - start
-        min_internal = float(settings.render_min_internal_cut_duration_sec)
+        min_internal = self._min_internal_cut_duration_sec()
 
         if duration < 62.0:
             return cuts
@@ -2535,7 +2617,7 @@ para continuar o processamento.
             for cut in adjusted
         )
 
-        target_min_total = float(settings.render_min_final_video_duration_sec)
+        target_min_total = self._min_final_video_duration_sec()
         max_total = float(settings.qa_max_clip_duration_sec)
 
         last = adjusted[-1]
@@ -2584,7 +2666,7 @@ para continuar o processamento.
         if total_duration <= max_total:
             return adjusted
 
-        min_internal = float(settings.render_min_internal_cut_duration_sec)
+        min_internal = self._min_internal_cut_duration_sec()
         overflow = total_duration - max_total
 
         for index in range(len(adjusted) - 1, -1, -1):
@@ -2627,7 +2709,8 @@ para continuar o processamento.
         transcript_segments: list[dict],
         remaining_budget: float,
     ) -> dict | None:
-        if remaining_budget < float(settings.render_min_internal_cut_duration_sec):
+        min_internal = self._min_internal_cut_duration_sec()
+        if remaining_budget < min_internal:
             return None
 
         last_end = float(last_cut.get("safe_end", last_cut.get("end", 0.0)))
@@ -2648,7 +2731,7 @@ para continuar o processamento.
                 break
             end = segment_end
             if (
-                segment_end - start >= float(settings.render_min_internal_cut_duration_sec)
+                segment_end - start >= min_internal
                 and self._segment_has_strong_ending(segment)
             ):
                 break
@@ -2657,7 +2740,7 @@ para continuar o processamento.
             return None
 
         duration = end - start
-        if duration < float(settings.render_min_internal_cut_duration_sec):
+        if duration < min_internal:
             return None
 
         return {

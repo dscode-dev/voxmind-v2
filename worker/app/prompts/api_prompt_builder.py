@@ -6,11 +6,13 @@ from app.prompts.prompt_context import build_transcript_context
 class ApiPromptBuilder:
 
     def __init__(self, max_context_chars: int | None = None):
+        from app.settings import settings
+
+        self.prompt_long_max_segments_per_candidate = settings.prompt_long_max_segments_per_candidate
+        self.render_min_long_video_duration_sec = settings.render_min_long_video_duration_sec
         if max_context_chars is not None:
             self.max_context_chars = max_context_chars
             return
-
-        from app.settings import settings
 
         self.max_context_chars = settings.llm_max_chars
 
@@ -26,6 +28,11 @@ class ApiPromptBuilder:
             transcript=transcript,
             candidates=[],
             max_chars=int(self.max_context_chars * 0.80),
+            max_segments_per_candidate=(
+                self.prompt_long_max_segments_per_candidate if clip_mode == "long" else 18
+            ),
+            context_padding_sec=48 if clip_mode == "long" else 32,
+            min_total_segments=42 if clip_mode == "long" else 28,
         )
 
         return f"""
@@ -129,11 +136,11 @@ Each `final_videos[i]` should preferably contain 2 connected cuts in `shorts_con
 Use a single cut only when one block alone already delivers hook, development and closure within the target duration.
 Do not mechanically replicate the number of items shown in the JSON example.
 Choose the real number of cuts based on context and narrative strength.
-Prefer final videos around 60 to 90 seconds when the material supports it.
-Only go below 60 seconds when there is truly no strong continuation available in the material.
+Prefer final videos around {self._preferred_duration_band(clip_mode)} when the material supports it.
+Only go below {self._response_min_total_duration(clip_mode)} seconds when there is truly no strong continuation available in the material.
 You may go beyond 75 seconds only when that extension is necessary to conclude the subject clearly.
 Prefer concluding the idea correctly even if that pushes the final video beyond 1 minute.
-Validate the total duration of each `final_video` before responding: it must stay between 60 and 120 seconds.
+Validate the total duration of each `final_video` before responding: it must stay between {self._response_min_total_duration(clip_mode)} and 120 seconds.
 If any `final_video` exceeds 120 seconds, shorten the last cut of that video before responding.
 `final_videos[i].hook_source_cut_index` must point to the cut index inside `final_videos[i].shorts_content` that fully contains the main hook.
 `final_videos[i].shorts_content[0]` must fully contain the main hook for that final video.
@@ -154,6 +161,8 @@ SHORT
 LONG
 - Generate connected blocks for a larger coherent narrative.
 - Preserve continuity between cuts.
+- Keep more context than short-form outputs.
+- Prefer sequences that feel like strong excerpts from a normal video, not shorts disguised as long clips.
 """
 
         return """
@@ -161,3 +170,13 @@ SHORT_SERIE
 - Generate connected cuts that together form one cohesive short narrative.
 - Related cuts should share the same merge_group.
 """
+
+    def _response_min_total_duration(self, clip_mode: str) -> int:
+        if clip_mode == "long":
+            return int(self.render_min_long_video_duration_sec)
+        return 60
+
+    def _preferred_duration_band(self, clip_mode: str) -> str:
+        if clip_mode == "long":
+            return "100 to 120 seconds"
+        return "60 to 90 seconds"

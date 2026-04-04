@@ -91,6 +91,8 @@ class SpeakerDiarizer:
             return
 
         self._load_attempted = True
+        if self._cuda_requested_but_unavailable():
+            self._fallback_to_cpu()
         try:
             pipeline_module = import_module("pyannote.audio")
             pipeline_cls = getattr(pipeline_module, "Pipeline")
@@ -148,7 +150,23 @@ class SpeakerDiarizer:
         if str(self.device).strip().lower() != "cuda":
             return False
         message = str(exc).lower()
-        return "cuda" in message and "out of memory" in message
+        return (
+            ("cuda" in message and "out of memory" in message)
+            or "no cuda-capable device is detected" in message
+            or "cuda-capable device" in message
+            or "no cuda devices are available" in message
+            or "cuda driver version is insufficient" in message
+            or "found no nvidia driver" in message
+        )
+
+    def _cuda_requested_but_unavailable(self) -> bool:
+        if str(self.device).strip().lower() != "cuda":
+            return False
+        try:
+            torch_module = import_module("torch")
+            return not bool(getattr(torch_module.cuda, "is_available", lambda: False)())
+        except Exception:
+            return True
 
     def _fallback_to_cpu(self) -> None:
         self._pipeline = None

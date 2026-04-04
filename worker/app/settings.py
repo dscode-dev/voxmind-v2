@@ -89,6 +89,10 @@ class Settings(BaseSettings):
         default=18,
         alias="PROMPT_MAX_SEGMENTS_PER_CANDIDATE"
     )
+    prompt_long_max_segments_per_candidate: int = Field(
+        default=28,
+        alias="PROMPT_LONG_MAX_SEGMENTS_PER_CANDIDATE"
+    )
 
     # ======================================
     # Whisper ASR
@@ -100,8 +104,20 @@ class Settings(BaseSettings):
     )
 
     asr_language: str = Field(
-        default="pt",
+        default="auto",
         alias="ASR_LANGUAGE"
+    )
+    language_mode: str = Field(
+        default="auto",
+        alias="LANGUAGE_MODE"
+    )
+    output_language: str | None = Field(
+        default=None,
+        alias="OUTPUT_LANGUAGE"
+    )
+    subtitle_language: str | None = Field(
+        default=None,
+        alias="SUBTITLE_LANGUAGE"
     )
 
     asr_compute_type: str = Field(
@@ -229,9 +245,17 @@ class Settings(BaseSettings):
         default=60,
         alias="RENDER_MIN_FINAL_VIDEO_DURATION_SEC"
     )
+    render_min_long_video_duration_sec: int = Field(
+        default=120,
+        alias="RENDER_MIN_LONG_VIDEO_DURATION_SEC"
+    )
     render_min_internal_cut_duration_sec: int = Field(
         default=12,
         alias="RENDER_MIN_INTERNAL_CUT_DURATION_SEC"
+    )
+    render_min_long_internal_cut_duration_sec: int = Field(
+        default=28,
+        alias="RENDER_MIN_LONG_INTERNAL_CUT_DURATION_SEC"
     )
     render_playback_speed: float = Field(
         default=1.15,

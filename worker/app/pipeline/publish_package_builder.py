@@ -18,6 +18,7 @@ class PublishPackageBuilder:
         qa_report: Dict | None,
         automation_report: Dict | None,
         final_video_specs: List[Dict] | None = None,
+        language_metadata: Dict | None = None,
     ) -> Dict:
         primary_clip = cuts[0] if cuts else {}
         post_payload = post_payload or {}
@@ -34,6 +35,7 @@ class PublishPackageBuilder:
             "clip_mode": clip_mode,
             "video_ratio": video_ratio,
             "publish_status": self._publish_status(qa_report, final_reel_path, final_clip_files),
+            "language": language_metadata or {},
             "primary_hook": primary_hook,
             "primary_title": primary_title,
             "description": description,
