@@ -37,7 +37,7 @@ artifact_storage_client = Minio(
 
 class CreateJobInput(BaseModel):
     source_url: str
-    product_id: str
+    product_id: str | None = None
     clip_mode: str = Field(default="short_serie")
     video_ratio: str = Field(default="portrait")
     build_ia: bool = Field(default=False)
@@ -159,10 +159,23 @@ def create_job(
     user: User = Depends(get_current_user),
 ):
 
-    product = db.query(BillingProduct).filter(BillingProduct.id == payload.product_id).first()
-
-    if not product:
-        raise HTTPException(status_code=404, detail="Invalid product")
+    product = None
+    if payload.product_id:
+        product = db.query(BillingProduct).filter(BillingProduct.id == payload.product_id).first()
+        if not product:
+            raise HTTPException(status_code=404, detail="Invalid product")
+    else:
+        product = (
+            db.query(BillingProduct)
+            .filter(BillingProduct.is_active == True)
+            .order_by(BillingProduct.price_amount.asc(), BillingProduct.created_at.asc())
+            .first()
+        )
+        if not product:
+            raise HTTPException(
+                status_code=400,
+                detail="No active billing product available to create jobs",
+            )
 
     if user.credits <= 0 and not can_bypass_credits(user):
         raise HTTPException(status_code=402, detail="No credits")
