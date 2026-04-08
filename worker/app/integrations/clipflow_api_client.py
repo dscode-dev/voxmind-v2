@@ -97,6 +97,75 @@ class ClipFlowApiClient:
         stop=stop_after_attempt(settings.integration_retry_attempts),
         reraise=True,
     )
+    def update_runtime(
+        self,
+        job_id: str,
+        *,
+        pipeline_stage: str,
+        step: str,
+        status: str,
+        details: dict[str, Any] | None = None,
+        worker_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        if not self.enabled:
+            return None
+
+        url = f"{self.base_url}/internal/jobs/{job_id}/runtime"
+        response = requests.post(
+            url,
+            json={
+                "pipeline_stage": pipeline_stage,
+                "step": step,
+                "status": status,
+                "details": details or {},
+                "worker_id": worker_id,
+            },
+            headers=self._headers(),
+            timeout=settings.clipflow_api_timeout_sec,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def update_runtime_safe(
+        self,
+        job_id: str,
+        *,
+        pipeline_stage: str,
+        step: str,
+        status: str,
+        details: dict[str, Any] | None = None,
+        worker_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        try:
+            return self.update_runtime(
+                job_id=job_id,
+                pipeline_stage=pipeline_stage,
+                step=step,
+                status=status,
+                details=details,
+                worker_id=worker_id,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to push runtime update to ClipFlow API",
+                extra={
+                    "job_id": job_id,
+                    "pipeline_stage": pipeline_stage,
+                    "step": step,
+                    "status": status,
+                },
+            )
+            return None
+
+    @retry(
+        retry=retry_if_exception_type(requests.RequestException),
+        wait=wait_exponential(
+            min=settings.integration_retry_min_sec,
+            max=settings.integration_retry_max_sec,
+        ),
+        stop=stop_after_attempt(settings.integration_retry_attempts),
+        reraise=True,
+    )
     def claim_due_private_scheduler_runs(
         self,
         worker_id: str,

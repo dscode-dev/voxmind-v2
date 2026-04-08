@@ -28,6 +28,7 @@ from app.pipeline.audio_peak_detector import AudioPeakDetector
 from app.pipeline.story_shift_detector import StoryShiftDetector
 
 from app.integrations.telegram_sender import TelegramSender
+from app.integrations.clipflow_api_client import ClipFlowApiClient
 from app.observability import ArtifactTracker, RuntimeTracker, get_logger
 from app.settings import settings
 
@@ -131,6 +132,7 @@ class Pipeline:
         )
 
         self.telegram = TelegramSender()
+        self.clipflow_api = ClipFlowApiClient()
         self.prompt_builder = ManualPromptBuilder()
 
     def _build_chunker(self) -> Chunker:
@@ -266,6 +268,13 @@ JOB_ID: {self.job_id}
                 "step": step,
                 "status": status,
             },
+        )
+        self.clipflow_api.update_runtime_safe(
+            self.job_id,
+            pipeline_stage=settings.pipeline_stage,
+            step=step,
+            status=status,
+            details=details or {},
         )
 
     def _write_json_artifact(self, filename: str, payload: object, artifact_name: str) -> Path:
