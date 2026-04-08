@@ -266,11 +266,13 @@ video_ratio: {video_ratio}
 
 OBJETIVO EDITORIAL
 
-- Gere no máximo 2 vídeos finais.
+- Gere 1 vídeo final por padrão.
+- Só gere 2 vídeos finais se houver dois blocos realmente distintos, completos e fortes o bastante para funcionar como capítulos separados.
+- Nunca quebre um mesmo raciocínio em vários vídeos só para multiplicar a quantidade de entregas.
 - Prefira 1 vídeo muito forte a 2 vídeos medianos.
 - Cada vídeo final deve soar como um trecho robusto de vídeo normal.
 - Preserve mais contexto antes e depois da tese principal.
-- Prefira 2 ou 3 cortes conectados quando isso melhorar a compreensão e o fechamento.
+- Prefira 2 ou 3 cortes longos e conectados quando isso melhorar a compreensão e o fechamento.
 - Só use 1 corte único quando ele sozinho já entregar abertura, desenvolvimento e conclusão com contexto suficiente.
 
 REGRAS DE DURAÇÃO
@@ -288,6 +290,9 @@ REGRAS EDITORIAIS
 - Preserve contexto suficiente para a fala fazer sentido sozinha.
 - Prefira trechos que incluam setup, desenvolvimento e fechamento.
 - Evite cortes com saltos bruscos de assunto.
+- Evite cortes curtos com cara de short, reels ou tiktok.
+- Em `long`, cada corte deve parecer parte de um mesmo trecho contínuo maior, não um highlight comprimido.
+- Se houver continuação útil logo depois do primeiro corte, incorpore essa continuação ao mesmo vídeo final.
 - Evite vídeos redundantes entre si.
 - O hook continua obrigatório, mas ele deve abrir um corte de vídeo normal, não um short agressivamente comprimido.
 - O hook deve estar totalmente dentro do primeiro corte.
@@ -366,6 +371,9 @@ Prefira `hook_id` e `span_ids` como forma principal de seleção.
 Use `shorts_content` como complemento ou fallback quando precisar detalhar manualmente os cortes.
 Se `hook_id` e `span_ids` já definirem claramente a seleção, `shorts_content` pode ser omitido ou vir como lista vazia.
 Valide a duração total de cada `final_video` antes de responder: o total precisa ficar entre {self.render_min_long_video_duration_sec} e {self.qa_max_clip_duration_sec} segundos.
+Por padrão, retorne apenas 1 `final_video`.
+Só retorne 2 `final_videos` se o material trouxer dois arcos bem distintos, completos e não redundantes.
+Em `long`, prefira 2 ou 3 cortes grandes e conectados dentro do mesmo `final_video`, em vez de vários vídeos curtos.
 Se não houver material forte para 2 vídeos bons, retorne apenas 1.
 """
 
@@ -404,11 +412,13 @@ subtitle_language: en
 
 EDITORIAL GOAL
 
-- Produce at most 2 final videos.
+- Produce 1 final video by default.
+- Only produce 2 final videos if there are two clearly distinct, complete and strong chapters.
+- Never split one connected argument into multiple final videos just to increase the count.
 - Prefer 1 very strong final video over 2 mediocre ones.
 - Each final video should feel like a robust excerpt from a normal video.
 - Preserve enough setup, development and closure.
-- Prefer 2 or 3 connected cuts when that improves clarity and ending.
+- Prefer 2 or 3 long connected cuts when that improves clarity and ending.
 - Use a single cut only when one block already carries enough context and conclusion.
 
 DURATION RULES
@@ -426,6 +436,9 @@ EDITORIAL RULES
 - Preserve enough context so the clip makes sense on its own.
 - Prefer excerpts that include setup, development and closure.
 - Avoid abrupt topic jumps.
+- Avoid cuts that feel like shorts, reels or tiktok highlights.
+- In `long`, each cut should feel like part of a larger continuous excerpt, not a compressed highlight.
+- If there is useful continuation right after the first cut, keep that continuation inside the same final video.
 - Avoid redundant final videos.
 - The hook is still mandatory, but it should open a normal-video excerpt, not a hyper-compressed short.
 - The hook must be fully contained inside the first cut.
@@ -502,6 +515,9 @@ Prefer `hook_id` and `span_ids` as the main structured selection fields.
 Use `shorts_content` as a complement or fallback when you need to detail cuts manually.
 If `hook_id` and `span_ids` already define the selection clearly, `shorts_content` may be omitted or returned as an empty list.
 Validate the total duration of each `final_video` before responding: it must stay between {self.render_min_long_video_duration_sec} and {self.qa_max_clip_duration_sec} seconds.
+By default, return only 1 `final_video`.
+Return 2 `final_videos` only if the material clearly contains two distinct, complete and non-redundant chapters.
+In `long`, prefer 2 or 3 larger connected cuts inside the same `final_video` instead of several short-like videos.
 If there is only enough strong material for 1 good final video, return only 1.
 """
 

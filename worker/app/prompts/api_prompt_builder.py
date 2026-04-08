@@ -213,17 +213,22 @@ Do not place unescaped double quotes inside string values.
 
 MANDATORY RULES
 
-- Produce at most 2 final videos.
+- Produce 1 final video by default.
+- Only produce 2 final videos if there are two clearly distinct, complete and strong chapters.
+- Never split one connected argument into multiple final videos just to increase the count.
 - Prefer 1 very strong final video over 2 mediocre ones.
 - Each final video must feel like a robust excerpt from a normal video.
 - Preserve more setup, development and closure than a short-form output.
-- Prefer 2 or 3 connected cuts when that improves context and ending.
+- Prefer 2 or 3 long connected cuts when that improves context and ending.
 - Use a single cut only when one block alone already delivers enough context and a proper conclusion.
 - Never start in the middle of a sentence.
 - Never end before the subject is properly closed.
 - Preserve chronology and continuity between cuts.
 - Avoid abrupt topic jumps.
 - Avoid over-compressing the material into a shorts-like structure.
+- Avoid cuts that feel like shorts, reels or tiktok highlights.
+- In `long`, each cut should feel like part of a larger continuous excerpt, not a compressed highlight.
+- If there is useful continuation right after the first cut, keep that continuation inside the same final video.
 - `post.hook` must be fully contained inside the first selected cut.
 - Prefer selecting the hook with `hook_id` from `HOOK CANDIDATES`.
 - Prefer selecting the cuts with `span_ids` from `SPAN CATALOG`.
@@ -294,6 +299,9 @@ If `hook_id` and `span_ids` already define the selection clearly, `shorts_conten
 Prefer final videos around 100 to 120 seconds when the material supports it.
 Validate the total duration of each `final_video` before responding: it must stay between {self.render_min_long_video_duration_sec} and 120 seconds.
 If any `final_video` exceeds 120 seconds, shorten the last cut of that video before responding.
+By default, return only 1 `final_video`.
+Return 2 `final_videos` only if the material clearly contains two distinct, complete and non-redundant chapters.
+In `long`, prefer 2 or 3 larger connected cuts inside the same `final_video` instead of several short-like videos.
 If there is only enough strong material for 1 good final video, return only 1.
 """
 

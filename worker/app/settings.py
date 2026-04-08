@@ -257,6 +257,10 @@ class Settings(BaseSettings):
         default=28,
         alias="RENDER_MIN_LONG_INTERNAL_CUT_DURATION_SEC"
     )
+    render_long_max_inter_cut_gap_sec: float = Field(
+        default=45.0,
+        alias="RENDER_LONG_MAX_INTER_CUT_GAP_SEC"
+    )
     render_playback_speed: float = Field(
         default=1.15,
         alias="RENDER_PLAYBACK_SPEED"

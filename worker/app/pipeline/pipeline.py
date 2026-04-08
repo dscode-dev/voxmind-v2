@@ -2313,6 +2313,15 @@ para continuar o processamento.
             return float(settings.render_min_long_internal_cut_duration_sec)
         return float(settings.render_min_internal_cut_duration_sec)
 
+    def _total_cuts_duration_sec(self, cuts: list[dict]) -> float:
+        return sum(
+            max(
+                0.0,
+                float(cut.get("safe_end", cut.get("end", 0.0))) - float(cut.get("safe_start", cut.get("start", 0.0))),
+            )
+            for cut in cuts
+        )
+
     def _find_previous_segment_start(
         self,
         transcript_segments: list[dict],
@@ -2683,7 +2692,9 @@ para continuar o processamento.
                 }
             )
 
-        return self._dedupe_final_video_specs(specs, transcript_segments)
+        specs = self._dedupe_final_video_specs(specs, transcript_segments)
+        specs = self._consolidate_long_final_video_specs(specs, transcript_segments)
+        return specs
 
     def _dedupe_final_video_specs(
         self,
@@ -2753,6 +2764,94 @@ para continuar o processamento.
 
         return deduped if len(deduped) == len(specs) else specs
 
+    def _consolidate_long_final_video_specs(
+        self,
+        specs: list[dict],
+        transcript_segments: list[dict],
+    ) -> list[dict]:
+        if self.clip_mode != "long" or len(specs) < 2:
+            return specs
+
+        max_total = float(settings.qa_max_clip_duration_sec)
+        max_gap = float(settings.render_long_max_inter_cut_gap_sec)
+        merged: list[dict] = []
+        index = 0
+
+        while index < len(specs):
+            current = {
+                **specs[index],
+                "post": dict(specs[index].get("post") or {}),
+                "cuts": [dict(cut) for cut in specs[index].get("cuts") or []],
+            }
+            index += 1
+
+            while index < len(specs):
+                current_cuts = list(current.get("cuts") or [])
+                next_cuts = [dict(cut) for cut in specs[index].get("cuts") or []]
+                if not current_cuts or not next_cuts:
+                    break
+
+                current_total = self._total_cuts_duration_sec(current_cuts)
+                if current_total >= max_total:
+                    break
+
+                current_end = float(current_cuts[-1].get("safe_end", current_cuts[-1].get("end", 0.0)))
+                next_start = float(next_cuts[0].get("safe_start", next_cuts[0].get("start", 0.0)))
+                gap = max(0.0, next_start - current_end)
+                combined_total = current_total + self._total_cuts_duration_sec(next_cuts)
+
+                next_post = dict(specs[index].get("post") or {})
+                should_merge = (
+                    gap <= max_gap
+                    and (
+                        len(current_cuts) < 2
+                        or current_total < self._min_final_video_duration_sec()
+                        or combined_total <= max_total
+                    )
+                )
+                if not should_merge:
+                    break
+
+                current_cuts.extend(next_cuts)
+                current["cuts"] = current_cuts
+                if not current["post"].get("description") and next_post.get("description"):
+                    current["post"]["description"] = next_post.get("description")
+                if not current["post"].get("hashtags") and next_post.get("hashtags"):
+                    current["post"]["hashtags"] = next_post.get("hashtags")
+                index += 1
+
+            current["cuts"] = self._strengthen_final_video_cuts(
+                list(current.get("cuts") or []),
+                transcript_segments,
+                dict(current.get("post") or {}),
+            )
+            current["cuts"] = self._cap_final_video_total_duration(
+                list(current.get("cuts") or []),
+                transcript_segments,
+            )
+            current["post"] = self._reconcile_post_hook_to_transcript(
+                dict(current.get("post") or {}),
+                list(current.get("cuts") or []),
+                transcript_segments,
+            )
+            current["cuts"] = self._align_first_cut_to_global_hook(
+                list(current.get("cuts") or []),
+                transcript_segments,
+                dict(current.get("post") or {}),
+            )
+            current["post"] = self._strengthen_post_hook(
+                dict(current.get("post") or {}),
+                list(current.get("cuts") or []),
+                transcript_segments,
+            )
+            current["cuts"] = self._assign_default_transitions(list(current.get("cuts") or []))
+            merged.append(current)
+
+        for idx, spec in enumerate(merged, start=1):
+            spec["video_index"] = idx
+
+        return merged
+
     def _split_single_cut_for_short_serie(
         self,
         cuts: list[dict],
@@ -2818,13 +2917,7 @@ para continuar o processamento.
             return cuts
 
         adjusted = [dict(cut) for cut in cuts]
-        total_duration = sum(
-            max(
-                0.0,
-                float(cut.get("safe_end", cut.get("end", 0.0))) - float(cut.get("safe_start", cut.get("start", 0.0))),
-            )
-            for cut in adjusted
-        )
+        total_duration = self._total_cuts_duration_sec(adjusted)
 
         target_min_total = self._min_final_video_duration_sec()
         max_total = float(settings.qa_max_clip_duration_sec)
@@ -2865,13 +2958,7 @@ para continuar o processamento.
 
         max_total = float(settings.qa_max_clip_duration_sec)
         adjusted = [dict(cut) for cut in cuts]
-        total_duration = sum(
-            max(
-                0.0,
-                float(cut.get("safe_end", cut.get("end", 0.0))) - float(cut.get("safe_start", cut.get("start", 0.0))),
-            )
-            for cut in adjusted
-        )
+        total_duration = self._total_cuts_duration_sec(adjusted)
         if total_duration <= max_total:
             return adjusted
 
