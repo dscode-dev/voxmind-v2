@@ -26,11 +26,13 @@ from app.models.enums import JobStatus
 from app.services.asset_url_service import AssetUrlService
 from app.services.artifact_content_service import ArtifactContentService
 from app.services.audit_service import AuditService
+from app.services.job_artifact_sync import JobArtifactSyncService
 
 router = APIRouter()
 asset_url_service = AssetUrlService()
 artifact_content_service = ArtifactContentService()
 audit_service = AuditService()
+job_artifact_sync_service = JobArtifactSyncService()
 artifact_storage_client = Minio(
     settings.minio_endpoint,
     access_key=settings.minio_access_key,
@@ -175,6 +177,15 @@ def _publish_prepare_job(job: ClipJob) -> None:
         "build_ia": bool(_job_config(job).get("build_ia", False)),
     }
     _worker_queue().lpush(settings.voxmind_redis_queue, json.dumps(payload))
+
+
+def _refresh_job_from_artifacts(db: Session, job: ClipJob) -> None:
+    if job.status in {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELED}:
+        return
+    try:
+        job_artifact_sync_service.sync_job(db=db, job=job)
+    except Exception:
+        return
 
 
 def _clip_review_summary(assets: list[ClipAsset]) -> dict[str, int]:
@@ -385,6 +396,8 @@ def job_detail(
     if not job:
         raise HTTPException(status_code=404)
 
+    _refresh_job_from_artifacts(db, job)
+
     return {
         "id": str(job.id),
         "status": job.status.value,
@@ -424,6 +437,8 @@ def job_assets(
     if not job:
         raise HTTPException(status_code=404)
 
+    _refresh_job_from_artifacts(db, job)
+
     assets = (
         db.query(ClipAsset)
         .filter(ClipAsset.job_id == job.id)
@@ -451,6 +466,8 @@ def job_delivery_package(
 
     if not job:
         raise HTTPException(status_code=404)
+
+    _refresh_job_from_artifacts(db, job)
 
     delivery_package_content = artifact_content_service.load_json(job.delivery_package_storage_key)
     package_payload = _enrich_delivery_package(
@@ -748,6 +765,8 @@ def job_editorial_context(
 
     if not job:
         raise HTTPException(status_code=404)
+
+    _refresh_job_from_artifacts(db, job)
 
     transcript_with_speakers = artifact_content_service.load_json(
         job.transcript_with_speakers_storage_key

@@ -12,10 +12,12 @@ from app.models.enums import JobEventType
 from app.security.access_control import is_admin, scope_job_query
 from app.security.auth_middleware import get_current_user, require_internal_api_token
 from app.services.audit_service import AuditService
+from app.services.job_artifact_sync import JobArtifactSyncService
 from app.models.user import User
 
 router = APIRouter()
 audit_service = AuditService()
+job_artifact_sync_service = JobArtifactSyncService()
 
 
 
@@ -34,6 +36,12 @@ def list_job_events(
 
     if not job:
         return []
+
+    if job.status.value not in {"completed", "failed", "canceled"}:
+        try:
+            job_artifact_sync_service.sync_job(db=db, job=job)
+        except Exception:
+            pass
 
     events = (
         db.query(JobEvent)
@@ -87,6 +95,12 @@ async def stream_job_events(
 
                 if current_job is None:
                     break
+
+                if current_job.status.value not in {"completed", "failed", "canceled"}:
+                    try:
+                        job_artifact_sync_service.sync_job(db=stream_db, job=current_job)
+                    except Exception:
+                        pass
 
                 last_event = (
                     stream_db.query(JobEvent)
