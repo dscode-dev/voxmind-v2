@@ -271,6 +271,8 @@ class JobArtifactSyncService:
             metadata["clip_mode"] = delivery_package.get("clip_mode")
             metadata["video_ratio"] = delivery_package.get("video_ratio")
             metadata["automation"] = delivery_package.get("automation")
+            if delivery_package.get("language") is not None:
+                metadata["language"] = delivery_package.get("language")
 
         if qa_report:
             metadata["qa_summary"] = qa_report.get("summary")

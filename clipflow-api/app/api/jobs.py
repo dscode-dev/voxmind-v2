@@ -1,10 +1,15 @@
 import uuid
+import io
+import json
 
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
+from minio import Minio
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.core.settings import settings
 from app.db.session import get_db
 from app.models.clip_job import ClipJob
 from app.models.billing_product import BillingProduct
@@ -22,6 +27,60 @@ router = APIRouter()
 asset_url_service = AssetUrlService()
 artifact_content_service = ArtifactContentService()
 audit_service = AuditService()
+artifact_storage_client = Minio(
+    settings.minio_endpoint,
+    access_key=settings.minio_access_key,
+    secret_key=settings.minio_secret_key,
+    secure=settings.minio_secure,
+)
+
+
+class CreateJobInput(BaseModel):
+    source_url: str
+    product_id: str
+    clip_mode: str = Field(default="short_serie")
+    video_ratio: str = Field(default="portrait")
+    build_ia: bool = Field(default=False)
+    language_mode: str = Field(default="auto")
+    output_language: str | None = None
+    subtitle_language: str | None = None
+    prompt_mode: str = Field(default="manual")
+
+
+class SubmitAiResponseInput(BaseModel):
+    response_json: dict
+
+
+def _expected_artifact_keys(job_id: str) -> dict[str, str]:
+    return {
+        "transcript": f"jobs/{job_id}/transcript.json",
+        "transcript_with_speakers": f"jobs/{job_id}/transcript_with_speakers.json",
+        "speaker_turns": f"jobs/{job_id}/speaker_turns.json",
+        "candidates": f"jobs/{job_id}/candidates.json",
+        "span_catalog": f"jobs/{job_id}/span_catalog.json",
+        "hook_candidates": f"jobs/{job_id}/hook_candidates.json",
+        "language_detection": f"jobs/{job_id}/language_detection.json",
+        "prompt": f"jobs/{job_id}/prompt.txt",
+        "ai_response": f"jobs/{job_id}/ai_output.json",
+        "qa_report": f"jobs/{job_id}/qa_report.json",
+        "delivery_package": f"jobs/{job_id}/delivery_package.json",
+        "artifacts_manifest": f"jobs/{job_id}/artifacts_manifest.json",
+        "runtime_status": f"jobs/{job_id}/runtime_status.json",
+    }
+
+
+def _job_config(job: ClipJob) -> dict:
+    metadata = dict(job.metadata_json or {})
+    config = dict(metadata.get("job_config") or {})
+    return {
+        "clip_mode": str(config.get("clip_mode") or metadata.get("clip_mode") or "short_serie"),
+        "video_ratio": str(config.get("video_ratio") or metadata.get("video_ratio") or "portrait"),
+        "build_ia": bool(config.get("build_ia") if config.get("build_ia") is not None else metadata.get("build_ia", False)),
+        "language_mode": str(config.get("language_mode") or metadata.get("language_mode") or "auto"),
+        "output_language": config.get("output_language") or metadata.get("output_language"),
+        "subtitle_language": config.get("subtitle_language") or metadata.get("subtitle_language"),
+        "prompt_mode": str(config.get("prompt_mode") or job.prompt_mode or "manual"),
+    }
 
 
 def _serialize_asset(asset: ClipAsset) -> dict:
@@ -95,13 +154,12 @@ def _enrich_delivery_package(job_id: str, payload: dict | None) -> dict:
 
 @router.post("/jobs")
 def create_job(
-    source_url: str,
-    product_id: str,
+    payload: CreateJobInput,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
 
-    product = db.query(BillingProduct).filter(BillingProduct.id == product_id).first()
+    product = db.query(BillingProduct).filter(BillingProduct.id == payload.product_id).first()
 
     if not product:
         raise HTTPException(status_code=404, detail="Invalid product")
@@ -113,8 +171,22 @@ def create_job(
         user_id=user.id,
         purchase_id=None,
         product_id=product.id,
-        source_url=source_url,
+        source_url=payload.source_url,
         status=JobStatus.QUEUED,
+        pipeline_stage="prepare",
+        prompt_mode=payload.prompt_mode,
+        queued_at=datetime.now(timezone.utc),
+        metadata_json={
+            "job_config": {
+                "clip_mode": payload.clip_mode,
+                "video_ratio": payload.video_ratio,
+                "build_ia": payload.build_ia,
+                "language_mode": payload.language_mode,
+                "output_language": payload.output_language,
+                "subtitle_language": payload.subtitle_language,
+                "prompt_mode": payload.prompt_mode,
+            }
+        },
     )
 
     db.add(job)
@@ -130,6 +202,7 @@ def create_job(
     return {
         "job_id": str(job.id),
         "status": job.status.value,
+        "job_config": _job_config(job),
     }
 
 
@@ -148,6 +221,7 @@ def list_jobs(
             "pipeline_stage": j.pipeline_stage,
             "source_url": j.source_url,
             "created_at": j.created_at,
+            "job_config": _job_config(j),
             "metadata": {
                 **(j.metadata_json or {}),
                 "review_summary": _clip_review_summary(
@@ -186,17 +260,19 @@ def job_detail(
         "source_url": job.source_url,
         "pipeline_stage": job.pipeline_stage,
         "created_at": job.created_at,
+        "job_config": _job_config(job),
         "artifact_keys": {
-            "transcript": job.transcript_storage_key,
-            "transcript_with_speakers": job.transcript_with_speakers_storage_key,
-            "speaker_turns": job.speaker_turns_storage_key,
-            "candidates": job.candidates_storage_key,
-            "prompt": job.prompt_storage_key,
-            "ai_response": job.ai_response_storage_key,
-            "qa_report": job.qa_report_storage_key,
-            "delivery_package": job.delivery_package_storage_key,
-            "artifacts_manifest": job.artifacts_manifest_storage_key,
-            "runtime_status": job.runtime_status_storage_key,
+            **_expected_artifact_keys(str(job.id)),
+            "transcript": job.transcript_storage_key or _expected_artifact_keys(str(job.id))["transcript"],
+            "transcript_with_speakers": job.transcript_with_speakers_storage_key or _expected_artifact_keys(str(job.id))["transcript_with_speakers"],
+            "speaker_turns": job.speaker_turns_storage_key or _expected_artifact_keys(str(job.id))["speaker_turns"],
+            "candidates": job.candidates_storage_key or _expected_artifact_keys(str(job.id))["candidates"],
+            "prompt": job.prompt_storage_key or _expected_artifact_keys(str(job.id))["prompt"],
+            "ai_response": job.ai_response_storage_key or _expected_artifact_keys(str(job.id))["ai_response"],
+            "qa_report": job.qa_report_storage_key or _expected_artifact_keys(str(job.id))["qa_report"],
+            "delivery_package": job.delivery_package_storage_key or _expected_artifact_keys(str(job.id))["delivery_package"],
+            "artifacts_manifest": job.artifacts_manifest_storage_key or _expected_artifact_keys(str(job.id))["artifacts_manifest"],
+            "runtime_status": job.runtime_status_storage_key or _expected_artifact_keys(str(job.id))["runtime_status"],
         },
         "metadata": job.metadata_json,
     }
@@ -276,6 +352,7 @@ def job_delivery_package(
         "job_id": str(job.id),
         "status": job.status.value,
         "pipeline_stage": job.pipeline_stage,
+        "job_config": _job_config(job),
         "delivery_package": {
             "storage_key": job.delivery_package_storage_key or (delivery_asset.storage_key if delivery_asset else None),
             "url": asset_url_service.build_signed_url(
@@ -284,6 +361,7 @@ def job_delivery_package(
         },
         "videos": package_payload.get("videos") or [],
         "final_assets": package_payload.get("final_assets") or {},
+        "language": package_payload.get("language") or {},
         "response_validation": package_payload.get("response_validation") or {},
         "qa_report": {
             "storage_key": job.qa_report_storage_key or (qa_asset.storage_key if qa_asset else None),
@@ -292,16 +370,17 @@ def job_delivery_package(
             ) or (qa_asset.public_url if qa_asset else None),
         },
         "artifact_keys": {
-            "transcript": job.transcript_storage_key,
-            "transcript_with_speakers": job.transcript_with_speakers_storage_key,
-            "speaker_turns": job.speaker_turns_storage_key,
-            "candidates": job.candidates_storage_key,
-            "prompt": job.prompt_storage_key,
-            "ai_response": job.ai_response_storage_key,
-            "qa_report": job.qa_report_storage_key,
-            "delivery_package": job.delivery_package_storage_key,
-            "artifacts_manifest": job.artifacts_manifest_storage_key,
-            "runtime_status": job.runtime_status_storage_key,
+            **_expected_artifact_keys(str(job.id)),
+            "transcript": job.transcript_storage_key or _expected_artifact_keys(str(job.id))["transcript"],
+            "transcript_with_speakers": job.transcript_with_speakers_storage_key or _expected_artifact_keys(str(job.id))["transcript_with_speakers"],
+            "speaker_turns": job.speaker_turns_storage_key or _expected_artifact_keys(str(job.id))["speaker_turns"],
+            "candidates": job.candidates_storage_key or _expected_artifact_keys(str(job.id))["candidates"],
+            "prompt": job.prompt_storage_key or _expected_artifact_keys(str(job.id))["prompt"],
+            "ai_response": job.ai_response_storage_key or _expected_artifact_keys(str(job.id))["ai_response"],
+            "qa_report": job.qa_report_storage_key or _expected_artifact_keys(str(job.id))["qa_report"],
+            "delivery_package": job.delivery_package_storage_key or _expected_artifact_keys(str(job.id))["delivery_package"],
+            "artifacts_manifest": job.artifacts_manifest_storage_key or _expected_artifact_keys(str(job.id))["artifacts_manifest"],
+            "runtime_status": job.runtime_status_storage_key or _expected_artifact_keys(str(job.id))["runtime_status"],
         },
         "clips": [
             {
@@ -323,6 +402,69 @@ def job_delivery_package(
             for asset in clips
         ],
         "metadata": job.metadata_json,
+    }
+
+
+@router.post("/jobs/{job_id}/submit-ai-response")
+def submit_ai_response(
+    job_id: str,
+    payload: SubmitAiResponseInput,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    job = (
+        scope_job_query(db.query(ClipJob), user, ClipJob)
+        .filter(ClipJob.id == job_id)
+        .first()
+    )
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    storage_key = _expected_artifact_keys(str(job.id))["ai_response"]
+    content = json.dumps(payload.response_json, ensure_ascii=False, indent=2).encode("utf-8")
+    artifact_storage_client.put_object(
+        settings.worker_artifacts_bucket,
+        storage_key,
+        io.BytesIO(content),
+        len(content),
+        content_type="application/json",
+    )
+
+    job.ai_response_storage_key = storage_key
+    job.pipeline_stage = "finalize"
+    job.status = JobStatus.QUEUED
+    job.error_message = None
+
+    metadata = dict(job.metadata_json or {})
+    metadata["manual_finalize"] = {
+        "submitted_at": datetime.now(timezone.utc).isoformat(),
+        "submitted_by_user_id": str(user.id),
+    }
+    job.metadata_json = metadata
+    db.add(job)
+
+    audit_service.log(
+        db,
+        action="job.submit_ai_response",
+        outcome="success",
+        actor_user=user,
+        target_type="clip_job",
+        target_id=str(job.id),
+        metadata={
+            "storage_key": storage_key,
+            "pipeline_stage": "finalize",
+        },
+    )
+
+    db.commit()
+    db.refresh(job)
+
+    return {
+        "status": "queued",
+        "job_id": str(job.id),
+        "pipeline_stage": job.pipeline_stage,
+        "artifact_key": storage_key,
     }
 
 
@@ -481,13 +623,22 @@ def job_editorial_context(
     )
     qa_report = artifact_content_service.load_json(job.qa_report_storage_key)
     speaker_turns = artifact_content_service.load_json(job.speaker_turns_storage_key)
+    expected = _expected_artifact_keys(str(job.id))
+    span_catalog = artifact_content_service.load_json(expected["span_catalog"])
+    hook_candidates = artifact_content_service.load_json(expected["hook_candidates"])
+    language_detection = artifact_content_service.load_json(expected["language_detection"])
 
     return {
         "job_id": str(job.id),
         "status": job.status.value,
         "pipeline_stage": job.pipeline_stage,
+        "job_config": _job_config(job),
         "qa_report": qa_report if isinstance(qa_report, dict) else None,
         "transcript_with_speakers": transcript_with_speakers if isinstance(transcript_with_speakers, list) else [],
         "speaker_turns": speaker_turns if isinstance(speaker_turns, list) else [],
+        "span_catalog": span_catalog if isinstance(span_catalog, list) else [],
+        "hook_candidates": hook_candidates if isinstance(hook_candidates, list) else [],
+        "language_detection": language_detection if isinstance(language_detection, dict) else {},
+        "artifact_keys": expected,
         "metadata": job.metadata_json,
     }

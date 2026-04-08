@@ -73,6 +73,15 @@ class PrivateSchedulerService:
             status=JobStatus.QUEUED,
             pipeline_stage="prepare",
             metadata_json={
+                "job_config": {
+                    "clip_mode": profile.clip_mode,
+                    "video_ratio": profile.video_ratio,
+                    "build_ia": False,
+                    "language_mode": "auto",
+                    "output_language": None,
+                    "subtitle_language": None,
+                    "prompt_mode": "manual",
+                },
                 "scheduler": {
                     "profile_id": str(profile.id),
                     "profile_name": profile.name,

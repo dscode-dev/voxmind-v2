@@ -20,6 +20,20 @@ audit_service = AuditService()
 private_scheduler_service = PrivateSchedulerService()
 
 
+def _job_config(job: ClipJob) -> dict:
+    metadata = dict(job.metadata_json or {})
+    config = dict(metadata.get("job_config") or {})
+    return {
+        "clip_mode": str(config.get("clip_mode") or metadata.get("clip_mode") or "short_serie"),
+        "video_ratio": str(config.get("video_ratio") or metadata.get("video_ratio") or "portrait"),
+        "build_ia": bool(config.get("build_ia") if config.get("build_ia") is not None else metadata.get("build_ia", False)),
+        "language_mode": str(config.get("language_mode") or metadata.get("language_mode") or "auto"),
+        "output_language": config.get("output_language") or metadata.get("output_language"),
+        "subtitle_language": config.get("subtitle_language") or metadata.get("subtitle_language"),
+        "prompt_mode": str(config.get("prompt_mode") or job.prompt_mode or "manual"),
+    }
+
+
 @router.post("/internal/worker/next-job")
 def next_job(
     worker_id: str,
@@ -44,7 +58,7 @@ def next_job(
 
     db.add(lease)
 
-    job.status = JobStatus.PREPARING
+    job.status = JobStatus.FINALIZING if job.pipeline_stage == "finalize" else JobStatus.PREPARING
     audit_service.log(
         db,
         action="internal.worker.next_job",
@@ -56,9 +70,12 @@ def next_job(
 
     db.commit()
 
+    config = _job_config(job)
     return {
         "job_id": str(job.id),
         "source_url": job.source_url,
+        "pipeline_stage": job.pipeline_stage,
+        **config,
     }
     
     
