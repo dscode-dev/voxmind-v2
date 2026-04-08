@@ -1,4 +1,7 @@
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -18,6 +21,14 @@ router = APIRouter()
 artifact_sync_service = JobArtifactSyncService()
 audit_service = AuditService()
 private_scheduler_service = PrivateSchedulerService()
+
+
+class RuntimeUpdateInput(BaseModel):
+    pipeline_stage: str
+    step: str
+    status: str
+    details: dict | None = None
+    worker_id: str | None = None
 
 
 def _job_config(job: ClipJob) -> dict:
@@ -151,6 +162,52 @@ def sync_job_artifacts(
     db.commit()
 
     return {"status": "ok", "result": result}
+
+
+@router.post("/internal/jobs/{job_id}/runtime")
+def update_job_runtime(
+    job_id: str,
+    payload: RuntimeUpdateInput,
+    _: None = Depends(require_internal_api_token),
+    db: Session = Depends(get_db),
+):
+    job = db.query(ClipJob).filter(ClipJob.id == job_id).first()
+
+    if not job:
+        return {"status": "ignored"}
+
+    metadata = dict(job.metadata_json or {})
+    metadata["runtime"] = {
+        "pipeline_stage": payload.pipeline_stage,
+        "step": payload.step,
+        "status": payload.status,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "details": payload.details or {},
+    }
+    job.metadata_json = metadata
+    job.pipeline_stage = payload.pipeline_stage
+
+    if payload.pipeline_stage == "prepare":
+        job.status = JobStatus.PREPARING
+    elif payload.pipeline_stage == "finalize":
+        job.status = JobStatus.FINALIZING
+
+    audit_service.log(
+        db,
+        action="internal.worker.update_runtime",
+        outcome="success",
+        target_type="clip_job",
+        target_id=str(job.id),
+        metadata={
+            "pipeline_stage": payload.pipeline_stage,
+            "step": payload.step,
+            "status": payload.status,
+            "worker_id": payload.worker_id,
+        },
+    )
+    db.commit()
+
+    return {"status": "ok"}
 
 
 @router.post("/internal/private-scheduler/claim-due")

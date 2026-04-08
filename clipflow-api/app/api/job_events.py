@@ -79,7 +79,7 @@ async def stream_job_events(
         return StreamingResponse(iter(()), media_type="text/event-stream")
 
     async def event_generator():
-        last_signature: tuple[str | None, str | None, int, str | None] | None = None
+        last_signature: tuple[str | None, str | None, int, str | None, str | None] | None = None
 
         while True:
             if await request.is_disconnected():
@@ -119,13 +119,20 @@ async def stream_job_events(
                     current_job.pipeline_stage,
                     event_count,
                     last_event.event_type.name if last_event else None,
+                    (
+                        ((current_job.metadata_json or {}).get("runtime") or {}).get("updated_at")
+                        if current_job.metadata_json
+                        else None
+                    ),
                 )
 
                 if signature != last_signature:
+                    runtime = ((current_job.metadata_json or {}).get("runtime") or {}) if current_job.metadata_json else {}
                     payload = {
                         "job_id": str(current_job.id),
                         "status": current_job.status.value,
                         "pipeline_stage": current_job.pipeline_stage,
+                        "runtime": runtime,
                         "event_count": event_count,
                         "last_event": {
                             "type": last_event.event_type.name,
