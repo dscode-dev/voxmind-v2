@@ -7,6 +7,7 @@ from redis.exceptions import RedisError
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
 from minio import Minio
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -166,17 +167,26 @@ def _serialize_asset(asset: ClipAsset) -> dict:
     }
 
 
-def _publish_prepare_job(job: ClipJob) -> None:
+def _publish_job(
+    job: ClipJob,
+    *,
+    pipeline_stage: str,
+    manual_response: dict | None = None,
+) -> None:
     payload = {
         "video_url": job.source_url,
         "job_id": str(job.id),
-        "pipeline_stage": job.pipeline_stage,
-        "manual_response": None,
+        "pipeline_stage": pipeline_stage,
+        "manual_response": manual_response,
         "clip_mode": _job_config(job).get("clip_mode", "short_serie"),
         "video_ratio": _job_config(job).get("video_ratio", "portrait"),
         "build_ia": bool(_job_config(job).get("build_ia", False)),
     }
     _worker_queue().lpush(settings.voxmind_redis_queue, json.dumps(payload))
+
+
+def _publish_prepare_job(job: ClipJob) -> None:
+    _publish_job(job, pipeline_stage=job.pipeline_stage, manual_response=None)
 
 
 def _refresh_job_from_artifacts(db: Session, job: ClipJob) -> None:
@@ -451,6 +461,44 @@ def job_assets(
     ]
 
 
+@router.get("/jobs/{job_id}/prompt/download")
+def download_job_prompt(
+    job_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    job = (
+        scope_job_query(db.query(ClipJob), user, ClipJob)
+        .filter(ClipJob.id == job_id)
+        .first()
+    )
+
+    if not job:
+        raise HTTPException(status_code=404)
+
+    _refresh_job_from_artifacts(db, job)
+
+    storage_key = job.prompt_storage_key or _expected_artifact_keys(str(job.id))["prompt"]
+    response = None
+    try:
+        response = artifact_storage_client.get_object(settings.worker_artifacts_bucket, storage_key)
+        content = response.read()
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail="Prompt not available") from exc
+    finally:
+        if response is not None:
+            response.close()
+            response.release_conn()
+
+    return Response(
+        content=content,
+        media_type="text/plain; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="job-{job.id}-prompt.txt"',
+        },
+    )
+
+
 @router.get("/jobs/{job_id}/delivery-package")
 def job_delivery_package(
     job_id: str,
@@ -607,6 +655,33 @@ def submit_ai_response(
 
     db.commit()
     db.refresh(job)
+    try:
+        _publish_job(
+            job,
+            pipeline_stage="finalize",
+            manual_response=payload.response_json,
+        )
+    except RedisError as exc:
+        job.status = JobStatus.FAILED
+        db.add(
+            JobEvent(
+                job_id=job.id,
+                event_type=JobEventType.JOB_FAILED,
+                stage="finalize",
+                message="Falha ao enfileirar finalize manual para o worker",
+                payload_json={
+                    "error": str(exc),
+                    "redis_host": settings.voxmind_redis_host,
+                    "redis_port": settings.voxmind_redis_port,
+                    "redis_queue": settings.voxmind_redis_queue,
+                },
+            )
+        )
+        db.commit()
+        raise HTTPException(
+            status_code=503,
+            detail="Falha ao conectar na fila do worker para o finalize manual.",
+        ) from exc
 
     return {
         "status": "queued",
