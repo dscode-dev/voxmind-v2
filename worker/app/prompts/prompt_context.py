@@ -158,6 +158,51 @@ def build_candidate_context(candidates: List[Dict], max_chars: int) -> str:
     return _serialize_json_items_with_limit(compact_candidates, max_chars)
 
 
+def build_span_catalog_context(spans: List[Dict], max_chars: int) -> str:
+    compact_spans = []
+
+    for span in spans:
+        compact_spans.append(
+            {
+                "span_id": span.get("span_id"),
+                "start": span.get("start"),
+                "end": span.get("end"),
+                "speaker": span.get("speaker"),
+                "clean_start": span.get("clean_start"),
+                "clean_end": span.get("clean_end"),
+                "continuation_dependency": span.get("continuation_dependency"),
+                "closure_score": span.get("closure_score"),
+                "hook_score": span.get("hook_score"),
+                "topic_signature": span.get("topic_signature", []),
+                "text": _truncate_text(str(span.get("text", "")), 120),
+            }
+        )
+
+    return _serialize_json_items_with_limit(compact_spans, max_chars)
+
+
+def build_hook_candidate_context(hook_candidates: List[Dict], max_chars: int) -> str:
+    compact_hooks = []
+
+    for hook in hook_candidates:
+        compact_hooks.append(
+            {
+                "hook_id": hook.get("hook_id"),
+                "span_id": hook.get("span_id"),
+                "start": hook.get("start"),
+                "end": hook.get("end"),
+                "duration": hook.get("duration"),
+                "speaker": hook.get("speaker"),
+                "hook_strength_score": hook.get("hook_strength_score"),
+                "clarity_score": hook.get("clarity_score"),
+                "closure_score": hook.get("closure_score"),
+                "text": _truncate_text(str(hook.get("text", "")), 120),
+            }
+        )
+
+    return _serialize_json_items_with_limit(compact_hooks, max_chars)
+
+
 def build_timeline_context(
     transcript: List[Dict],
     max_chars: int,

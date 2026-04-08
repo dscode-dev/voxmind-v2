@@ -1,6 +1,10 @@
 from typing import Dict, List
 
-from app.prompts.prompt_context import build_transcript_context
+from app.prompts.prompt_context import (
+    build_hook_candidate_context,
+    build_span_catalog_context,
+    build_transcript_context,
+)
 
 
 class ApiPromptBuilder:
@@ -20,6 +24,8 @@ class ApiPromptBuilder:
         self,
         transcript: List[Dict],
         candidates: List[Dict],
+        span_catalog: List[Dict],
+        hook_candidates: List[Dict],
         job_id: str,
         clip_mode: str = "short_serie",
         video_ratio: str = "portrait",
@@ -34,6 +40,23 @@ class ApiPromptBuilder:
             context_padding_sec=48 if clip_mode == "long" else 32,
             min_total_segments=42 if clip_mode == "long" else 28,
         )
+        span_catalog_context = build_span_catalog_context(
+            spans=span_catalog,
+            max_chars=int(self.max_context_chars * 0.08),
+        )
+        hook_candidate_context = build_hook_candidate_context(
+            hook_candidates=hook_candidates,
+            max_chars=int(self.max_context_chars * 0.08),
+        )
+
+        if clip_mode == "long":
+            return self._build_long_prompt(
+                transcript_context=transcript_context,
+                span_catalog_context=span_catalog_context,
+                hook_candidate_context=hook_candidate_context,
+                job_id=job_id,
+                video_ratio=video_ratio,
+            )
 
         return f"""
 JOB CONFIGURATION
@@ -67,6 +90,8 @@ MANDATORY RULES
 - In `short_serie`, prefer 2 connected cuts per final video whenever there is a strong continuation in the material.
 - Use a single cut only when one continuous block already delivers hook, development and closure within the target duration.
 - `post.hook` must be fully contained inside the first selected cut.
+- Prefer selecting the hook with `hook_id` from `HOOK CANDIDATES`.
+- Prefer selecting the cuts with `span_ids` from `SPAN CATALOG`.
 - Also provide `hook_start` and `hook_end` in seconds for the exact location of the hook.
 - Do not describe a hook without giving its exact timing.
 - `hook_start` must mark the real beginning of the hook sentence and `hook_end` the real end of that sentence, without a loose window.
@@ -89,18 +114,31 @@ TRANSCRIPT WITH SPEAKERS
 
 {transcript_context}
 
+SPAN CATALOG
+
+{span_catalog_context}
+
+HOOK CANDIDATES
+
+{hook_candidate_context}
+
 Return ONLY valid JSON in this format:
 
 The structure below is only an example of shape.
 Do not mechanically copy the number of items from the example.
 You must decide how many final videos to return and how many cuts each `shorts_content` needs.
 Use 1 or 2 cuts per final video according to the real narrative need.
+Whenever possible, prefer returning `hook_id` and `span_ids`.
+Use `shorts_content` directly only as a fallback when you need to detail cuts manually.
+If `hook_id` and `span_ids` already define the selection clearly, `shorts_content` may be omitted or returned as an empty list.
 
 {{
   "job_id": "{job_id}",
   "final_videos": [
     {{
       "video_index": 1,
+      "hook_id": "hook_0001",
+      "span_ids": ["span_0003", "span_0004"],
       "title": "main final video title",
       "hook": "main hook used in the opening of this final video",
       "hook_source_cut_index": 0,
@@ -131,7 +169,10 @@ Use 1 or 2 cuts per final video according to the real narrative need.
 
 Use the transcript as the main context and choose the sequence that best closes the narrative.
 Return `final_videos` with up to 3 separate final videos.
-Each `final_videos[i]` must directly include `title`, `hook`, `hook_start`, `hook_end`, `description`, `hashtags`, `thumbnail`, `soundtrack_suggestion`, `speaker_focus` and `shorts_content`.
+Each `final_videos[i]` must directly include `title`, `hook_id`, `span_ids`, `hook`, `hook_start`, `hook_end`, `description`, `hashtags`, `thumbnail`, `soundtrack_suggestion`, `speaker_focus` and `shorts_content`.
+Prefer `hook_id` and `span_ids` as the main structured selection fields.
+Use `shorts_content` as a complement or fallback when you need to detail cuts manually.
+If `hook_id` and `span_ids` already define the selection clearly, `shorts_content` may be omitted or returned as an empty list.
 Each `final_videos[i]` should preferably contain 2 connected cuts in `shorts_content` when strong continuation exists.
 Use a single cut only when one block alone already delivers hook, development and closure within the target duration.
 Do not mechanically replicate the number of items shown in the JSON example.
@@ -145,6 +186,115 @@ If any `final_video` exceeds 120 seconds, shorten the last cut of that video bef
 `final_videos[i].hook_source_cut_index` must point to the cut index inside `final_videos[i].shorts_content` that fully contains the main hook.
 `final_videos[i].shorts_content[0]` must fully contain the main hook for that final video.
 If there is only enough strong material for 1 or 2 good final videos, return only 1 or 2.
+"""
+
+    def _build_long_prompt(
+        self,
+        *,
+        transcript_context: str,
+        span_catalog_context: str,
+        hook_candidate_context: str,
+        job_id: str,
+        video_ratio: str,
+    ) -> str:
+        return f"""
+JOB CONFIGURATION
+
+job_id: {job_id}
+clip_mode: long
+video_ratio: {video_ratio}
+
+TASK
+
+Select the best long-form narrative excerpts from the transcript.
+Treat this as normal-video excerpt editing, not short-form editing.
+Return ONLY valid JSON.
+Do not place unescaped double quotes inside string values.
+
+MANDATORY RULES
+
+- Produce at most 2 final videos.
+- Prefer 1 very strong final video over 2 mediocre ones.
+- Each final video must feel like a robust excerpt from a normal video.
+- Preserve more setup, development and closure than a short-form output.
+- Prefer 2 or 3 connected cuts when that improves context and ending.
+- Use a single cut only when one block alone already delivers enough context and a proper conclusion.
+- Never start in the middle of a sentence.
+- Never end before the subject is properly closed.
+- Preserve chronology and continuity between cuts.
+- Avoid abrupt topic jumps.
+- Avoid over-compressing the material into a shorts-like structure.
+- `post.hook` must be fully contained inside the first selected cut.
+- Prefer selecting the hook with `hook_id` from `HOOK CANDIDATES`.
+- Prefer selecting the cuts with `span_ids` from `SPAN CATALOG`.
+- Also provide `hook_start` and `hook_end` in seconds for the exact location of the hook.
+- `hook_start` must mark the first real word of the hook and `hook_end` the last real word of the hook.
+- The final cut must close the narrative clearly.
+
+TRANSCRIPT WITH SPEAKERS
+
+{transcript_context}
+
+SPAN CATALOG
+
+{span_catalog_context}
+
+HOOK CANDIDATES
+
+{hook_candidate_context}
+
+Return ONLY valid JSON in this format:
+
+The structure below is only an example.
+Do not mechanically copy the number of items from the example.
+Whenever possible, prefer returning `hook_id` and `span_ids`.
+Use `shorts_content` directly only as a fallback when you need to detail cuts manually.
+If `hook_id` and `span_ids` already define the selection clearly, `shorts_content` may be omitted or returned as an empty list.
+
+{{
+  "job_id": "{job_id}",
+  "final_videos": [
+    {{
+      "video_index": 1,
+      "hook_id": "hook_0001",
+      "span_ids": ["span_0005", "span_0006", "span_0007"],
+      "title": "main final video title",
+      "hook": "main hook used in the opening of this final video",
+      "hook_source_cut_index": 0,
+      "hook_start": 10.5,
+      "hook_end": 18.0,
+      "description": "final posting description",
+      "hashtags": ["#tag1", "#tag2"],
+      "thumbnail": "thumbnail idea",
+      "soundtrack_suggestion": "political_tension | mystery_tension | finance_tension | generic",
+      "speaker_focus": "SPEAKER_01 | SPEAKER_02 | null",
+      "shorts_content": [
+        {{
+          "start": 10.5,
+          "end": 58.0,
+          "safe_start": 10.5,
+          "safe_end": 58.0,
+          "reason": "why this excerpt opens the subject with enough context",
+          "narrative_role": "hook | setup | development | payoff",
+          "merge_group": "story_1",
+          "continuity_note": "how this cut prepares the next one",
+          "speaker_focus": "SPEAKER_01 | SPEAKER_02 | null",
+          "transition_after": "hard_cut | punch_in | whoosh | fade | none"
+        }}
+      ]
+    }}
+  ]
+}}
+
+Return `final_videos` with at most 2 separate final videos.
+Each `final_videos[i]` must directly include `title`, `hook_id`, `span_ids`, `hook`, `hook_start`, `hook_end`, `description`, `hashtags`, `thumbnail`, `soundtrack_suggestion`, `speaker_focus` and `shorts_content`.
+Prefer `hook_id` and `span_ids` as the main structured selection fields.
+Use `shorts_content` as a complement or fallback when you need to detail cuts manually.
+If `hook_id` and `span_ids` already define the selection clearly, `shorts_content` may be omitted or returned as an empty list.
+Prefer final videos around 100 to 120 seconds when the material supports it.
+Validate the total duration of each `final_video` before responding: it must stay between {self.render_min_long_video_duration_sec} and 120 seconds.
+If any `final_video` exceeds 120 seconds, shorten the last cut of that video before responding.
+If there is only enough strong material for 1 good final video, return only 1.
 """
 
     def _build_mode_instructions(self, clip_mode: str) -> str:

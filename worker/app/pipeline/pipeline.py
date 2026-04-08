@@ -18,6 +18,7 @@ from app.pipeline.candidate_builder import CandidateBuilder
 from app.pipeline.delivery_package_builder import DeliveryPackageBuilder
 from app.pipeline.publish_package_builder import PublishPackageBuilder
 from app.pipeline.soundtrack_selector import SoundtrackSelector
+from app.pipeline.span_catalog_builder import SpanCatalogBuilder
 from app.pipeline.subtitle_builder import SubtitleBuilder
 from app.pipeline.scorer import Scorer
 from app.prompts.manual_prompt_builder import ManualPromptBuilder
@@ -103,6 +104,7 @@ class Pipeline:
         self.delivery_package_builder = DeliveryPackageBuilder()
         self.publish_package_builder = PublishPackageBuilder()
         self.soundtrack_selector = SoundtrackSelector()
+        self.span_catalog_builder = SpanCatalogBuilder()
         self.subtitle_builder = SubtitleBuilder(
             playback_speed=settings.render_playback_speed,
         )
@@ -421,13 +423,29 @@ ERROR:
         ranked = self.scorer.score(combined_candidates)
         self._mark_step("candidate_score", "completed", ranked_count=len(ranked))
 
+        self._log("🧩 Building span catalog...")
+        self._mark_step("span_catalog", "started")
+        span_catalog = self.span_catalog_builder.build(
+            segments,
+            source_language=str(self.language_metadata.get("source_language") or ""),
+        )
+        hook_candidates = self.span_catalog_builder.build_hook_candidates(span_catalog)
+        self._mark_step(
+            "span_catalog",
+            "completed",
+            span_count=len(span_catalog),
+            hook_candidate_count=len(hook_candidates),
+        )
+
         self._log("📝 Building LLM prompt...")
         self._mark_step("prompt_build", "started")
 
         prompt = self.prompt_builder.build(
-            segments,
-            ranked,
-            self.job_id,
+            transcript=segments,
+            candidates=ranked,
+            span_catalog=span_catalog,
+            hook_candidates=hook_candidates,
+            job_id=self.job_id,
             clip_mode=self.clip_mode,
             video_ratio=self.video_ratio,
             content_language=str(self.language_metadata.get("output_language") or self.language_metadata.get("source_language") or "pt"),
@@ -448,6 +466,16 @@ ERROR:
             "candidates.json",
             ranked,
             "candidates",
+        )
+        span_catalog_path = self._write_json_artifact(
+            "span_catalog.json",
+            span_catalog,
+            "span_catalog",
+        )
+        hook_candidates_path = self._write_json_artifact(
+            "hook_candidates.json",
+            hook_candidates,
+            "hook_candidates",
         )
         language_detection_path = self._write_json_artifact(
             "language_detection.json",
@@ -503,6 +531,8 @@ para continuar o processamento.
             "transcript_path": str(transcript_path),
             "transcript_with_speakers_path": str(transcript_with_speakers_path),
             "candidates_path": str(candidates_path),
+            "span_catalog_path": str(span_catalog_path),
+            "hook_candidates_path": str(hook_candidates_path),
             "language_detection_path": str(language_detection_path),
             "prompt_path": str(prompt_path),
             "runtime_status_path": str(self.runtime.runtime_path),
@@ -666,6 +696,18 @@ para continuar o processamento.
         except Exception:
             raise RuntimeError("Invalid JSON received from AI")
 
+        transcript_segments = self._load_finalize_transcript()
+        span_catalog = self.span_catalog_builder.build(
+            transcript_segments,
+            source_language=str(self.language_metadata.get("source_language") or ""),
+        )
+        hook_candidates = self.span_catalog_builder.build_hook_candidates(span_catalog)
+
+        self.manual_response = self._expand_response_from_span_ids(
+            self.manual_response,
+            span_catalog=span_catalog,
+            hook_candidates=hook_candidates,
+        )
         self.manual_response = self._normalize_response_schema(self.manual_response)
 
         if "shorts_content" not in self.manual_response:
@@ -697,7 +739,6 @@ para continuar o processamento.
             raise RuntimeError("Video not found in storage")
         self._mark_step("download_video", "completed", video_path=str(video_path))
 
-        transcript_segments = self._load_finalize_transcript()
         cuts = self.manual_response.get("shorts_content", [])
 
         if not cuts:
@@ -874,8 +915,12 @@ para continuar o processamento.
                 continue
 
             cuts = video.get("shorts_content") or []
-            if not isinstance(cuts, list) or not cuts:
+            has_structured_selection = bool(video.get("span_ids"))
+            if (not isinstance(cuts, list) or not cuts) and not has_structured_selection:
                 continue
+
+            if not isinstance(cuts, list):
+                cuts = []
 
             post = self._normalize_post_payload(self._extract_video_post_payload(video), cuts)
             video_index = int(video.get("video_index") or index)
@@ -907,10 +952,174 @@ para continuar o processamento.
 
         return normalized
 
+    def _expand_response_from_span_ids(
+        self,
+        payload: dict,
+        *,
+        span_catalog: list[dict],
+        hook_candidates: list[dict],
+    ) -> dict:
+        normalized = dict(payload or {})
+        final_videos = normalized.get("final_videos")
+        if not isinstance(final_videos, list) or not final_videos:
+            return normalized
+
+        spans_by_id = {
+            str(span.get("span_id")): span
+            for span in span_catalog
+            if span.get("span_id")
+        }
+        hooks_by_id = {
+            str(hook.get("hook_id")): hook
+            for hook in hook_candidates
+            if hook.get("hook_id")
+        }
+
+        normalized_videos: list[dict] = []
+        flattened_cuts: list[dict] = []
+
+        for index, video in enumerate(final_videos, start=1):
+            if not isinstance(video, dict):
+                continue
+
+            expanded_video = dict(video)
+            cuts = list(expanded_video.get("shorts_content") or [])
+            if not cuts:
+                cuts = self._cuts_from_span_ids(
+                    expanded_video.get("span_ids") or [],
+                    spans_by_id,
+                    merge_group=f"story_{index}",
+                )
+                if cuts:
+                    expanded_video["shorts_content"] = cuts
+
+            if not cuts:
+                continue
+
+            hook_id = str(expanded_video.get("hook_id") or "").strip()
+            hook_payload = hooks_by_id.get(hook_id) if hook_id else None
+            if hook_payload:
+                expanded_video.setdefault("hook", hook_payload.get("text"))
+                expanded_video.setdefault("hook_start", hook_payload.get("start"))
+                expanded_video.setdefault("hook_end", hook_payload.get("end"))
+                expanded_video.setdefault(
+                    "hook_source_cut_index",
+                    self._infer_hook_source_cut_index(
+                        cuts,
+                        str(hook_payload.get("span_id") or "").strip(),
+                    ),
+                )
+
+            post = self._normalize_post_payload(self._extract_video_post_payload(expanded_video), cuts)
+            if hook_payload:
+                post.setdefault("hook", hook_payload.get("text"))
+                post.setdefault("hook_start", hook_payload.get("start"))
+                post.setdefault("hook_end", hook_payload.get("end"))
+                post.setdefault(
+                    "hook_source_cut_index",
+                    self._infer_hook_source_cut_index(
+                        cuts,
+                        str(hook_payload.get("span_id") or "").strip(),
+                    ),
+                )
+                post.setdefault("speaker_focus", hook_payload.get("speaker"))
+
+            video_index = int(expanded_video.get("video_index") or index)
+            expanded_video["video_index"] = video_index
+            expanded_video["post"] = post
+            expanded_video["shorts_content"] = cuts
+            normalized_videos.append(expanded_video)
+
+            for cut in cuts:
+                if not isinstance(cut, dict):
+                    continue
+                flattened_cuts.append(
+                    {
+                        **cut,
+                        "_post": post,
+                        "_video_index": video_index,
+                    }
+                )
+
+        if flattened_cuts:
+            normalized["shorts_content"] = flattened_cuts
+        if normalized_videos:
+            normalized["final_videos"] = normalized_videos
+            normalized["post"] = normalized_videos[0].get("post", {})
+        return normalized
+
+    def _cuts_from_span_ids(
+        self,
+        span_ids: list,
+        spans_by_id: dict[str, dict],
+        *,
+        merge_group: str,
+    ) -> list[dict]:
+        cuts: list[dict] = []
+        total = len(span_ids)
+        for index, span_id in enumerate(span_ids):
+            key = str(span_id or "").strip()
+            if not key:
+                continue
+            span = spans_by_id.get(key)
+            if not span:
+                continue
+            start = float(span.get("start", 0.0))
+            end = float(span.get("end", 0.0))
+            if end <= start:
+                continue
+            if total <= 1:
+                narrative_role = "hook"
+            elif total == 2:
+                narrative_role = "hook" if index == 0 else "payoff"
+            elif index == 0:
+                narrative_role = "hook"
+            elif index == total - 1:
+                narrative_role = "payoff"
+            elif index == 1:
+                narrative_role = "setup"
+            else:
+                narrative_role = "development"
+            cuts.append(
+                {
+                    "span_id": key,
+                    "start": round(start, 2),
+                    "end": round(end, 2),
+                    "safe_start": round(start, 2),
+                    "safe_end": round(end, 2),
+                    "reason": str(span.get("text") or "selected from structured span catalog")[:180],
+                    "narrative_role": narrative_role,
+                    "merge_group": merge_group,
+                    "continuity_note": (
+                        "opens the selected narrative from structured spans"
+                        if index == 0
+                        else (
+                            "closes the selected narrative from structured spans"
+                            if index == total - 1
+                            else "continues the selected narrative from structured spans"
+                        )
+                    ),
+                    "speaker_focus": span.get("speaker"),
+                    "transition_after": "none" if index == total - 1 else "fade",
+                }
+            )
+        return cuts
+
+    def _infer_hook_source_cut_index(self, cuts: list[dict], hook_span_id: str) -> int:
+        if not cuts:
+            return 0
+        if not hook_span_id:
+            return 0
+        for index, cut in enumerate(cuts):
+            if str(cut.get("span_id") or "").strip() == hook_span_id:
+                return index
+        return 0
+
     def _extract_video_post_payload(self, video_payload: dict | None) -> dict:
         payload = dict((video_payload or {}).get("post") or {})
         source = video_payload or {}
         direct_fields = {
+            "hook_id": source.get("hook_id"),
             "title": source.get("title"),
             "hook": source.get("hook"),
             "hook_source_cut_index": source.get("hook_source_cut_index"),

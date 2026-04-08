@@ -68,6 +68,8 @@ class PreparePipeline:
         logger.info("Ranking candidates")
 
         candidates = self.ranker.rank(transcript)
+        span_catalog = []
+        hook_candidates = []
 
         candidates_path = f"{workdir}/candidates.json"
 
@@ -86,6 +88,8 @@ class PreparePipeline:
             api_prompt = self.api_prompt_builder.build(
                 transcript=transcript,
                 candidates=candidates,
+                span_catalog=span_catalog,
+                hook_candidates=hook_candidates,
                 job_id=job_id,
                 clip_mode=clip_mode,
                 video_ratio=video_ratio,
@@ -123,6 +127,8 @@ class PreparePipeline:
         prompt = self.prompt_builder.build(
             transcript=transcript,
             candidates=candidates,
+            span_catalog=span_catalog,
+            hook_candidates=hook_candidates,
             job_id=job_id,
             clip_mode=clip_mode,
             video_ratio=video_ratio,

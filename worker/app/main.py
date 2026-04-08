@@ -141,6 +141,8 @@ def run_pipeline(job: dict):
             transcript_path = result.get("transcript_path")
             transcript_with_speakers_path = result.get("transcript_with_speakers_path")
             candidates_path = result.get("candidates_path")
+            span_catalog_path = result.get("span_catalog_path")
+            hook_candidates_path = result.get("hook_candidates_path")
             language_detection_path = result.get("language_detection_path")
             prompt_path = result.get("prompt_path")
             runtime_status_path = result.get("runtime_status_path")
@@ -172,6 +174,22 @@ def run_pipeline(job: dict):
                     pipeline_stage,
                     f"jobs/{job_id}/candidates.json",
                     candidates_path,
+                )
+
+            if _upload_if_exists(storage, span_catalog_path, f"jobs/{job_id}/span_catalog.json"):
+                pipeline.artifacts.mark_remote(
+                    "span_catalog",
+                    pipeline_stage,
+                    f"jobs/{job_id}/span_catalog.json",
+                    span_catalog_path,
+                )
+
+            if _upload_if_exists(storage, hook_candidates_path, f"jobs/{job_id}/hook_candidates.json"):
+                pipeline.artifacts.mark_remote(
+                    "hook_candidates",
+                    pipeline_stage,
+                    f"jobs/{job_id}/hook_candidates.json",
+                    hook_candidates_path,
                 )
 
             if _upload_if_exists(storage, language_detection_path, f"jobs/{job_id}/language_detection.json"):

@@ -646,61 +646,12 @@ class FinalVideoRenderer:
             stderr=subprocess.DEVNULL,
         )
 
-        if source_idx != 0:
-            prepared_files = [teaser_path, *prepared_files]
-            prepared_durations = [actual_duration, *prepared_durations]
-            transition_plans = [
-                {
-                    "transition_after": str(cold_open.get("transition_after") or "fade"),
-                    "transition_duration_ms": int(cold_open.get("transition_duration_ms") or 180),
-                },
-                *transition_plans,
-            ]
-            return prepared_files, prepared_durations, transition_plans, True
-
-        intro_main_path = self.render_dir / "prepared_01_intro_main.mp4"
-        intro_resume_sec = min(
-            source_duration,
-            prepared_relative_start_sec + actual_duration,
-        )
-        intro_main_command = [
-            "ffmpeg",
-            "-y",
-            "-i",
-            str(prepared_files[source_idx]),
-            "-ss",
-            str(intro_resume_sec),
-            "-vf",
-            "fps=30,format=yuv420p,setsar=1,setpts=PTS-STARTPTS",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "fast",
-            "-crf",
-            "22",
-            "-pix_fmt",
-            "yuv420p",
-            "-af",
-            "aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS",
-            "-c:a",
-            "aac",
-            "-ar",
-            "48000",
-            "-movflags",
-            "+faststart",
-            str(intro_main_path),
-        ]
-        subprocess.run(
-            intro_main_command,
-            check=True,
-            cwd=str(self.render_dir),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-
-        resumed_duration = max(0.0, source_duration - intro_resume_sec)
-        prepared_files = [teaser_path, intro_main_path, *prepared_files[1:]]
-        prepared_durations = [actual_duration, resumed_duration, *prepared_durations[1:]]
+        # In V3 assembly the hook is an independent opening asset.
+        # After the hook, the original cut sequence must play from its
+        # original selected boundaries, even if that naturally repeats
+        # the same spoken phrase again.
+        prepared_files = [teaser_path, *prepared_files]
+        prepared_durations = [actual_duration, *prepared_durations]
         transition_plans = [
             {
                 "transition_after": str(cold_open.get("transition_after") or "fade"),

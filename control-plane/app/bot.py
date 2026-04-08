@@ -182,8 +182,12 @@ Exemplo:
     def _validate_final_videos(self, final_videos: list[dict]) -> None:
         for video_index, video in enumerate(final_videos, start=1):
             cuts = video.get("shorts_content") or []
+            span_ids = video.get("span_ids") or []
+            has_structured_selection = isinstance(span_ids, list) and bool(span_ids)
+            if (not isinstance(cuts, list) or not cuts) and not has_structured_selection:
+                raise RuntimeError(f"Video {video_index} must contain at least one cut or span_ids")
             if not isinstance(cuts, list) or not cuts:
-                raise RuntimeError(f"Video {video_index} must contain at least one cut")
+                continue
 
             total_duration = 0.0
             for cut_index, cut in enumerate(cuts, start=1):
@@ -228,8 +232,12 @@ Exemplo:
                 continue
 
             cuts = video.get("shorts_content") or []
-            if not isinstance(cuts, list) or not cuts:
+            span_ids = video.get("span_ids") or []
+            has_structured_selection = isinstance(span_ids, list) and bool(span_ids)
+            if (not isinstance(cuts, list) or not cuts) and not has_structured_selection:
                 continue
+            if not isinstance(cuts, list):
+                cuts = []
 
             post = self._extract_video_post_payload(video)
             video_index = int(video.get("video_index") or index)
@@ -253,8 +261,6 @@ Exemplo:
                     }
                 )
 
-        if flattened_cuts:
-            normalized["shorts_content"] = flattened_cuts
         if normalized_videos:
             normalized_videos = self._cap_final_videos_total_duration(normalized_videos)
             normalized["final_videos"] = normalized_videos
@@ -276,6 +282,8 @@ Exemplo:
                     )
             if flattened_cuts:
                 normalized["shorts_content"] = flattened_cuts
+        elif flattened_cuts:
+            normalized["shorts_content"] = flattened_cuts
 
         return normalized
 
@@ -286,6 +294,9 @@ Exemplo:
 
         for video in final_videos:
             cuts = [dict(cut) for cut in (video.get("shorts_content") or []) if isinstance(cut, dict)]
+            if not cuts:
+                normalized_videos.append(dict(video))
+                continue
             total_duration = sum(
                 max(0.0, float(cut.get("end", 0.0)) - float(cut.get("start", 0.0)))
                 for cut in cuts

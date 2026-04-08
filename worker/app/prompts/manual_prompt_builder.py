@@ -1,6 +1,10 @@
 from typing import Dict, List
 
-from app.prompts.prompt_context import build_transcript_context
+from app.prompts.prompt_context import (
+    build_hook_candidate_context,
+    build_span_catalog_context,
+    build_transcript_context,
+)
 
 
 class ManualPromptBuilder:
@@ -25,6 +29,8 @@ class ManualPromptBuilder:
         self,
         transcript: List[Dict],
         candidates: List[Dict],
+        span_catalog: List[Dict],
+        hook_candidates: List[Dict],
         job_id: str,
         clip_mode: str = "short_serie",
         video_ratio: str = "portrait",
@@ -48,10 +54,39 @@ class ManualPromptBuilder:
             context_padding_sec=48 if clip_mode == "long" else 32,
             min_total_segments=42 if clip_mode == "long" else 28,
         )
+        span_catalog_context = build_span_catalog_context(
+            spans=span_catalog,
+            max_chars=int(self.max_context_chars * 0.08),
+        )
+        hook_candidate_context = build_hook_candidate_context(
+            hook_candidates=hook_candidates,
+            max_chars=int(self.max_context_chars * 0.08),
+        )
+
+        if clip_mode == "long":
+            if content_language.startswith("en"):
+                return self._build_long_prompt_en(
+                    transcript_context=transcript_context,
+                    span_catalog_context=span_catalog_context,
+                    hook_candidate_context=hook_candidate_context,
+                    job_id=job_id,
+                    video_ratio=video_ratio,
+                    has_named_speakers=has_named_speakers,
+                )
+            return self._build_long_prompt_pt(
+                transcript_context=transcript_context,
+                span_catalog_context=span_catalog_context,
+                hook_candidate_context=hook_candidate_context,
+                job_id=job_id,
+                video_ratio=video_ratio,
+                has_named_speakers=has_named_speakers,
+            )
 
         if content_language.startswith("en"):
             return self._build_english_prompt(
                 transcript_context=transcript_context,
+                span_catalog_context=span_catalog_context,
+                hook_candidate_context=hook_candidate_context,
                 job_id=job_id,
                 clip_mode=clip_mode,
                 video_ratio=video_ratio,
@@ -109,6 +144,8 @@ REGRAS EDITORIAIS
 - Só use 1 corte único quando um bloco sozinho já entregar hook, desenvolvimento e fechamento dentro da duração ideal.
 - O hook deve ser uma frase falada forte, completa e reconhecível.
 - O `post.hook` deve estar totalmente dentro do primeiro corte.
+- Prefira selecionar o hook com `hook_id` a partir de `HOOK CANDIDATES`.
+- Prefira selecionar os cortes com `span_ids` a partir de `CATÁLOGO DE SPANS`.
 - Informe também `hook_start` e `hook_end` com a minutagem exata, em segundos, onde esse hook aparece.
 - Não descreva um hook sem informar a minutagem exata dele.
 - `hook_start` deve marcar o começo real da frase do hook e `hook_end` o fim real dessa frase, sem janela folgada.
@@ -123,12 +160,17 @@ OUTPUT JSON
 A estrutura abaixo é apenas um exemplo de formato.
 Não copie a quantidade de itens do exemplo por padrão.
 Você deve decidir quantos vídeos finais retornar e quantos cortes usar em cada `shorts_content`, de acordo com o material.
+Sempre que possível, prefira retornar `hook_id` e `span_ids`.
+Use `shorts_content` diretamente apenas como fallback quando precisar detalhar manualmente os cortes.
+Se `hook_id` e `span_ids` já definirem claramente a seleção, `shorts_content` pode ser omitido ou vir como lista vazia.
 
 {{
   "job_id": "{job_id}",
   "final_videos": [
     {{
       "video_index": 1,
+      "hook_id": "hook_0001",
+      "span_ids": ["span_0003", "span_0004"],
       "title": "título principal do vídeo final 1",
       "hook": "gancho principal do vídeo final 1",
       "hook_source_cut_index": 0,
@@ -163,12 +205,23 @@ TRANSCRIPT RELEVANTE COM SPEAKERS
 
 {transcript_context}
 
+CATÁLOGO DE SPANS
+
+{span_catalog_context}
+
+HOOK CANDIDATES
+
+{hook_candidate_context}
+
 INSTRUÇÃO FINAL
 
 Retorne apenas o JSON final.
 Retorne `final_videos` com até 3 vídeos finais bem conectados e prontos para montagem.
 Cada item de `final_videos` deve trazer diretamente:
-`title`, `hook`, `hook_start`, `hook_end`, `description`, `hashtags`, `thumbnail`, `soundtrack_suggestion`, `speaker_focus` e `shorts_content`.
+`title`, `hook_id`, `span_ids`, `hook`, `hook_start`, `hook_end`, `description`, `hashtags`, `thumbnail`, `soundtrack_suggestion`, `speaker_focus` e `shorts_content`.
+Prefira `hook_id` e `span_ids` como forma principal de seleção.
+Use `shorts_content` como complemento ou fallback quando precisar detalhar manualmente os cortes.
+Se `hook_id` e `span_ids` já definirem claramente a seleção, `shorts_content` pode ser omitido ou vir como lista vazia.
 Cada item de `final_videos` deve ter preferencialmente 2 cortes conectados em `shorts_content` quando houver continuação forte.
 Use uma parte em segundos dos cortes escolhidos para servir de hook na tentativa de chamar a atenção do usuário nos primeiros segundos
 Valide a duração total de cada `final_video` antes de responder: o total precisa ficar entre {self._response_min_total_duration(clip_mode)} e 120 segundos.
@@ -181,10 +234,283 @@ Se não houver material forte para 3 vídeos bons, retorne apenas 1 ou 2.
 Se algum campo não se aplicar, retorne null, string vazia ou lista vazia.
 """
 
+    def _build_long_prompt_pt(
+        self,
+        *,
+        transcript_context: str,
+        span_catalog_context: str,
+        hook_candidate_context: str,
+        job_id: str,
+        video_ratio: str,
+        has_named_speakers: bool,
+    ) -> str:
+        return f"""
+JOB_ID: {job_id}
+
+Você é um editor sênior de vídeos longos.
+Sua tarefa é escolher trechos que funcionem como cortes fortes de um vídeo normal, preservando mais contexto, mais desenvolvimento e mais fechamento do que um short.
+Não trate este material como short viral.
+
+RETORNO
+
+- Retorne apenas JSON válido.
+- Não use markdown.
+- Não escreva texto fora do JSON.
+- Não use aspas duplas dentro de valores de string, a menos que estejam escapadas.
+
+CONFIGURAÇÃO
+
+job_id: {job_id}
+clip_mode: long
+video_ratio: {video_ratio}
+
+OBJETIVO EDITORIAL
+
+- Gere no máximo 2 vídeos finais.
+- Prefira 1 vídeo muito forte a 2 vídeos medianos.
+- Cada vídeo final deve soar como um trecho robusto de vídeo normal.
+- Preserve mais contexto antes e depois da tese principal.
+- Prefira 2 ou 3 cortes conectados quando isso melhorar a compreensão e o fechamento.
+- Só use 1 corte único quando ele sozinho já entregar abertura, desenvolvimento e conclusão com contexto suficiente.
+
+REGRAS DE DURAÇÃO
+
+- Cada vídeo final deve ter no mínimo {self.render_min_long_video_duration_sec} segundos.
+- Prefira vídeos finais entre 100 e {self.qa_max_clip_duration_sec} segundos.
+- Nunca exceda {self.qa_max_clip_duration_sec} segundos.
+- Não compacte demais o material só para deixá-lo com cara de short.
+
+REGRAS EDITORIAIS
+
+- Nunca comece no meio de frase.
+- Nunca termine no meio do assunto.
+- Preserve ordem cronológica.
+- Preserve contexto suficiente para a fala fazer sentido sozinha.
+- Prefira trechos que incluam setup, desenvolvimento e fechamento.
+- Evite cortes com saltos bruscos de assunto.
+- Evite vídeos redundantes entre si.
+- O hook continua obrigatório, mas ele deve abrir um corte de vídeo normal, não um short agressivamente comprimido.
+- O hook deve estar totalmente dentro do primeiro corte.
+- Prefira selecionar o hook com `hook_id` a partir de `HOOK CANDIDATES`.
+- Prefira selecionar os blocos com `span_ids` a partir de `CATÁLOGO DE SPANS`.
+- Informe `hook_start` e `hook_end` com a minutagem exata do hook.
+- `hook_start` deve marcar a primeira palavra real do hook e `hook_end` a última palavra real.
+- O último corte deve fechar a ideia com conclusão verbal clara, payoff ou resposta.
+
+{self._build_speaker_guidance(has_named_speakers)}
+
+OUTPUT JSON
+
+O formato abaixo é apenas um exemplo.
+Você deve decidir quantos vídeos retornar e quantos cortes cada vídeo precisa.
+Sempre que possível, prefira retornar `hook_id` e `span_ids`.
+Use `shorts_content` diretamente apenas como fallback quando precisar detalhar manualmente os cortes.
+Se `hook_id` e `span_ids` já definirem claramente a seleção, `shorts_content` pode ser omitido ou vir como lista vazia.
+
+{{
+  "job_id": "{job_id}",
+  "final_videos": [
+    {{
+      "video_index": 1,
+      "hook_id": "hook_0001",
+      "span_ids": ["span_0005", "span_0006", "span_0007"],
+      "title": "título do vídeo",
+      "hook": "gancho do vídeo",
+      "hook_source_cut_index": 0,
+      "hook_start": 10.5,
+      "hook_end": 17.8,
+      "description": "descrição final para postagem",
+      "hashtags": ["#tag1", "#tag2"],
+      "thumbnail": "ideia de thumbnail",
+      "soundtrack_suggestion": "political_tension | mystery_tension | finance_tension | generic",
+      "speaker_focus": "SPEAKER_01 | SPEAKER_02 | null",
+      "shorts_content": [
+        {{
+          "start": 10.5,
+          "end": 58.0,
+          "safe_start": 10.5,
+          "safe_end": 58.0,
+          "reason": "por que este trecho abre o assunto com contexto suficiente",
+          "narrative_role": "hook | setup | development | payoff",
+          "merge_group": "story_1",
+          "continuity_note": "como este corte prepara o próximo",
+          "speaker_focus": "SPEAKER_01 | SPEAKER_02 | null",
+          "transition_after": "hard_cut | punch_in | whoosh | fade | none"
+        }}
+      ]
+    }}
+  ]
+}}
+
+CONTEXTO PRINCIPAL
+
+TRANSCRIPT RELEVANTE COM SPEAKERS
+
+{transcript_context}
+
+CATÁLOGO DE SPANS
+
+{span_catalog_context}
+
+HOOK CANDIDATES
+
+{hook_candidate_context}
+
+INSTRUÇÃO FINAL
+
+Retorne apenas o JSON final.
+Retorne `final_videos` com no máximo 2 vídeos finais.
+Cada item de `final_videos` deve trazer diretamente:
+`title`, `hook_id`, `span_ids`, `hook`, `hook_start`, `hook_end`, `description`, `hashtags`, `thumbnail`, `soundtrack_suggestion`, `speaker_focus` e `shorts_content`.
+Prefira `hook_id` e `span_ids` como forma principal de seleção.
+Use `shorts_content` como complemento ou fallback quando precisar detalhar manualmente os cortes.
+Se `hook_id` e `span_ids` já definirem claramente a seleção, `shorts_content` pode ser omitido ou vir como lista vazia.
+Valide a duração total de cada `final_video` antes de responder: o total precisa ficar entre {self.render_min_long_video_duration_sec} e {self.qa_max_clip_duration_sec} segundos.
+Se não houver material forte para 2 vídeos bons, retorne apenas 1.
+"""
+
+    def _build_long_prompt_en(
+        self,
+        *,
+        transcript_context: str,
+        span_catalog_context: str,
+        hook_candidate_context: str,
+        job_id: str,
+        video_ratio: str,
+        has_named_speakers: bool,
+    ) -> str:
+        return f"""
+JOB_ID: {job_id}
+
+You are a senior long-form video editor.
+Your task is to choose excerpts that work as strong cuts from a normal video, preserving more context, development and closure than a short-form clip.
+Do not treat this as a shorts prompt.
+
+RETURN FORMAT
+
+- Return valid JSON only.
+- Do not use markdown.
+- Do not write any text outside the JSON.
+- Do not use unescaped double quotes inside string values.
+
+CONFIGURATION
+
+job_id: {job_id}
+clip_mode: long
+video_ratio: {video_ratio}
+content_language: en
+output_language: en
+subtitle_language: en
+
+EDITORIAL GOAL
+
+- Produce at most 2 final videos.
+- Prefer 1 very strong final video over 2 mediocre ones.
+- Each final video should feel like a robust excerpt from a normal video.
+- Preserve enough setup, development and closure.
+- Prefer 2 or 3 connected cuts when that improves clarity and ending.
+- Use a single cut only when one block already carries enough context and conclusion.
+
+DURATION RULES
+
+- Each final video must be at least {self.render_min_long_video_duration_sec} seconds.
+- Prefer final videos between 100 and {self.qa_max_clip_duration_sec} seconds.
+- Never exceed {self.qa_max_clip_duration_sec} seconds.
+- Do not over-compress the material to make it feel like a short.
+
+EDITORIAL RULES
+
+- Never start in the middle of a sentence.
+- Never end in the middle of the subject.
+- Preserve chronology.
+- Preserve enough context so the clip makes sense on its own.
+- Prefer excerpts that include setup, development and closure.
+- Avoid abrupt topic jumps.
+- Avoid redundant final videos.
+- The hook is still mandatory, but it should open a normal-video excerpt, not a hyper-compressed short.
+- The hook must be fully contained inside the first cut.
+- Prefer selecting the hook with `hook_id` from `HOOK CANDIDATES`.
+- Prefer selecting the cuts with `span_ids` from `SPAN CATALOG`.
+- Provide `hook_start` and `hook_end` with the exact timing of the hook.
+- `hook_start` must mark the first real word of the hook and `hook_end` the last real word.
+- The last cut must close the idea with a clear conclusion, payoff or answer.
+
+{self._build_speaker_guidance_en(has_named_speakers=has_named_speakers)}
+
+OUTPUT JSON
+
+The structure below is only an example.
+You must decide how many videos to return and how many cuts each one needs.
+Whenever possible, prefer returning `hook_id` and `span_ids`.
+Use `shorts_content` directly only as a fallback when you need to detail cuts manually.
+If `hook_id` and `span_ids` already define the selection clearly, `shorts_content` may be omitted or returned as an empty list.
+
+{{
+  "job_id": "{job_id}",
+  "final_videos": [
+    {{
+      "video_index": 1,
+      "hook_id": "hook_0001",
+      "span_ids": ["span_0005", "span_0006", "span_0007"],
+      "title": "video title",
+      "hook": "video hook",
+      "hook_source_cut_index": 0,
+      "hook_start": 10.5,
+      "hook_end": 17.8,
+      "description": "posting description",
+      "hashtags": ["#tag1", "#tag2"],
+      "thumbnail": "thumbnail idea",
+      "soundtrack_suggestion": "political_tension | mystery_tension | finance_tension | generic",
+      "speaker_focus": "SPEAKER_01 | SPEAKER_02 | null",
+      "shorts_content": [
+        {{
+          "start": 10.5,
+          "end": 58.0,
+          "safe_start": 10.5,
+          "safe_end": 58.0,
+          "reason": "why this cut opens the topic with enough context",
+          "narrative_role": "hook | setup | development | payoff",
+          "merge_group": "story_1",
+          "continuity_note": "how this cut prepares the next one",
+          "speaker_focus": "SPEAKER_01 | SPEAKER_02 | null",
+          "transition_after": "hard_cut | punch_in | whoosh | fade | none"
+        }}
+      ]
+    }}
+  ]
+}}
+
+MAIN CONTEXT
+
+TRANSCRIPT WITH SPEAKERS
+
+{transcript_context}
+
+SPAN CATALOG
+
+{span_catalog_context}
+
+HOOK CANDIDATES
+
+{hook_candidate_context}
+
+FINAL INSTRUCTION
+
+Return only the final JSON.
+Return `final_videos` with at most 2 final videos.
+Prefer `hook_id` and `span_ids` as the main structured selection fields.
+Use `shorts_content` as a complement or fallback when you need to detail cuts manually.
+If `hook_id` and `span_ids` already define the selection clearly, `shorts_content` may be omitted or returned as an empty list.
+Validate the total duration of each `final_video` before responding: it must stay between {self.render_min_long_video_duration_sec} and {self.qa_max_clip_duration_sec} seconds.
+If there is only enough strong material for 1 good final video, return only 1.
+"""
+
     def _build_english_prompt(
         self,
         *,
         transcript_context: str,
+        span_catalog_context: str,
+        hook_candidate_context: str,
         job_id: str,
         clip_mode: str,
         video_ratio: str,
@@ -244,6 +570,8 @@ EDITORIAL RULES
 - Use a single cut only when one block alone already delivers hook, development and closure.
 - The hook must be a strong, complete and recognizable spoken sentence.
 - `post.hook` must be fully contained inside the first cut.
+- Prefer selecting the hook with `hook_id` from `HOOK CANDIDATES`.
+- Prefer selecting the cuts with `span_ids` from `SPAN CATALOG`.
 - Also provide `hook_start` and `hook_end` with the exact timestamp of the hook in seconds.
 - `hook_start` must mark the real beginning of the hook sentence and `hook_end` the real end of that same sentence, without a loose window.
 - Prefer hooks with about 3 to 8 seconds of continuous speech.
@@ -257,12 +585,17 @@ OUTPUT JSON
 The structure below is only an example of shape.
 Do not mechanically copy the number of items from the example.
 You must decide how many final videos to return and how many cuts each `shorts_content` needs.
+Whenever possible, prefer returning `hook_id` and `span_ids`.
+Use `shorts_content` directly only as a fallback when you need to detail cuts manually.
+If `hook_id` and `span_ids` already define the selection clearly, `shorts_content` may be omitted or returned as an empty list.
 
 {{
   "job_id": "{job_id}",
   "final_videos": [
     {{
       "video_index": 1,
+      "hook_id": "hook_0001",
+      "span_ids": ["span_0003", "span_0004"],
       "title": "main title",
       "hook": "opening hook",
       "hook_source_cut_index": 0,
@@ -297,12 +630,23 @@ TRANSCRIPT WITH SPEAKERS
 
 {transcript_context}
 
+SPAN CATALOG
+
+{span_catalog_context}
+
+HOOK CANDIDATES
+
+{hook_candidate_context}
+
 FINAL INSTRUCTION
 
 Return only the final JSON.
 Return `final_videos` with up to 3 well-connected final videos ready for assembly.
 Each `final_videos` item must directly include:
-`title`, `hook`, `hook_start`, `hook_end`, `description`, `hashtags`, `thumbnail`, `soundtrack_suggestion`, `speaker_focus` and `shorts_content`.
+`title`, `hook_id`, `span_ids`, `hook`, `hook_start`, `hook_end`, `description`, `hashtags`, `thumbnail`, `soundtrack_suggestion`, `speaker_focus` and `shorts_content`.
+Prefer `hook_id` and `span_ids` as the main structured selection fields.
+Use `shorts_content` as a complement or fallback when you need to detail cuts manually.
+If `hook_id` and `span_ids` already define the selection clearly, `shorts_content` may be omitted or returned as an empty list.
 Validate the total duration of each `final_video` before responding: it must stay between {self._response_min_total_duration(clip_mode)} and 120 seconds.
 If there is only enough strong material for 1 or 2 good final videos, return only 1 or 2.
 """
