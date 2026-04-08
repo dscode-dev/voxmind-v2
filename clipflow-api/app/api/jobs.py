@@ -1,6 +1,7 @@
 import uuid
 import io
 import json
+import redis
 
 from datetime import datetime, timezone
 
@@ -15,7 +16,8 @@ from app.models.clip_job import ClipJob
 from app.models.billing_product import BillingProduct
 from app.models.purchase import Purchase
 from app.models.clip_asset import ClipAsset
-from app.models.enums import BillingProvider, ClipAssetType, ProductType, PurchaseStatus
+from app.models.enums import BillingProvider, ClipAssetType, JobEventType, ProductType, PurchaseStatus
+from app.models.job_event import JobEvent
 from app.models.user import User
 from app.security.auth_middleware import get_current_user
 from app.security.access_control import can_bypass_credits, is_admin, scope_job_query
@@ -33,6 +35,11 @@ artifact_storage_client = Minio(
     access_key=settings.minio_access_key,
     secret_key=settings.minio_secret_key,
     secure=settings.minio_secure,
+)
+worker_queue = redis.Redis(
+    host=settings.voxmind_redis_host,
+    port=settings.voxmind_redis_port,
+    decode_responses=True,
 )
 
 
@@ -155,6 +162,19 @@ def _serialize_asset(asset: ClipAsset) -> dict:
     }
 
 
+def _publish_prepare_job(job: ClipJob) -> None:
+    payload = {
+        "video_url": job.source_url,
+        "job_id": str(job.id),
+        "pipeline_stage": job.pipeline_stage,
+        "manual_response": None,
+        "clip_mode": _job_config(job).get("clip_mode", "short_serie"),
+        "video_ratio": _job_config(job).get("video_ratio", "portrait"),
+        "build_ia": bool(_job_config(job).get("build_ia", False)),
+    }
+    worker_queue.lpush(settings.voxmind_redis_queue, json.dumps(payload))
+
+
 def _clip_review_summary(assets: list[ClipAsset]) -> dict[str, int]:
     summary = {
         "total": 0,
@@ -261,6 +281,21 @@ def create_job(
     )
 
     db.add(job)
+    db.flush()
+
+    db.add(
+        JobEvent(
+            job_id=job.id,
+            event_type=JobEventType.JOB_CREATED,
+            stage="prepare",
+            message="Job criado e enfileirado para processamento",
+            payload_json={
+                "clip_mode": payload.clip_mode,
+                "video_ratio": payload.video_ratio,
+                "build_ia": payload.build_ia,
+            },
+        )
+    )
 
     if not can_bypass_credits(user):
         user.credits -= 1
@@ -269,6 +304,7 @@ def create_job(
 
     db.commit()
     db.refresh(job)
+    _publish_prepare_job(job)
 
     return {
         "job_id": str(job.id),

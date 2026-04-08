@@ -109,5 +109,22 @@ class Settings(BaseSettings):
         alias="SIGNED_ASSET_URL_EXPIRY_SEC",
     )
 
+    # =====================================
+    # Worker Queue
+    # =====================================
+
+    voxmind_redis_host: str = Field(
+        default="redis.voxmind-v2.svc.cluster.local",
+        alias="VOXMIND_REDIS_HOST",
+    )
+    voxmind_redis_port: int = Field(
+        default=6379,
+        alias="VOXMIND_REDIS_PORT",
+    )
+    voxmind_redis_queue: str = Field(
+        default="voxmind_jobs",
+        alias="VOXMIND_REDIS_QUEUE",
+    )
+
 
 settings = Settings()
