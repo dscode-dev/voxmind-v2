@@ -74,6 +74,22 @@ class Settings(BaseSettings):
         default="123456",
         alias="FIXED_TEST_OTP",
     )
+    internal_default_product_name: str = Field(
+        default="Internal Default",
+        alias="INTERNAL_DEFAULT_PRODUCT_NAME",
+    )
+    internal_default_product_description: str = Field(
+        default="Produto técnico padrão para operação interna do ClipFlow",
+        alias="INTERNAL_DEFAULT_PRODUCT_DESCRIPTION",
+    )
+    internal_default_product_max_video_duration_sec: int = Field(
+        default=14400,
+        alias="INTERNAL_DEFAULT_PRODUCT_MAX_VIDEO_DURATION_SEC",
+    )
+    internal_default_product_max_shorts_generated: int = Field(
+        default=10,
+        alias="INTERNAL_DEFAULT_PRODUCT_MAX_SHORTS_GENERATED",
+    )
 
     # =====================================
     # Storage

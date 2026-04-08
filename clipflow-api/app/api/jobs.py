@@ -14,7 +14,7 @@ from app.db.session import get_db
 from app.models.clip_job import ClipJob
 from app.models.billing_product import BillingProduct
 from app.models.clip_asset import ClipAsset
-from app.models.enums import ClipAssetType
+from app.models.enums import ClipAssetType, ProductType
 from app.models.user import User
 from app.security.auth_middleware import get_current_user
 from app.security.access_control import can_bypass_credits, is_admin, scope_job_query
@@ -81,6 +81,32 @@ def _job_config(job: ClipJob) -> dict:
         "subtitle_language": config.get("subtitle_language") or metadata.get("subtitle_language"),
         "prompt_mode": str(config.get("prompt_mode") or job.prompt_mode or "manual"),
     }
+
+
+def _ensure_internal_default_product(db: Session) -> BillingProduct:
+    product = (
+        db.query(BillingProduct)
+        .filter(BillingProduct.code == ProductType.VIDEO_UP_TO_4H)
+        .order_by(BillingProduct.created_at.asc())
+        .first()
+    )
+    if product:
+        return product
+
+    product = BillingProduct(
+        code=ProductType.VIDEO_UP_TO_4H,
+        name=settings.internal_default_product_name,
+        description=settings.internal_default_product_description,
+        currency="BRL",
+        price_amount=1.00,
+        max_video_duration_sec=settings.internal_default_product_max_video_duration_sec,
+        max_shorts_generated=settings.internal_default_product_max_shorts_generated,
+        is_active=True,
+    )
+    db.add(product)
+    db.commit()
+    db.refresh(product)
+    return product
 
 
 def _serialize_asset(asset: ClipAsset) -> dict:
@@ -172,10 +198,9 @@ def create_job(
             .first()
         )
         if not product:
-            raise HTTPException(
-                status_code=400,
-                detail="No active billing product available to create jobs",
-            )
+            product = db.query(BillingProduct).order_by(BillingProduct.created_at.asc()).first()
+        if not product:
+            product = _ensure_internal_default_product(db)
 
     if user.credits <= 0 and not can_bypass_credits(user):
         raise HTTPException(status_code=402, detail="No credits")
