@@ -208,8 +208,6 @@ TASK
 
 Select the best long-form narrative excerpts from the transcript.
 Treat this as normal-video excerpt editing, not short-form editing.
-Return ONLY valid JSON.
-Do not place unescaped double quotes inside string values.
 
 MANDATORY RULES
 
@@ -251,10 +249,8 @@ HOOK CANDIDATES
 Return ONLY valid JSON in this format:
 
 The structure below is only an example.
-Do not mechanically copy the number of items from the example.
-Whenever possible, prefer returning `hook_id` and `span_ids`.
-Use `shorts_content` directly only as a fallback when you need to detail cuts manually.
-If `hook_id` and `span_ids` already define the selection clearly, `shorts_content` may be omitted or returned as an empty list.
+Prefer returning `hook_id` and `span_ids`.
+Use `shorts_content` only as a complement or fallback.
 
 {{
   "job_id": "{job_id}",
@@ -293,9 +289,6 @@ If `hook_id` and `span_ids` already define the selection clearly, `shorts_conten
 
 Return `final_videos` with at most 2 separate final videos.
 Each `final_videos[i]` must directly include `title`, `hook_id`, `span_ids`, `hook`, `hook_start`, `hook_end`, `description`, `hashtags`, `thumbnail`, `soundtrack_suggestion`, `speaker_focus` and `shorts_content`.
-Prefer `hook_id` and `span_ids` as the main structured selection fields.
-Use `shorts_content` as a complement or fallback when you need to detail cuts manually.
-If `hook_id` and `span_ids` already define the selection clearly, `shorts_content` may be omitted or returned as an empty list.
 Prefer final videos around 100 to 120 seconds when the material supports it.
 Validate the total duration of each `final_video` before responding: it must stay between {self.render_min_long_video_duration_sec} and 120 seconds.
 If any `final_video` exceeds 120 seconds, shorten the last cut of that video before responding.

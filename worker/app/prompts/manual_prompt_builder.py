@@ -248,15 +248,8 @@ Se algum campo não se aplicar, retorne null, string vazia ou lista vazia.
 JOB_ID: {job_id}
 
 Você é um editor sênior de vídeos longos.
-Sua tarefa é escolher trechos que funcionem como cortes fortes de um vídeo normal, preservando mais contexto, mais desenvolvimento e mais fechamento do que um short.
-Não trate este material como short viral.
-
-RETORNO
-
-- Retorne apenas JSON válido.
-- Não use markdown.
-- Não escreva texto fora do JSON.
-- Não use aspas duplas dentro de valores de string, a menos que estejam escapadas.
+Escolha trechos que funcionem como partes de um vídeo normal, com contexto, desenvolvimento e fechamento.
+Não trate este material como short, reels ou tiktok.
 
 CONFIGURAÇÃO
 
@@ -264,26 +257,18 @@ job_id: {job_id}
 clip_mode: long
 video_ratio: {video_ratio}
 
-OBJETIVO EDITORIAL
-
 - Gere 1 vídeo final por padrão.
 - Só gere 2 vídeos finais se houver dois blocos realmente distintos, completos e fortes o bastante para funcionar como capítulos separados.
 - Nunca quebre um mesmo raciocínio em vários vídeos só para multiplicar a quantidade de entregas.
 - Prefira 1 vídeo muito forte a 2 vídeos medianos.
 - Cada vídeo final deve soar como um trecho robusto de vídeo normal.
-- Preserve mais contexto antes e depois da tese principal.
+- Preserve contexto antes, durante e depois da tese principal.
 - Prefira 2 ou 3 cortes longos e conectados quando isso melhorar a compreensão e o fechamento.
 - Só use 1 corte único quando ele sozinho já entregar abertura, desenvolvimento e conclusão com contexto suficiente.
-
-REGRAS DE DURAÇÃO
-
 - Cada vídeo final deve ter no mínimo {self.render_min_long_video_duration_sec} segundos.
 - Prefira vídeos finais entre 100 e {self.qa_max_clip_duration_sec} segundos.
 - Nunca exceda {self.qa_max_clip_duration_sec} segundos.
 - Não compacte demais o material só para deixá-lo com cara de short.
-
-REGRAS EDITORIAIS
-
 - Nunca comece no meio de frase.
 - Nunca termine no meio do assunto.
 - Preserve ordem cronológica.
@@ -306,11 +291,9 @@ REGRAS EDITORIAIS
 
 OUTPUT JSON
 
-O formato abaixo é apenas um exemplo.
-Você deve decidir quantos vídeos retornar e quantos cortes cada vídeo precisa.
-Sempre que possível, prefira retornar `hook_id` e `span_ids`.
-Use `shorts_content` diretamente apenas como fallback quando precisar detalhar manualmente os cortes.
-Se `hook_id` e `span_ids` já definirem claramente a seleção, `shorts_content` pode ser omitido ou vir como lista vazia.
+A estrutura abaixo é apenas um exemplo.
+Prefira responder com `hook_id` e `span_ids`.
+Use `shorts_content` só como complemento ou fallback.
 
 {{
   "job_id": "{job_id}",
@@ -365,11 +348,7 @@ INSTRUÇÃO FINAL
 
 Retorne apenas o JSON final.
 Retorne `final_videos` com no máximo 2 vídeos finais.
-Cada item de `final_videos` deve trazer diretamente:
-`title`, `hook_id`, `span_ids`, `hook`, `hook_start`, `hook_end`, `description`, `hashtags`, `thumbnail`, `soundtrack_suggestion`, `speaker_focus` e `shorts_content`.
-Prefira `hook_id` e `span_ids` como forma principal de seleção.
-Use `shorts_content` como complemento ou fallback quando precisar detalhar manualmente os cortes.
-Se `hook_id` e `span_ids` já definirem claramente a seleção, `shorts_content` pode ser omitido ou vir como lista vazia.
+Cada item deve trazer `title`, `hook_id`, `span_ids`, `hook`, `hook_start`, `hook_end`, `description`, `hashtags`, `thumbnail`, `soundtrack_suggestion`, `speaker_focus` e `shorts_content`.
 Valide a duração total de cada `final_video` antes de responder: o total precisa ficar entre {self.render_min_long_video_duration_sec} e {self.qa_max_clip_duration_sec} segundos.
 Por padrão, retorne apenas 1 `final_video`.
 Só retorne 2 `final_videos` se o material trouxer dois arcos bem distintos, completos e não redundantes.
@@ -391,15 +370,8 @@ Se não houver material forte para 2 vídeos bons, retorne apenas 1.
 JOB_ID: {job_id}
 
 You are a senior long-form video editor.
-Your task is to choose excerpts that work as strong cuts from a normal video, preserving more context, development and closure than a short-form clip.
-Do not treat this as a shorts prompt.
-
-RETURN FORMAT
-
-- Return valid JSON only.
-- Do not use markdown.
-- Do not write any text outside the JSON.
-- Do not use unescaped double quotes inside string values.
+Choose excerpts that work as parts of a normal video, with context, development and closure.
+Do not treat this as shorts, reels or tiktok content.
 
 CONFIGURATION
 
@@ -410,8 +382,6 @@ content_language: en
 output_language: en
 subtitle_language: en
 
-EDITORIAL GOAL
-
 - Produce 1 final video by default.
 - Only produce 2 final videos if there are two clearly distinct, complete and strong chapters.
 - Never split one connected argument into multiple final videos just to increase the count.
@@ -420,16 +390,10 @@ EDITORIAL GOAL
 - Preserve enough setup, development and closure.
 - Prefer 2 or 3 long connected cuts when that improves clarity and ending.
 - Use a single cut only when one block already carries enough context and conclusion.
-
-DURATION RULES
-
 - Each final video must be at least {self.render_min_long_video_duration_sec} seconds.
 - Prefer final videos between 100 and {self.qa_max_clip_duration_sec} seconds.
 - Never exceed {self.qa_max_clip_duration_sec} seconds.
 - Do not over-compress the material to make it feel like a short.
-
-EDITORIAL RULES
-
 - Never start in the middle of a sentence.
 - Never end in the middle of the subject.
 - Preserve chronology.
@@ -453,10 +417,8 @@ EDITORIAL RULES
 OUTPUT JSON
 
 The structure below is only an example.
-You must decide how many videos to return and how many cuts each one needs.
-Whenever possible, prefer returning `hook_id` and `span_ids`.
-Use `shorts_content` directly only as a fallback when you need to detail cuts manually.
-If `hook_id` and `span_ids` already define the selection clearly, `shorts_content` may be omitted or returned as an empty list.
+Prefer returning `hook_id` and `span_ids`.
+Use `shorts_content` only as a complement or fallback.
 
 {{
   "job_id": "{job_id}",
@@ -511,9 +473,7 @@ FINAL INSTRUCTION
 
 Return only the final JSON.
 Return `final_videos` with at most 2 final videos.
-Prefer `hook_id` and `span_ids` as the main structured selection fields.
-Use `shorts_content` as a complement or fallback when you need to detail cuts manually.
-If `hook_id` and `span_ids` already define the selection clearly, `shorts_content` may be omitted or returned as an empty list.
+Each item must include `title`, `hook_id`, `span_ids`, `hook`, `hook_start`, `hook_end`, `description`, `hashtags`, `thumbnail`, `soundtrack_suggestion`, `speaker_focus` and `shorts_content`.
 Validate the total duration of each `final_video` before responding: it must stay between {self.render_min_long_video_duration_sec} and {self.qa_max_clip_duration_sec} seconds.
 By default, return only 1 `final_video`.
 Return 2 `final_videos` only if the material clearly contains two distinct, complete and non-redundant chapters.

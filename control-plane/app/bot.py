@@ -62,6 +62,7 @@ Uso:
 
         clip_mode = "short_serie"
         video_ratio = "portrait"
+        ratio_explicit = False
         build_ia = False
         video_url = None
 
@@ -78,9 +79,11 @@ Uso:
 
             elif arg == "--portrait":
                 video_ratio = "portrait"
+                ratio_explicit = True
 
             elif arg == "--landscape":
                 video_ratio = "landscape"
+                ratio_explicit = True
 
             elif arg == "--build-ia":
                 build_ia = True
@@ -95,6 +98,9 @@ Uso:
             )
 
             return
+
+        if clip_mode == "long" and not ratio_explicit:
+            video_ratio = "landscape"
 
         job_id = str(uuid.uuid4())
 
