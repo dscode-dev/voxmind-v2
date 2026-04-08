@@ -7,9 +7,10 @@ from sqlalchemy.orm import Session
 
 from app.models.billing_product import BillingProduct
 from app.models.clip_job import ClipJob
-from app.models.enums import JobStatus
+from app.models.enums import BillingProvider, JobStatus, PurchaseStatus
 from app.models.private_scheduler_profile import PrivateSchedulerProfile
 from app.models.private_scheduler_run import PrivateSchedulerRun
+from app.models.purchase import Purchase
 from app.models.user import User
 
 
@@ -65,9 +66,26 @@ class PrivateSchedulerService:
             db.add(run)
             return run, None
 
+        purchase = Purchase(
+            user_id=owner.id,
+            product_id=product.id,
+            billing_provider=BillingProvider.MANUAL,
+            status=PurchaseStatus.PAID,
+            currency=product.currency,
+            amount_total=product.price_amount,
+            provider_payment_id="private-scheduler",
+            provider_checkout_url=None,
+            provider_raw_payload={
+                "kind": "private_scheduler_purchase",
+                "profile_id": str(profile.id),
+            },
+        )
+        db.add(purchase)
+        db.flush()
+
         job = ClipJob(
             user_id=owner.id,
-            purchase_id=None,
+            purchase_id=purchase.id,
             product_id=product.id,
             source_url=source_url,
             status=JobStatus.QUEUED,

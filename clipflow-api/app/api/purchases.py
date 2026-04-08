@@ -71,7 +71,7 @@ async def purchase_webhook(
     if not purchase:
         return {"status": "ignored"}
 
-    purchase.status = PurchaseStatus.COMPLETED
+    purchase.status = PurchaseStatus.PAID
 
     user = purchase.user
     product = purchase.product

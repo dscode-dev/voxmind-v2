@@ -13,8 +13,9 @@ from app.core.settings import settings
 from app.db.session import get_db
 from app.models.clip_job import ClipJob
 from app.models.billing_product import BillingProduct
+from app.models.purchase import Purchase
 from app.models.clip_asset import ClipAsset
-from app.models.enums import ClipAssetType, ProductType
+from app.models.enums import BillingProvider, ClipAssetType, ProductType, PurchaseStatus
 from app.models.user import User
 from app.security.auth_middleware import get_current_user
 from app.security.access_control import can_bypass_credits, is_admin, scope_job_query
@@ -107,6 +108,32 @@ def _ensure_internal_default_product(db: Session) -> BillingProduct:
     db.commit()
     db.refresh(product)
     return product
+
+
+def _ensure_internal_purchase(
+    db: Session,
+    *,
+    user_id,
+    product: BillingProduct,
+) -> Purchase:
+    purchase = Purchase(
+        user_id=user_id,
+        product_id=product.id,
+        billing_provider=BillingProvider.MANUAL,
+        status=PurchaseStatus.PAID,
+        currency=product.currency,
+        amount_total=product.price_amount,
+        provider_payment_id="internal-default",
+        provider_checkout_url=None,
+        provider_raw_payload={
+            "kind": "internal_default_purchase",
+            "reason": "job_created_without_checkout",
+        },
+    )
+    db.add(purchase)
+    db.commit()
+    db.refresh(purchase)
+    return purchase
 
 
 def _serialize_asset(asset: ClipAsset) -> dict:
@@ -205,9 +232,15 @@ def create_job(
     if user.credits <= 0 and not can_bypass_credits(user):
         raise HTTPException(status_code=402, detail="No credits")
 
+    purchase = _ensure_internal_purchase(
+        db,
+        user_id=user.id,
+        product=product,
+    )
+
     job = ClipJob(
         user_id=user.id,
-        purchase_id=None,
+        purchase_id=purchase.id,
         product_id=product.id,
         source_url=payload.source_url,
         status=JobStatus.QUEUED,
