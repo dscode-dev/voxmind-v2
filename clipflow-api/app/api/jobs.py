@@ -2,6 +2,7 @@ import uuid
 import io
 import json
 import redis
+from redis.exceptions import RedisError
 
 from datetime import datetime, timezone
 
@@ -36,11 +37,12 @@ artifact_storage_client = Minio(
     secret_key=settings.minio_secret_key,
     secure=settings.minio_secure,
 )
-worker_queue = redis.Redis(
-    host=settings.voxmind_redis_host,
-    port=settings.voxmind_redis_port,
-    decode_responses=True,
-)
+def _worker_queue() -> redis.Redis:
+    return redis.Redis(
+        host=settings.voxmind_redis_host,
+        port=settings.voxmind_redis_port,
+        decode_responses=True,
+    )
 
 
 class CreateJobInput(BaseModel):
@@ -172,7 +174,7 @@ def _publish_prepare_job(job: ClipJob) -> None:
         "video_ratio": _job_config(job).get("video_ratio", "portrait"),
         "build_ia": bool(_job_config(job).get("build_ia", False)),
     }
-    worker_queue.lpush(settings.voxmind_redis_queue, json.dumps(payload))
+    _worker_queue().lpush(settings.voxmind_redis_queue, json.dumps(payload))
 
 
 def _clip_review_summary(assets: list[ClipAsset]) -> dict[str, int]:
@@ -304,7 +306,29 @@ def create_job(
 
     db.commit()
     db.refresh(job)
-    _publish_prepare_job(job)
+    try:
+        _publish_prepare_job(job)
+    except RedisError as exc:
+        job.status = JobStatus.FAILED
+        db.add(
+            JobEvent(
+                job_id=job.id,
+                event_type=JobEventType.JOB_FAILED,
+                stage="prepare",
+                message="Falha ao enfileirar job para o worker",
+                payload_json={
+                    "error": str(exc),
+                    "redis_host": settings.voxmind_redis_host,
+                    "redis_port": settings.voxmind_redis_port,
+                    "redis_queue": settings.voxmind_redis_queue,
+                },
+            )
+        )
+        db.commit()
+        raise HTTPException(
+            status_code=503,
+            detail="Falha ao conectar na fila do worker. Verifique VOXMIND_REDIS_HOST/PORT/QUEUE no clipflow-api.",
+        ) from exc
 
     return {
         "job_id": str(job.id),
