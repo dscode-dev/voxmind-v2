@@ -102,6 +102,10 @@ class Settings(BaseSettings):
         default="small",
         alias="ASR_MODEL_SIZE"
     )
+    asr_fallback_model_sizes: str = Field(
+        default="medium,small,base",
+        alias="ASR_FALLBACK_MODEL_SIZES"
+    )
 
     asr_language: str = Field(
         default="auto",

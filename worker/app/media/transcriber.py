@@ -24,8 +24,10 @@ class Transcriber:
         parallel_workers: int = 2,
         max_merged_segment_duration_sec: int = 18,
         fallback_to_cpu_on_oom: bool = True,
+        fallback_model_sizes: list[str] | None = None,
     ):
         self.model_size = model_size
+        self._requested_model_size = model_size
         self.device = device
         self.compute_type = compute_type
         self.cpu_threads = cpu_threads
@@ -37,12 +39,14 @@ class Transcriber:
         self.segment_duration_sec = segment_duration_sec
         self.max_merged_segment_duration_sec = max_merged_segment_duration_sec
         self.fallback_to_cpu_on_oom = fallback_to_cpu_on_oom
+        self.fallback_model_sizes = [item for item in (fallback_model_sizes or []) if item]
         self.last_transcription_info: Dict = {
             "requested_language": language,
             "detected_language": None,
             "language_probability": None,
             "device": device,
             "compute_type": compute_type,
+            "model_size": model_size,
         }
 
     def transcribe(self, video_path: Path) -> List[Dict]:
@@ -140,15 +144,33 @@ class Transcriber:
         if self._cuda_requested_but_unavailable():
             self._fallback_to_cpu()
 
-        self.model = WhisperModel(
-            self.model_size,
-            device=self.device,
-            compute_type=self.compute_type,
-            cpu_threads=self.cpu_threads,
-            num_workers=self.parallel_workers,
-        )
-        self.last_transcription_info["device"] = self.device
-        self.last_transcription_info["compute_type"] = self.compute_type
+        last_exc: Exception | None = None
+        for candidate_model in self._candidate_model_sizes():
+            try:
+                self.model = WhisperModel(
+                    candidate_model,
+                    device=self.device,
+                    compute_type=self.compute_type,
+                    cpu_threads=self.cpu_threads,
+                    num_workers=self.parallel_workers,
+                )
+                self.model_size = candidate_model
+                self.last_transcription_info["device"] = self.device
+                self.last_transcription_info["compute_type"] = self.compute_type
+                self.last_transcription_info["model_size"] = candidate_model
+                return
+            except Exception as exc:
+                last_exc = exc
+                if not self._is_model_resolution_error(exc):
+                    raise
+                continue
+
+        if last_exc is not None:
+            raise RuntimeError(
+                "Unable to load any ASR model from local cache or Hub. "
+                f"Requested={self._requested_model_size}; tried={','.join(self._candidate_model_sizes())}; "
+                f"last_error={last_exc}"
+            ) from last_exc
 
     def _requested_language_for_model(self) -> str | None:
         language = str(self.language or "").strip().lower()
@@ -165,7 +187,30 @@ class Transcriber:
             "language_probability": float(language_probability) if language_probability is not None else None,
             "device": self.device,
             "compute_type": self.compute_type,
+            "model_size": self.model_size,
         }
+
+    def _candidate_model_sizes(self) -> list[str]:
+        ordered: list[str] = []
+        for item in [self._requested_model_size, *self.fallback_model_sizes]:
+            name = str(item or "").strip()
+            if not name or name in ordered:
+                continue
+            ordered.append(name)
+        return ordered
+
+    def _is_model_resolution_error(self, exc: Exception) -> bool:
+        message = str(exc).lower()
+        return (
+            "snapshot folder" in message
+            or "trying to locate the files on the hub" in message
+            or "internet connection" in message
+            or "cannot find the appropriate snapshot" in message
+            or "model.bin" in message
+            or "does not exist locally" in message
+            or "huggingface" in message
+            or "hub" in message and "snapshot" in message
+        )
 
     def _should_fallback_to_cpu(self, exc: Exception) -> bool:
         if not self.fallback_to_cpu_on_oom:

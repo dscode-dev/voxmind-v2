@@ -87,6 +87,11 @@ class Pipeline:
             parallel_workers=settings.asr_parallel_workers,
             max_merged_segment_duration_sec=settings.asr_max_merged_segment_duration_sec,
             fallback_to_cpu_on_oom=settings.asr_fallback_to_cpu_on_oom,
+            fallback_model_sizes=[
+                item.strip()
+                for item in str(settings.asr_fallback_model_sizes or "").split(",")
+                if item.strip()
+            ],
         )
         self.diarizer = SpeakerDiarizer(
             enabled=settings.diarization_enabled,
