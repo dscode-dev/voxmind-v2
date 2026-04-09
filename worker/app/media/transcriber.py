@@ -25,6 +25,7 @@ class Transcriber:
         max_merged_segment_duration_sec: int = 18,
         fallback_to_cpu_on_oom: bool = True,
         fallback_model_sizes: list[str] | None = None,
+        preloaded_models_dir: str | None = None,
     ):
         self.model_size = model_size
         self._requested_model_size = model_size
@@ -40,6 +41,7 @@ class Transcriber:
         self.max_merged_segment_duration_sec = max_merged_segment_duration_sec
         self.fallback_to_cpu_on_oom = fallback_to_cpu_on_oom
         self.fallback_model_sizes = [item for item in (fallback_model_sizes or []) if item]
+        self.preloaded_models_dir = Path(preloaded_models_dir).expanduser() if preloaded_models_dir else None
         self.last_transcription_info: Dict = {
             "requested_language": language,
             "detected_language": None,
@@ -145,10 +147,10 @@ class Transcriber:
             self._fallback_to_cpu()
 
         last_exc: Exception | None = None
-        for candidate_model in self._candidate_model_sizes():
+        for candidate_model, model_ref in self._candidate_model_refs():
             try:
                 self.model = WhisperModel(
-                    candidate_model,
+                    model_ref,
                     device=self.device,
                     compute_type=self.compute_type,
                     cpu_threads=self.cpu_threads,
@@ -198,6 +200,23 @@ class Transcriber:
                 continue
             ordered.append(name)
         return ordered
+
+    def _candidate_model_refs(self) -> list[tuple[str, str]]:
+        refs: list[tuple[str, str]] = []
+        for model_size in self._candidate_model_sizes():
+            local_dir = self._preloaded_model_dir(model_size)
+            if local_dir is not None:
+                refs.append((model_size, str(local_dir)))
+            refs.append((model_size, model_size))
+        return refs
+
+    def _preloaded_model_dir(self, model_size: str) -> Path | None:
+        if self.preloaded_models_dir is None:
+            return None
+        candidate = self.preloaded_models_dir / model_size
+        if not candidate.exists() or not candidate.is_dir():
+            return None
+        return candidate
 
     def _is_model_resolution_error(self, exc: Exception) -> bool:
         message = str(exc).lower()

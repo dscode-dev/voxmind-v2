@@ -92,6 +92,7 @@ class Pipeline:
                 for item in str(settings.asr_fallback_model_sizes or "").split(",")
                 if item.strip()
             ],
+            preloaded_models_dir=settings.asr_preloaded_models_dir,
         )
         self.diarizer = SpeakerDiarizer(
             enabled=settings.diarization_enabled,

@@ -6,6 +6,8 @@ ARG TORCHAUDIO_VERSION="2.5.1"
 ARG POETRY_VERSION="2.0.1"
 ARG PYTHON_VERSION="3.11"
 ARG TORCH_FLAVOR="gpu"
+ARG PRELOAD_ASR_MODELS="small,base"
+ARG PRELOAD_ASR_MODELS_REQUIRED="false"
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -17,6 +19,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     POETRY_NO_INTERACTION=1 \
     POETRY_INSTALLER_PARALLEL=false \
     POETRY_CACHE_DIR=/tmp/poetry-cache \
+    ASR_PRELOADED_MODELS_DIR=/opt/voxmind-models/asr \
     NVIDIA_VISIBLE_DEVICES=all \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
 
@@ -48,6 +51,7 @@ RUN useradd -m -u 1000 appuser
 WORKDIR /app
 
 COPY pyproject.toml poetry.lock* /app/
+COPY scripts/preload_asr_models.py /tmp/preload_asr_models.py
 
 RUN if [ -n "$POETRY_INSTALL_GROUPS" ]; then \
         poetry install --without dev --with "$POETRY_INSTALL_GROUPS" --no-root; \
@@ -69,6 +73,11 @@ RUN if echo "$POETRY_INSTALL_GROUPS" | grep -Eq '(^|,| )diarization($|,| )'; the
                 "torch==${TORCH_VERSION}" \
                 "torchaudio==${TORCHAUDIO_VERSION}"; \
         fi; \
+    fi
+
+RUN mkdir -p /opt/voxmind-models/asr && \
+    if [ -n "$PRELOAD_ASR_MODELS" ]; then \
+        python /tmp/preload_asr_models.py; \
     fi
 
 RUN mkdir -p /app/app /app/assets && chown -R appuser:appuser /app

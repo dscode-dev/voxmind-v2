@@ -106,6 +106,10 @@ class Settings(BaseSettings):
         default="medium,small,base",
         alias="ASR_FALLBACK_MODEL_SIZES"
     )
+    asr_preloaded_models_dir: str = Field(
+        default="/opt/voxmind-models/asr",
+        alias="ASR_PRELOADED_MODELS_DIR"
+    )
 
     asr_language: str = Field(
         default="auto",
