@@ -125,6 +125,24 @@ def complete_job(
     return {"status": "ok"}
 
 
+@router.get("/internal/jobs/{job_id}/source")
+def get_job_source(
+    job_id: str,
+    _: None = Depends(require_internal_api_token),
+    db: Session = Depends(get_db),
+):
+    job = db.query(ClipJob).filter(ClipJob.id == job_id).first()
+
+    if not job:
+        return {"status": "ignored", "source_url": None}
+
+    return {
+        "status": "ok",
+        "job_id": str(job.id),
+        "source_url": job.source_url,
+    }
+
+
 @router.post("/internal/jobs/{job_id}/sync-artifacts")
 def sync_job_artifacts(
     job_id: str,

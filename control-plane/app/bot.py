@@ -6,6 +6,7 @@ import os
 import tempfile
 import asyncio
 import re
+import httpx
 
 from telegram import Update
 from telegram.ext import (
@@ -511,7 +512,37 @@ Exemplo:
             registry.register(job_id, video_url.strip())
             return video_url.strip()
 
-        return registry.get_video_url(job_id)
+        resolved = registry.get_video_url(job_id)
+        if resolved:
+            return resolved
+
+        return self._fetch_video_url_from_clipflow_api(job_id)
+
+    def _fetch_video_url_from_clipflow_api(self, job_id: str) -> str | None:
+        base_url = str(settings.clipflow_api_base_url or "").strip().rstrip("/")
+        if not base_url:
+            return None
+
+        headers = {}
+        if settings.clipflow_api_internal_token:
+            headers["X-Internal-Token"] = settings.clipflow_api_internal_token
+
+        try:
+            response = httpx.get(
+                f"{base_url}/internal/jobs/{job_id}/source",
+                headers=headers,
+                timeout=10.0,
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except Exception:
+            return None
+
+        source_url = payload.get("source_url")
+        if isinstance(source_url, str) and source_url.strip():
+            registry.register(job_id, source_url.strip())
+            return source_url.strip()
+        return None
 
     def _collect_finalize_warnings(self, data: dict) -> list[str]:
         warnings: list[str] = []

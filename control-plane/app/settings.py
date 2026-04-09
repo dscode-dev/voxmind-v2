@@ -86,6 +86,14 @@ class Settings(BaseSettings):
         default=604800,
         alias="VOXMIND_JOB_REGISTRY_TTL_SEC",
     )
+    clipflow_api_base_url: str | None = Field(
+        default=None,
+        alias="CLIPFLOW_API_BASE_URL",
+    )
+    clipflow_api_internal_token: str | None = Field(
+        default=None,
+        alias="CLIPFLOW_API_INTERNAL_TOKEN",
+    )
 
     # =========================
     # Bot validation
