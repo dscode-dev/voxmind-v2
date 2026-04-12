@@ -53,7 +53,7 @@ class VoxmindBot:
                 """
 Uso:
 
-/new [--short | --long | --short-serie]
+/new [--short | --long | --long-series | --short-serie]
      [--portrait | --landscape]
      [--build-ia]
      <url>
@@ -63,6 +63,7 @@ Uso:
 
         clip_mode = "short_serie"
         video_ratio = "portrait"
+        job_preset = "short_series"
         ratio_explicit = False
         build_ia = False
         video_url = None
@@ -71,12 +72,19 @@ Uso:
 
             if arg == "--short":
                 clip_mode = "short"
+                job_preset = "short_individual"
 
             elif arg == "--long":
                 clip_mode = "long"
+                job_preset = "long_single"
+
+            elif arg in {"--long-series", "--long-serie"}:
+                clip_mode = "long_series"
+                job_preset = "long_series"
 
             elif arg == "--short-serie":
                 clip_mode = "short_serie"
+                job_preset = "short_series"
 
             elif arg == "--portrait":
                 video_ratio = "portrait"
@@ -100,7 +108,7 @@ Uso:
 
             return
 
-        if clip_mode == "long" and not ratio_explicit:
+        if clip_mode in {"long", "long_series"} and not ratio_explicit:
             video_ratio = "landscape"
 
         job_id = str(uuid.uuid4())
@@ -113,6 +121,7 @@ Uso:
             pipeline_stage="prepare",
             clip_mode=clip_mode,
             video_ratio=video_ratio,
+            job_preset=job_preset,
             build_ia=build_ia,
         )
 
@@ -124,6 +133,7 @@ JOB_ID: {job_id}
 
 Mode: {clip_mode}
 Ratio: {video_ratio}
+Preset: {job_preset}
 Auto IA: {"ON" if build_ia else "OFF"}
 
 Aguarde o processamento.

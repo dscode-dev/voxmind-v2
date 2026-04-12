@@ -17,6 +17,7 @@ from app.pipeline.auto_review import AutoReviewPolicy
 from app.pipeline.candidate_builder import CandidateBuilder
 from app.pipeline.delivery_package_builder import DeliveryPackageBuilder
 from app.pipeline.publish_package_builder import PublishPackageBuilder
+from app.pipeline.presets import ClipPreset, resolve_job_preset
 from app.pipeline.soundtrack_selector import SoundtrackSelector
 from app.pipeline.span_catalog_builder import SpanCatalogBuilder
 from app.pipeline.subtitle_builder import SubtitleBuilder
@@ -44,6 +45,7 @@ class Pipeline:
         manual_response: dict | None = None,
         clip_mode: str = "short_serie",
         video_ratio: str = "portrait",
+        job_preset: str | None = None,
         build_ia: bool = False,
     ):
 
@@ -51,8 +53,9 @@ class Pipeline:
         self.job_id = job_id
         self.manual_response = manual_response
 
-        self.clip_mode = clip_mode
-        self.video_ratio = video_ratio
+        self.preset: ClipPreset = resolve_job_preset(job_preset, clip_mode, video_ratio)
+        self.clip_mode = self.preset.clip_mode
+        self.video_ratio = self.preset.video_ratio
         self.build_ia = build_ia
         self.language_metadata: dict = {
             "language_mode": settings.language_mode,
@@ -113,7 +116,9 @@ class Pipeline:
         self.soundtrack_selector = SoundtrackSelector()
         self.span_catalog_builder = SpanCatalogBuilder()
         self.subtitle_builder = SubtitleBuilder(
-            playback_speed=settings.render_playback_speed,
+            playback_speed=self.preset.render_playback_speed,
+            video_ratio=self.preset.video_ratio,
+            caption_style=self.preset.caption_style,
         )
         self.render_plan_builder = RenderPlanBuilder()
         self.auto_review_policy = AutoReviewPolicy(
@@ -133,7 +138,7 @@ class Pipeline:
         self.final_renderer = FinalVideoRenderer(self.work_dir)
         self.clip_qa = ClipQA(
             min_duration_sec=settings.qa_min_clip_duration_sec,
-            max_duration_sec=settings.qa_max_clip_duration_sec,
+            max_duration_sec=self._max_final_video_duration_sec(),
             max_speakers_per_clip=settings.qa_max_speakers_per_clip,
         )
 
@@ -142,93 +147,30 @@ class Pipeline:
         self.prompt_builder = ManualPromptBuilder()
 
     def _build_chunker(self) -> Chunker:
-        if self.clip_mode == "short" and self.video_ratio == "portrait":
-            return Chunker(min_duration=24, target_duration=40, max_duration=60, overlap=5)
-
-        if self.clip_mode == "short_serie" and self.video_ratio == "portrait":
-            return Chunker(min_duration=26, target_duration=46, max_duration=68, overlap=5)
-
-        if self.clip_mode == "long" and self.video_ratio == "landscape":
-            return Chunker(min_duration=48, target_duration=90, max_duration=130, overlap=8)
-
-        if self.clip_mode == "long":
-            return Chunker(min_duration=42, target_duration=84, max_duration=125, overlap=8)
-
-        if self.clip_mode == "short":
-            return Chunker(min_duration=26, target_duration=48, max_duration=72, overlap=5)
-
-        if self.clip_mode == "short_serie":
-            return Chunker(min_duration=28, target_duration=50, max_duration=75, overlap=5)
-
-        return Chunker()
+        return Chunker(
+            min_duration=self.preset.chunk_min_duration_sec,
+            target_duration=self.preset.chunk_target_duration_sec,
+            max_duration=self.preset.chunk_max_duration_sec,
+            overlap=self.preset.chunk_overlap_sec,
+        )
 
     def _build_candidate_builder(self) -> CandidateBuilder:
-        if self.clip_mode == "short" and self.video_ratio == "portrait":
-            return CandidateBuilder(
-                max_candidate_duration_sec=60,
-                preferred_duration_sec=42,
-                min_candidate_duration_sec=24,
-                max_candidates_per_window=3,
-            )
-
-        if self.clip_mode == "short_serie" and self.video_ratio == "portrait":
-            return CandidateBuilder(
-                max_candidate_duration_sec=68,
-                preferred_duration_sec=48,
-                min_candidate_duration_sec=26,
-                max_candidates_per_window=3,
-            )
-
-        if self.clip_mode == "short":
-            return CandidateBuilder(
-                max_candidate_duration_sec=72,
-                preferred_duration_sec=50,
-                min_candidate_duration_sec=26,
-            )
-
-        if self.clip_mode == "short_serie":
-            return CandidateBuilder(
-                max_candidate_duration_sec=75,
-                preferred_duration_sec=52,
-                min_candidate_duration_sec=28,
-            )
-
-        if self.clip_mode == "long":
-            return CandidateBuilder(
-                max_candidate_duration_sec=120,
-                preferred_duration_sec=88,
-                min_candidate_duration_sec=40,
-                max_candidates_per_window=2,
-            )
-
         return CandidateBuilder(
-            max_candidate_duration_sec=settings.candidate_max_duration_sec,
+            max_candidate_duration_sec=self.preset.candidate_max_duration_sec,
+            preferred_duration_sec=self.preset.candidate_preferred_duration_sec,
+            min_candidate_duration_sec=self.preset.candidate_min_duration_sec,
+            max_candidates_per_window=self.preset.candidate_max_per_window,
         )
 
     def _build_scorer(self) -> Scorer:
-        if self.clip_mode == "short" and self.video_ratio == "portrait":
-            return Scorer(max_candidates=8, max_candidates_per_window=1, min_start_gap=18)
-
-        if self.clip_mode == "short_serie" and self.video_ratio == "portrait":
-            return Scorer(
-                max_candidates=8,
-                max_candidates_per_window=2,
-                min_start_gap=16,
-                prefer_thematic_continuity=True,
-                thematic_similarity_threshold=0.16,
-            )
-
-        if self.clip_mode == "long":
-            return Scorer(
-                max_candidates=6,
-                max_candidates_per_window=2,
-                min_start_gap=28,
-                overlap_iou_threshold=0.65,
-                prefer_thematic_continuity=True,
-                thematic_similarity_threshold=0.10,
-            )
-
-        return Scorer()
+        return Scorer(
+            max_candidates=self.preset.scorer_max_candidates,
+            max_candidates_per_window=self.preset.scorer_max_per_window,
+            min_start_gap=self.preset.scorer_min_start_gap_sec,
+            overlap_iou_threshold=self.preset.scorer_overlap_iou_threshold,
+            prefer_thematic_continuity=self.preset.scorer_prefer_thematic_continuity,
+            thematic_similarity_threshold=self.preset.scorer_thematic_similarity_threshold,
+        )
 
     # ==================================================
     # Logging helper
@@ -463,6 +405,7 @@ ERROR:
             job_id=self.job_id,
             clip_mode=self.clip_mode,
             video_ratio=self.video_ratio,
+            job_preset=self.preset.preset_id,
             content_language=str(self.language_metadata.get("output_language") or self.language_metadata.get("source_language") or "pt"),
         )
         self._mark_step("prompt_build", "completed", prompt_chars=len(prompt))
@@ -724,6 +667,10 @@ para continuar o processamento.
             hook_candidates=hook_candidates,
         )
         self.manual_response = self._normalize_response_schema(self.manual_response)
+        self.manual_response = self._enforce_response_preset_contract(
+            self.manual_response,
+            transcript_segments,
+        )
 
         if "shorts_content" not in self.manual_response:
             raise RuntimeError("Invalid response: shorts_content missing")
@@ -737,6 +684,18 @@ para continuar o processamento.
             self.manual_response.get("shorts_content", []),
             self.manual_response.get("post", {}),
         )
+        preset_validation = dict(self.manual_response.get("_response_validation") or {})
+        response_validation["warnings"] = list(preset_validation.get("warnings") or []) + list(
+            response_validation.get("warnings") or []
+        )
+        response_validation["corrections"] = list(preset_validation.get("corrections") or []) + list(
+            response_validation.get("corrections") or []
+        )
+        response_validation["preset_id"] = self.preset.preset_id
+        response_validation["render_intent"] = self.preset.render_intent
+        response_validation["max_final_videos"] = self.preset.max_final_videos
+        response_validation["min_final_duration_sec"] = self.preset.min_final_duration_sec
+        response_validation["max_final_duration_sec"] = self.preset.max_final_duration_sec
         self.manual_response["_response_validation"] = response_validation
         self._mark_step("validate_ai_response", "completed")
 
@@ -925,7 +884,7 @@ para continuar o processamento.
         flattened_cuts: list[dict] = []
         normalized_videos: list[dict] = []
 
-        for index, video in enumerate(final_videos, start=1):
+        for index, video in enumerate(final_videos[: self.preset.max_final_videos], start=1):
             if not isinstance(video, dict):
                 continue
 
@@ -993,7 +952,7 @@ para continuar o processamento.
         normalized_videos: list[dict] = []
         flattened_cuts: list[dict] = []
 
-        for index, video in enumerate(final_videos, start=1):
+        for index, video in enumerate(final_videos[: self.preset.max_final_videos], start=1):
             if not isinstance(video, dict):
                 continue
 
@@ -1062,6 +1021,193 @@ para continuar o processamento.
             normalized["final_videos"] = normalized_videos
             normalized["post"] = normalized_videos[0].get("post", {})
         return normalized
+
+    def _enforce_response_preset_contract(
+        self,
+        payload: dict,
+        transcript_segments: list[dict],
+    ) -> dict:
+        normalized = dict(payload or {})
+        warnings: list[str] = []
+        corrections: list[str] = []
+
+        final_videos = normalized.get("final_videos")
+        if isinstance(final_videos, list):
+            original_count = len(final_videos)
+            final_videos = [
+                video
+                for video in final_videos
+                if isinstance(video, dict)
+            ][: self.preset.max_final_videos]
+            if len(final_videos) < original_count:
+                corrections.append(
+                    f"final_videos: trimmed_to_preset_max:{self.preset.max_final_videos}"
+                )
+
+            enforced_videos: list[dict] = []
+            flattened_cuts: list[dict] = []
+            for index, raw_video in enumerate(final_videos, start=1):
+                video = dict(raw_video)
+                cuts = [
+                    dict(cut)
+                    for cut in list(video.get("shorts_content") or [])
+                    if isinstance(cut, dict)
+                ]
+                cuts = self._normalize_cuts_to_transcript(cuts, transcript_segments)
+                cuts = self._compact_low_signal_spans(cuts, transcript_segments)
+                post = self._normalize_post_payload(
+                    self._extract_video_post_payload(video),
+                    cuts,
+                )
+                cuts = self._align_first_cut_to_global_hook(cuts, transcript_segments, post)
+                cuts, video_corrections, video_warnings = self._enforce_cut_list_contract(
+                    cuts=cuts,
+                    transcript_segments=transcript_segments,
+                    video_index=index,
+                )
+                corrections.extend(video_corrections)
+                warnings.extend(video_warnings)
+                if not cuts:
+                    warnings.append(f"video_{index}: empty_after_preset_contract")
+                    continue
+
+                post = self._reconcile_post_hook_to_transcript(post, cuts, transcript_segments)
+                post = self._strengthen_post_hook(post, cuts, transcript_segments)
+                cuts = self._align_first_cut_to_global_hook(cuts, transcript_segments, post)
+
+                video_index = int(video.get("video_index") or index)
+                video["video_index"] = video_index
+                video["post"] = post
+                video["shorts_content"] = cuts
+                enforced_videos.append(video)
+                flattened_cuts.extend(
+                    {
+                        **cut,
+                        "_post": post,
+                        "_video_index": video_index,
+                    }
+                    for cut in cuts
+                )
+
+            if enforced_videos:
+                normalized["final_videos"] = enforced_videos
+                normalized["shorts_content"] = flattened_cuts
+                normalized["post"] = enforced_videos[0].get("post", {})
+        else:
+            cuts = [
+                dict(cut)
+                for cut in list(normalized.get("shorts_content") or [])
+                if isinstance(cut, dict)
+            ]
+            cuts = self._normalize_cuts_to_transcript(cuts, transcript_segments)
+            post = self._normalize_post_payload(normalized.get("post"), cuts)
+            cuts = self._align_first_cut_to_global_hook(cuts, transcript_segments, post)
+            cuts, cut_corrections, cut_warnings = self._enforce_cut_list_contract(
+                cuts=cuts,
+                transcript_segments=transcript_segments,
+                video_index=1,
+            )
+            corrections.extend(cut_corrections)
+            warnings.extend(cut_warnings)
+            normalized["shorts_content"] = cuts
+            normalized["post"] = post
+
+        existing_validation = dict(normalized.get("_response_validation") or {})
+        existing_validation.setdefault("warnings", [])
+        existing_validation.setdefault("corrections", [])
+        existing_validation["warnings"] = list(existing_validation.get("warnings") or []) + warnings
+        existing_validation["corrections"] = list(existing_validation.get("corrections") or []) + corrections
+        existing_validation["preset_id"] = self.preset.preset_id
+        existing_validation["render_intent"] = self.preset.render_intent
+        existing_validation["max_final_videos"] = self.preset.max_final_videos
+        existing_validation["min_final_duration_sec"] = self.preset.min_final_duration_sec
+        existing_validation["max_final_duration_sec"] = self.preset.max_final_duration_sec
+        normalized["_response_validation"] = existing_validation
+        return normalized
+
+    def _enforce_cut_list_contract(
+        self,
+        *,
+        cuts: list[dict],
+        transcript_segments: list[dict],
+        video_index: int,
+    ) -> tuple[list[dict], list[str], list[str]]:
+        corrections: list[str] = []
+        warnings: list[str] = []
+        valid_cuts: list[dict] = []
+
+        for cut_index, raw_cut in enumerate(cuts, start=1):
+            cut = dict(raw_cut)
+            start = float(cut.get("safe_start", cut.get("start", 0.0)) or 0.0)
+            end = float(cut.get("safe_end", cut.get("end", 0.0)) or 0.0)
+            if end <= start:
+                warnings.append(f"video_{video_index}.cut_{cut_index}: invalid_range")
+                continue
+            if (end - start) < self.preset.min_internal_cut_duration_sec:
+                warnings.append(f"video_{video_index}.cut_{cut_index}: below_min_internal_duration")
+                continue
+            cut["start"] = round(start, 2)
+            cut["safe_start"] = round(start, 2)
+            cut["end"] = round(end, 2)
+            cut["safe_end"] = round(end, 2)
+            valid_cuts.append(cut)
+
+        if not valid_cuts:
+            return [], corrections, warnings
+
+        if self.clip_mode == "short_serie":
+            before_count = len(valid_cuts)
+            valid_cuts = self._prune_disconnected_short_serie_cuts(valid_cuts)
+            if len(valid_cuts) < before_count:
+                corrections.append(f"video_{video_index}: pruned_disconnected_short_serie_cuts")
+
+        valid_cuts = self._strengthen_final_video_cuts(valid_cuts, transcript_segments, {})
+        total_before_cap = self._total_cuts_duration_sec(valid_cuts)
+        valid_cuts = self._cap_final_video_total_duration(valid_cuts, transcript_segments)
+        total_after_cap = self._total_cuts_duration_sec(valid_cuts)
+        if total_after_cap < total_before_cap:
+            corrections.append(f"video_{video_index}: capped_to_max_duration")
+
+        if total_after_cap < self.preset.min_final_duration_sec:
+            warnings.append(f"video_{video_index}: below_min_final_duration")
+            valid_cuts = self._try_extend_to_min_final_duration(
+                valid_cuts,
+                transcript_segments,
+            )
+            if self._total_cuts_duration_sec(valid_cuts) > total_after_cap:
+                corrections.append(f"video_{video_index}: extended_towards_min_duration")
+
+        final_total = self._total_cuts_duration_sec(valid_cuts)
+        if final_total < self.preset.min_final_duration_sec:
+            warnings.append(f"video_{video_index}: still_below_min_final_duration")
+        if final_total > self.preset.max_final_duration_sec:
+            warnings.append(f"video_{video_index}: over_max_final_duration")
+
+        return valid_cuts, corrections, warnings
+
+    def _try_extend_to_min_final_duration(
+        self,
+        cuts: list[dict],
+        transcript_segments: list[dict],
+    ) -> list[dict]:
+        if not cuts:
+            return cuts
+
+        adjusted = [dict(cut) for cut in cuts]
+        while self._total_cuts_duration_sec(adjusted) < self.preset.min_final_duration_sec:
+            remaining_budget = self.preset.max_final_duration_sec - self._total_cuts_duration_sec(adjusted)
+            if remaining_budget < self.preset.min_internal_cut_duration_sec:
+                break
+            continuation = self._build_followup_cut(
+                last_cut=adjusted[-1],
+                transcript_segments=transcript_segments,
+                remaining_budget=remaining_budget,
+            )
+            if continuation is None:
+                break
+            adjusted.append(continuation)
+
+        return self._cap_final_video_total_duration(adjusted, transcript_segments)
 
     def _cuts_from_span_ids(
         self,
@@ -1255,7 +1401,7 @@ para continuar o processamento.
                 continue
             total_duration += end - start
 
-        if total_duration > float(settings.qa_max_clip_duration_sec):
+        if total_duration > self._max_final_video_duration_sec():
             warnings.append("video: over_max_duration")
 
         continuity_warnings = self._short_serie_continuity_gaps(cuts)
@@ -1606,7 +1752,7 @@ para continuar o processamento.
             return cuts
 
         new_start = min(first_start, hook_start)
-        max_duration = float(settings.qa_max_clip_duration_sec)
+        max_duration = self._max_final_video_duration_sec()
         new_end = first_end
         if (new_end - new_start) > max_duration:
             new_end = min(first_end, new_start + max_duration)
@@ -1867,8 +2013,8 @@ para continuar o processamento.
             return cuts
 
         adjusted = [dict(cut) for cut in cuts]
-        bridge_gap_limit = float(settings.render_sequence_bridge_max_gap_sec)
-        max_duration = float(settings.qa_max_clip_duration_sec)
+        bridge_gap_limit = self.preset.sequence_bridge_max_gap_sec
+        max_duration = self._max_final_video_duration_sec()
 
         for index in range(len(adjusted) - 1):
             current = adjusted[index]
@@ -2103,8 +2249,8 @@ para continuar o processamento.
         if self._has_strong_closing_near_timestamp(transcript_segments, current_end):
             return current_end
 
-        max_duration = float(settings.qa_max_clip_duration_sec)
-        max_extension = float(settings.render_final_closure_extension_max_sec)
+        max_duration = self._max_final_video_duration_sec()
+        max_extension = self.preset.closure_extension_max_sec
         max_end = min(start + max_duration, current_end + max_extension)
 
         extension_candidate = current_end
@@ -2177,7 +2323,7 @@ para continuar o processamento.
         if previous_segment_start is None:
             return None
 
-        max_backfill = float(settings.render_context_backfill_max_sec)
+        max_backfill = self.preset.context_backfill_max_sec
         backfill_start = previous_segment_start
         for segment in reversed(transcript_segments):
             segment_start = float(segment.get("start", 0.0))
@@ -2319,14 +2465,13 @@ para continuar o processamento.
         }
 
     def _min_final_video_duration_sec(self) -> float:
-        if self.clip_mode == "long":
-            return float(settings.render_min_long_video_duration_sec)
-        return float(settings.render_min_final_video_duration_sec)
+        return self.preset.min_final_duration_sec
+
+    def _max_final_video_duration_sec(self) -> float:
+        return self.preset.max_final_duration_sec
 
     def _min_internal_cut_duration_sec(self) -> float:
-        if self.clip_mode == "long":
-            return float(settings.render_min_long_internal_cut_duration_sec)
-        return float(settings.render_min_internal_cut_duration_sec)
+        return self.preset.min_internal_cut_duration_sec
 
     def _total_cuts_duration_sec(self, cuts: list[dict]) -> float:
         return sum(
@@ -2534,7 +2679,7 @@ para continuar o processamento.
             lead_in = max(0.0, float(cold_open.get("duration_sec") or 0.0))
         except (TypeError, ValueError):
             return 0.0
-        playback_speed = max(0.5, float(settings.render_playback_speed or 1.0))
+        playback_speed = max(0.5, float(first_clip.get("playback_speed") or self.preset.render_playback_speed or 1.0))
         return lead_in / playback_speed
 
     def _render_final_reel(
@@ -2784,10 +2929,10 @@ para continuar o processamento.
         specs: list[dict],
         transcript_segments: list[dict],
     ) -> list[dict]:
-        if self.clip_mode != "long" or len(specs) < 2:
+        if not self.preset.is_long_form or len(specs) < 2:
             return specs
 
-        max_total = float(settings.qa_max_clip_duration_sec)
+        max_total = self._max_final_video_duration_sec()
         max_gap = float(settings.render_long_max_inter_cut_gap_sec)
         merged: list[dict] = []
         index = 0
@@ -2935,7 +3080,7 @@ para continuar o processamento.
         total_duration = self._total_cuts_duration_sec(adjusted)
 
         target_min_total = self._min_final_video_duration_sec()
-        max_total = float(settings.qa_max_clip_duration_sec)
+        max_total = self._max_final_video_duration_sec()
 
         last = adjusted[-1]
         last_start = float(last.get("safe_start", last.get("start", 0.0)))
@@ -2971,7 +3116,7 @@ para continuar o processamento.
         if not cuts:
             return cuts
 
-        max_total = float(settings.qa_max_clip_duration_sec)
+        max_total = self._max_final_video_duration_sec()
         adjusted = [dict(cut) for cut in cuts]
         total_duration = self._total_cuts_duration_sec(adjusted)
         if total_duration <= max_total:
@@ -3156,8 +3301,8 @@ para continuar o processamento.
         specs: list[dict],
         transcript_segments: list[dict],
     ) -> list[dict]:
-        if len(specs) >= 3:
-            return specs[:3]
+        if len(specs) >= self.preset.max_final_videos:
+            return specs[: self.preset.max_final_videos]
 
         candidates = self._load_prepare_candidates()
         if not candidates:
@@ -3175,7 +3320,7 @@ para continuar o processamento.
 
         next_index = len(specs) + 1
         for candidate in candidates:
-            if len(specs) >= 3:
+            if len(specs) >= self.preset.max_final_videos:
                 break
 
             start = float(candidate.get("start", 0.0))

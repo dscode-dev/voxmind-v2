@@ -33,6 +33,7 @@ class PreparePipeline:
         job_id: str,
         clip_mode: str = "short_serie",
         video_ratio: str = "portrait",
+        job_preset: str | None = None,
         build_ia: bool = False,
     ):
 
@@ -93,6 +94,7 @@ class PreparePipeline:
                 job_id=job_id,
                 clip_mode=clip_mode,
                 video_ratio=video_ratio,
+                job_preset=job_preset,
             )
 
             api_prompt_path = f"{workdir}/api_prompt.txt"
@@ -132,6 +134,7 @@ class PreparePipeline:
             job_id=job_id,
             clip_mode=clip_mode,
             video_ratio=video_ratio,
+            job_preset=job_preset,
         )
 
         prompt_path = f"{workdir}/prompt.txt"

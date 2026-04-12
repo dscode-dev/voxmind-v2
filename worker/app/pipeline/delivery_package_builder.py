@@ -1,6 +1,8 @@
 from pathlib import Path
 from typing import Dict, List
 
+from app.pipeline.presets import resolve_clip_preset
+
 
 class DeliveryPackageBuilder:
 
@@ -24,6 +26,7 @@ class DeliveryPackageBuilder:
         final_video_specs: List[Dict] | None = None,
         language_metadata: Dict | None = None,
     ) -> Dict:
+        preset = resolve_clip_preset(clip_mode, video_ratio)
         clips = []
         videos = []
         automation_by_index = {
@@ -84,8 +87,10 @@ class DeliveryPackageBuilder:
 
         return {
             "job_id": job_id,
-            "clip_mode": clip_mode,
-            "video_ratio": video_ratio,
+            "clip_mode": preset.clip_mode,
+            "video_ratio": preset.video_ratio,
+            "preset_id": preset.preset_id,
+            "render_intent": preset.render_intent,
             "delivery_status": self._resolve_delivery_status(qa_report),
             "qa_decision": qa_report.get("decision") if qa_report else None,
             "response_validation": response_validation or {},

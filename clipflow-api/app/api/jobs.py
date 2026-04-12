@@ -51,6 +51,7 @@ def _worker_queue() -> redis.Redis:
 class CreateJobInput(BaseModel):
     source_url: str
     product_id: str | None = None
+    job_preset: str | None = Field(default=None)
     clip_mode: str = Field(default="short_serie")
     video_ratio: str = Field(default="portrait")
     build_ia: bool = Field(default=False)
@@ -86,6 +87,9 @@ def _job_config(job: ClipJob) -> dict:
     metadata = dict(job.metadata_json or {})
     config = dict(metadata.get("job_config") or {})
     return {
+        "job_preset": config.get("job_preset") or config.get("preset_id") or metadata.get("job_preset"),
+        "preset_id": config.get("preset_id") or config.get("job_preset") or metadata.get("preset_id"),
+        "render_intent": config.get("render_intent") or metadata.get("render_intent"),
         "clip_mode": str(config.get("clip_mode") or metadata.get("clip_mode") or "short_serie"),
         "video_ratio": str(config.get("video_ratio") or metadata.get("video_ratio") or "portrait"),
         "build_ia": bool(config.get("build_ia") if config.get("build_ia") is not None else metadata.get("build_ia", False)),
@@ -94,6 +98,71 @@ def _job_config(job: ClipJob) -> dict:
         "subtitle_language": config.get("subtitle_language") or metadata.get("subtitle_language"),
         "prompt_mode": str(config.get("prompt_mode") or job.prompt_mode or "manual"),
     }
+
+
+def _resolve_job_preset_config(
+    *,
+    job_preset: str | None,
+    clip_mode: str,
+    video_ratio: str,
+) -> dict:
+    requested = str(job_preset or "").strip().lower().replace("-", "_")
+    mapping = {
+        "short_individual": {
+            "job_preset": "short_individual",
+            "preset_id": "short_individual_portrait",
+            "clip_mode": "short",
+            "video_ratio": "portrait",
+            "render_intent": "social_ready_short_form",
+        },
+        "short_series": {
+            "job_preset": "short_series",
+            "preset_id": "short_series_portrait",
+            "clip_mode": "short_serie",
+            "video_ratio": "portrait",
+            "render_intent": "social_ready_short_series",
+        },
+        "short_serie": {
+            "job_preset": "short_series",
+            "preset_id": "short_series_portrait",
+            "clip_mode": "short_serie",
+            "video_ratio": "portrait",
+            "render_intent": "social_ready_short_series",
+        },
+        "long_single": {
+            "job_preset": "long_single",
+            "preset_id": "long_single_landscape",
+            "clip_mode": "long",
+            "video_ratio": "landscape",
+            "render_intent": "editorial_long_form_excerpt",
+        },
+        "long": {
+            "job_preset": "long_single",
+            "preset_id": "long_single_landscape",
+            "clip_mode": "long",
+            "video_ratio": "landscape",
+            "render_intent": "editorial_long_form_excerpt",
+        },
+        "long_series": {
+            "job_preset": "long_series",
+            "preset_id": "long_series_landscape",
+            "clip_mode": "long_series",
+            "video_ratio": "landscape",
+            "render_intent": "editorial_long_form_excerpt",
+        },
+    }
+    if requested:
+        return mapping.get(requested, mapping["short_series"])
+
+    normalized_mode = str(clip_mode or "short_serie").strip().lower().replace("-", "_")
+    normalized_ratio = str(video_ratio or "portrait").strip().lower().replace("-", "_")
+    if normalized_mode == "short":
+        return {**mapping["short_individual"], "video_ratio": normalized_ratio}
+    if normalized_mode in {"long", "long_single"}:
+        return mapping["long_single"]
+    if normalized_mode in {"long_series", "long_serie"}:
+        return mapping["long_series"]
+    return {**mapping["short_series"], "video_ratio": normalized_ratio}
 
 
 def _ensure_internal_default_product(db: Session) -> BillingProduct:
@@ -173,14 +242,17 @@ def _publish_job(
     pipeline_stage: str,
     manual_response: dict | None = None,
 ) -> None:
+    config = _job_config(job)
     payload = {
         "video_url": job.source_url,
         "job_id": str(job.id),
         "pipeline_stage": pipeline_stage,
         "manual_response": manual_response,
-        "clip_mode": _job_config(job).get("clip_mode", "short_serie"),
-        "video_ratio": _job_config(job).get("video_ratio", "portrait"),
-        "build_ia": bool(_job_config(job).get("build_ia", False)),
+        "job_preset": config.get("job_preset") or config.get("preset_id"),
+        "preset_id": config.get("preset_id"),
+        "clip_mode": config.get("clip_mode", "short_serie"),
+        "video_ratio": config.get("video_ratio", "portrait"),
+        "build_ia": bool(config.get("build_ia", False)),
     }
     _worker_queue().lpush(settings.voxmind_redis_queue, json.dumps(payload))
 
@@ -255,6 +327,12 @@ def create_job(
     user: User = Depends(get_current_user),
 ):
 
+    preset_config = _resolve_job_preset_config(
+        job_preset=payload.job_preset,
+        clip_mode=payload.clip_mode,
+        video_ratio=payload.video_ratio,
+    )
+
     product = None
     if payload.product_id:
         product = db.query(BillingProduct).filter(BillingProduct.id == payload.product_id).first()
@@ -292,8 +370,11 @@ def create_job(
         queued_at=datetime.now(timezone.utc),
         metadata_json={
             "job_config": {
-                "clip_mode": payload.clip_mode,
-                "video_ratio": payload.video_ratio,
+                "job_preset": preset_config["job_preset"],
+                "preset_id": preset_config["preset_id"],
+                "render_intent": preset_config["render_intent"],
+                "clip_mode": preset_config["clip_mode"],
+                "video_ratio": preset_config["video_ratio"],
                 "build_ia": payload.build_ia,
                 "language_mode": payload.language_mode,
                 "output_language": payload.output_language,
@@ -313,8 +394,10 @@ def create_job(
             stage="prepare",
             message="Job criado e enfileirado para processamento",
             payload_json={
-                "clip_mode": payload.clip_mode,
-                "video_ratio": payload.video_ratio,
+                "job_preset": preset_config["job_preset"],
+                "preset_id": preset_config["preset_id"],
+                "clip_mode": preset_config["clip_mode"],
+                "video_ratio": preset_config["video_ratio"],
                 "build_ia": payload.build_ia,
             },
         )

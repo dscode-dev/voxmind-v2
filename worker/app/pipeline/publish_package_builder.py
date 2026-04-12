@@ -1,6 +1,8 @@
 from pathlib import Path
 from typing import Dict, List
 
+from app.pipeline.presets import resolve_clip_preset
+
 
 class PublishPackageBuilder:
 
@@ -20,6 +22,7 @@ class PublishPackageBuilder:
         final_video_specs: List[Dict] | None = None,
         language_metadata: Dict | None = None,
     ) -> Dict:
+        preset = resolve_clip_preset(clip_mode, video_ratio)
         primary_clip = cuts[0] if cuts else {}
         post_payload = post_payload or {}
         ordered_hashtags = self._collect_hashtags(cuts, post_payload)
@@ -32,8 +35,10 @@ class PublishPackageBuilder:
 
         return {
             "job_id": job_id,
-            "clip_mode": clip_mode,
-            "video_ratio": video_ratio,
+            "clip_mode": preset.clip_mode,
+            "video_ratio": preset.video_ratio,
+            "preset_id": preset.preset_id,
+            "render_intent": preset.render_intent,
             "publish_status": self._publish_status(qa_report, final_reel_path, final_clip_files),
             "language": language_metadata or {},
             "primary_hook": primary_hook,

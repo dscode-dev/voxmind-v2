@@ -35,7 +35,7 @@ def build_transcript_context(
         return full_limited_text
 
     if not candidates:
-        return _truncate_lines(full_limited_text, max_chars)
+        return _truncate_lines_balanced(full_limited_text, max_chars)
 
     prioritized_candidates = _prioritize_prompt_candidates(
         candidates,
@@ -493,3 +493,62 @@ def _truncate_lines(text: str, max_chars: int) -> str:
         current_length += line_length
 
     return "\n".join(selected)
+
+
+def _truncate_lines_balanced(text: str, max_chars: int) -> str:
+    if len(text) <= max_chars:
+        return text
+
+    lines = [line for line in text.splitlines() if line.strip()]
+    if not lines:
+        return text[:max_chars]
+
+    if len(lines) <= 3:
+        return _truncate_lines(text, max_chars)
+
+    marker_head = "\n...\n[transcript middle excerpt]\n"
+    marker_tail = "\n...\n[transcript final excerpt]\n"
+    available = max(1, max_chars - len(marker_head) - len(marker_tail))
+    head_budget = int(available * 0.38)
+    middle_budget = int(available * 0.32)
+    tail_budget = available - head_budget - middle_budget
+
+    middle_index = max(0, (len(lines) // 2) - 1)
+    head = _take_lines_from_start(lines, head_budget)
+    middle = _take_lines_from_start(lines[middle_index:], middle_budget)
+    tail = _take_lines_from_end(lines, tail_budget)
+
+    balanced = "\n".join(head) + marker_head + "\n".join(middle) + marker_tail + "\n".join(tail)
+    if len(balanced) <= max_chars:
+        return balanced
+
+    return _truncate_lines(balanced, max_chars)
+
+
+def _take_lines_from_start(lines: List[str], max_chars: int) -> List[str]:
+    selected: List[str] = []
+    current_length = 0
+
+    for line in lines:
+        line_length = len(line) + (1 if selected else 0)
+        if selected and current_length + line_length > max_chars:
+            break
+        selected.append(line)
+        current_length += line_length
+
+    return selected
+
+
+def _take_lines_from_end(lines: List[str], max_chars: int) -> List[str]:
+    selected: List[str] = []
+    current_length = 0
+
+    for line in reversed(lines):
+        line_length = len(line) + (1 if selected else 0)
+        if selected and current_length + line_length > max_chars:
+            break
+        selected.append(line)
+        current_length += line_length
+
+    selected.reverse()
+    return selected

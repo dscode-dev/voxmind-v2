@@ -22,6 +22,7 @@ class QueuePublisher:
         manual_response: dict | None = None,
         clip_mode: str = "short_serie",
         video_ratio: str = "portrait",
+        job_preset: str | None = None,
         build_ia: bool = False,
     ):
 
@@ -32,6 +33,7 @@ class QueuePublisher:
             "manual_response": manual_response,
             "clip_mode": clip_mode,
             "video_ratio": video_ratio,
+            "job_preset": job_preset,
             "build_ia": build_ia,
         }
 

@@ -21,6 +21,7 @@ class PromptWorker:
 
         clip_mode = message.get("clip_mode", "short_serie")
         video_ratio = message.get("video_ratio", "portrait")
+        job_preset = message.get("job_preset") or message.get("preset_id")
 
         build_ia = message.get("build_ia", False)
 
@@ -32,6 +33,7 @@ class PromptWorker:
                 candidates=candidates,
                 clip_mode=clip_mode,
                 video_ratio=video_ratio,
+                job_preset=job_preset,
             )
 
             ai_response = self.ai_client.generate(user_prompt)
@@ -47,6 +49,7 @@ class PromptWorker:
             candidates=candidates,
             clip_mode=clip_mode,
             video_ratio=video_ratio,
+            job_preset=job_preset,
         )
 
         return json.loads(manual_prompt)

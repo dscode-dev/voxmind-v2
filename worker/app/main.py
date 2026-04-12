@@ -8,6 +8,7 @@ from pathlib import Path
 from app.integrations.clipflow_api_client import ClipFlowApiClient
 from app.observability import configure_logging, get_logger
 from app.pipeline.pipeline import Pipeline
+from app.pipeline.presets import resolve_job_preset
 from app.settings import settings
 from app.storage.minio_client import MinioStorage
 
@@ -102,18 +103,32 @@ def run_pipeline(job: dict):
     # ==========================================
 
     settings.pipeline_stage = pipeline_stage
+    preset = resolve_job_preset(
+        job.get("job_preset") or job.get("preset_id"),
+        job.get("clip_mode", "short_serie"),
+        job.get("video_ratio", "portrait"),
+    )
 
     logger.info(
         f"Starting pipeline {job_id} ({pipeline_stage})",
-        extra={"job_id": job_id, "pipeline_stage": pipeline_stage, "step": "pipeline", "status": "started"},
+        extra={
+            "job_id": job_id,
+            "pipeline_stage": pipeline_stage,
+            "step": "pipeline",
+            "status": "started",
+            "preset_id": preset.preset_id,
+            "clip_mode": preset.clip_mode,
+            "video_ratio": preset.video_ratio,
+        },
     )
 
     pipeline = Pipeline(
         video_url=video_url,
         job_id=job_id,
         manual_response=manual_response,
-        clip_mode=job.get("clip_mode", "short_serie"),
-        video_ratio=job.get("video_ratio", "portrait"),
+        clip_mode=preset.clip_mode,
+        video_ratio=preset.video_ratio,
+        job_preset=preset.preset_id,
         build_ia=bool(job.get("build_ia", False)),
     )
 

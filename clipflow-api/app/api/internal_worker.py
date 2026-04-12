@@ -35,6 +35,9 @@ def _job_config(job: ClipJob) -> dict:
     metadata = dict(job.metadata_json or {})
     config = dict(metadata.get("job_config") or {})
     return {
+        "job_preset": config.get("job_preset") or config.get("preset_id") or metadata.get("job_preset"),
+        "preset_id": config.get("preset_id") or config.get("job_preset") or metadata.get("preset_id"),
+        "render_intent": config.get("render_intent") or metadata.get("render_intent"),
         "clip_mode": str(config.get("clip_mode") or metadata.get("clip_mode") or "short_serie"),
         "video_ratio": str(config.get("video_ratio") or metadata.get("video_ratio") or "portrait"),
         "build_ia": bool(config.get("build_ia") if config.get("build_ia") is not None else metadata.get("build_ia", False)),
@@ -265,6 +268,15 @@ def claim_due_private_scheduler_runs(
                     "job_id": str(job.id),
                     "video_url": run.source_url,
                     "pipeline_stage": "prepare",
+                    "job_preset": (
+                        "long_series"
+                        if profile.clip_mode == "long_series"
+                        else "long_single"
+                        if profile.clip_mode == "long"
+                        else "short_individual"
+                        if profile.clip_mode == "short"
+                        else "short_series"
+                    ),
                     "clip_mode": profile.clip_mode,
                     "video_ratio": profile.video_ratio,
                 },

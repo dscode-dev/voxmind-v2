@@ -254,20 +254,36 @@ class Settings(BaseSettings):
         alias="RENDER_MIN_FINAL_VIDEO_DURATION_SEC"
     )
     render_min_long_video_duration_sec: int = Field(
-        default=120,
+        default=180,
         alias="RENDER_MIN_LONG_VIDEO_DURATION_SEC"
+    )
+    render_target_long_video_duration_sec: int = Field(
+        default=300,
+        alias="RENDER_TARGET_LONG_VIDEO_DURATION_SEC"
+    )
+    render_max_long_video_duration_sec: int = Field(
+        default=420,
+        alias="RENDER_MAX_LONG_VIDEO_DURATION_SEC"
     )
     render_min_internal_cut_duration_sec: int = Field(
         default=12,
         alias="RENDER_MIN_INTERNAL_CUT_DURATION_SEC"
     )
     render_min_long_internal_cut_duration_sec: int = Field(
-        default=28,
+        default=45,
         alias="RENDER_MIN_LONG_INTERNAL_CUT_DURATION_SEC"
     )
     render_long_max_inter_cut_gap_sec: float = Field(
-        default=45.0,
+        default=90.0,
         alias="RENDER_LONG_MAX_INTER_CUT_GAP_SEC"
+    )
+    render_long_context_backfill_max_sec: float = Field(
+        default=12.0,
+        alias="RENDER_LONG_CONTEXT_BACKFILL_MAX_SEC"
+    )
+    render_long_closure_extension_max_sec: float = Field(
+        default=45.0,
+        alias="RENDER_LONG_CLOSURE_EXTENSION_MAX_SEC"
     )
     render_playback_speed: float = Field(
         default=1.15,

@@ -5,8 +5,15 @@ from typing import Dict, List
 
 class SubtitleBuilder:
 
-    def __init__(self, playback_speed: float = 1.0):
+    def __init__(
+        self,
+        playback_speed: float = 1.0,
+        video_ratio: str = "portrait",
+        caption_style: str = "clean_subtitles",
+    ):
         self.playback_speed = max(0.5, float(playback_speed or 1.0))
+        self.video_ratio = str(video_ratio or "portrait").strip().lower()
+        self.caption_style = str(caption_style or "clean_subtitles").strip().lower()
 
     def build_clip_srt(
         self,
@@ -261,17 +268,25 @@ class SubtitleBuilder:
         return merged
 
     def _ass_document(self, events: List[Dict]) -> str:
-        header = """[Script Info]
+        play_res_x = 1920 if self.video_ratio == "landscape" else 1080
+        play_res_y = 1080 if self.video_ratio == "landscape" else 1920
+        font_size = 58 if self.video_ratio == "landscape" else 76
+        margin_v = 74 if self.video_ratio == "landscape" else 190
+        if self.caption_style == "editorial_subtitles":
+            font_size = 54 if self.video_ratio == "landscape" else 72
+            margin_v = 82 if self.video_ratio == "landscape" else 210
+
+        header = f"""[Script Info]
 ScriptType: v4.00+
 WrapStyle: 2
 ScaledBorderAndShadow: yes
 YCbCr Matrix: TV.601
-PlayResX: 1080
-PlayResY: 1920
+PlayResX: {play_res_x}
+PlayResY: {play_res_y}
 
 [V4+ Styles]
 Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding
-Style: VoxMind,DejaVu Sans,76,&H00000000,&H00000000,&H00FFFFFF,&H00FFFFFF,1,0,0,0,100,100,1.2,0,3,1,0,2,80,80,190,1
+Style: VoxMind,DejaVu Sans,{font_size},&H00000000,&H00000000,&H00FFFFFF,&H00FFFFFF,1,0,0,0,100,100,1.2,0,3,1,0,2,80,80,{margin_v},1
 
 [Events]
 Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text

@@ -275,21 +275,15 @@ class FinalVideoRenderer:
         clip_plan: Dict,
     ) -> None:
         video_filters: List[str] = ["fps=30"]
+        playback_speed = max(0.5, float(clip_plan.get("playback_speed") or settings.render_playback_speed or 1.0))
         if settings.render_visual_filter_enabled:
-            video_filters.extend(
-                [
-                    "eq=contrast=1.07:brightness=0.03:saturation=1.12:gamma=0.97",
-                    "vignette=angle=PI/18",
-                    "unsharp=5:5:0.5:5:5:0.0",
-                    "noise=alls=3:allf=t+u",
-                ]
-            )
-        if settings.render_playback_speed and abs(settings.render_playback_speed - 1.0) > 0.01:
-            video_filters.append(f"setpts=PTS/{settings.render_playback_speed}")
+            video_filters.extend(self._visual_filter_chain(str(clip_plan.get("visual_filter_profile") or "")))
+        if abs(playback_speed - 1.0) > 0.01:
+            video_filters.append(f"setpts=PTS/{playback_speed}")
         video_filters.append("format=yuv420p")
         audio_filters: List[str] = []
-        if settings.render_playback_speed and abs(settings.render_playback_speed - 1.0) > 0.01:
-            audio_filters.append(f"atempo={settings.render_playback_speed}")
+        if abs(playback_speed - 1.0) > 0.01:
+            audio_filters.append(f"atempo={playback_speed}")
 
         if not bool(clip_plan.get("overlay_enabled", False)):
             command = [
@@ -418,6 +412,21 @@ class FinalVideoRenderer:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+
+    def _visual_filter_chain(self, profile: str) -> List[str]:
+        if profile == "long_soft_vignette":
+            return [
+                "eq=contrast=1.025:brightness=0.01:saturation=1.035:gamma=0.995",
+                "vignette=angle=PI/28",
+                "unsharp=3:3:0.22:3:3:0.0",
+            ]
+
+        return [
+            "eq=contrast=1.07:brightness=0.03:saturation=1.12:gamma=0.97",
+            "vignette=angle=PI/18",
+            "unsharp=5:5:0.5:5:5:0.0",
+            "noise=alls=3:allf=t+u",
+        ]
 
     def _build_drawtext(self, *, text: str, caption_style: str, text_timing: Dict) -> str:
         safe_text = self._escape_drawtext(text)
@@ -601,7 +610,7 @@ class FinalVideoRenderer:
         if source_duration <= 0.0 or relative_start_sec >= source_duration:
             return prepared_files, prepared_durations, transition_plans, False
 
-        playback_speed = max(0.5, float(settings.render_playback_speed or 1.0))
+        playback_speed = max(0.5, float((first_clip_plan or {}).get("playback_speed") or settings.render_playback_speed or 1.0))
         prepared_relative_start_sec = relative_start_sec / playback_speed
         prepared_duration_sec = duration_sec / playback_speed
         if prepared_relative_start_sec >= source_duration:

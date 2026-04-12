@@ -5,6 +5,7 @@ from app.prompts.prompt_context import (
     build_span_catalog_context,
     build_transcript_context,
 )
+from app.pipeline.presets import resolve_job_preset
 
 
 class ApiPromptBuilder:
@@ -14,6 +15,8 @@ class ApiPromptBuilder:
 
         self.prompt_long_max_segments_per_candidate = settings.prompt_long_max_segments_per_candidate
         self.render_min_long_video_duration_sec = settings.render_min_long_video_duration_sec
+        self.render_target_long_video_duration_sec = settings.render_target_long_video_duration_sec
+        self.render_max_long_video_duration_sec = settings.render_max_long_video_duration_sec
         if max_context_chars is not None:
             self.max_context_chars = max_context_chars
             return
@@ -29,16 +32,18 @@ class ApiPromptBuilder:
         job_id: str,
         clip_mode: str = "short_serie",
         video_ratio: str = "portrait",
+        job_preset: str | None = None,
     ) -> str:
+        preset = resolve_job_preset(job_preset, clip_mode, video_ratio)
+        clip_mode = preset.clip_mode
+        video_ratio = preset.video_ratio
         transcript_context = build_transcript_context(
             transcript=transcript,
             candidates=[],
             max_chars=int(self.max_context_chars * 0.80),
-            max_segments_per_candidate=(
-                self.prompt_long_max_segments_per_candidate if clip_mode == "long" else 18
-            ),
-            context_padding_sec=48 if clip_mode == "long" else 32,
-            min_total_segments=42 if clip_mode == "long" else 28,
+            max_segments_per_candidate=preset.prompt_max_segments_per_candidate,
+            context_padding_sec=preset.prompt_context_padding_sec,
+            min_total_segments=preset.prompt_min_total_segments,
         )
         span_catalog_context = build_span_catalog_context(
             spans=span_catalog,
@@ -49,13 +54,14 @@ class ApiPromptBuilder:
             max_chars=int(self.max_context_chars * 0.08),
         )
 
-        if clip_mode == "long":
+        if preset.is_long_form:
             return self._build_long_prompt(
                 transcript_context=transcript_context,
                 span_catalog_context=span_catalog_context,
                 hook_candidate_context=hook_candidate_context,
                 job_id=job_id,
                 video_ratio=video_ratio,
+                max_final_videos=preset.max_final_videos,
             )
 
         return f"""
@@ -196,6 +202,7 @@ If there is only enough strong material for 1 or 2 good final videos, return onl
         hook_candidate_context: str,
         job_id: str,
         video_ratio: str,
+        max_final_videos: int,
     ) -> str:
         return f"""
 JOB CONFIGURATION
@@ -212,11 +219,12 @@ Treat this as normal-video excerpt editing, not short-form editing.
 MANDATORY RULES
 
 - Produce 1 final video by default.
-- Only produce 2 final videos if there are two clearly distinct, complete and strong chapters.
+- Produce at most {max_final_videos} final video(s).
+{self._build_long_count_rule(max_final_videos)}
 - Never split one connected argument into multiple final videos just to increase the count.
 - Prefer 1 very strong final video over 2 mediocre ones.
 - Each final video must feel like a robust excerpt from a normal video.
-- Preserve more setup, development and closure than a short-form output.
+- Preserve setup, development, examples and closure.
 - Prefer 2 or 3 long connected cuts when that improves context and ending.
 - Use a single cut only when one block alone already delivers enough context and a proper conclusion.
 - Never start in the middle of a sentence.
@@ -225,7 +233,10 @@ MANDATORY RULES
 - Avoid abrupt topic jumps.
 - Avoid over-compressing the material into a shorts-like structure.
 - Avoid cuts that feel like shorts, reels or tiktok highlights.
-- In `long`, each cut should feel like part of a larger continuous excerpt, not a compressed highlight.
+- In `long`, each cut should feel like part of a larger YouTube/podcast excerpt, not a compressed highlight.
+- The first cut should establish context before the main thesis, unless the hook already contains all necessary setup.
+- The final cut must end with a conclusion, answer, turn or clear closing beat.
+- Do not end the final video on an unanswered question; include the answer immediately after it or choose an earlier/later ending.
 - If there is useful continuation right after the first cut, keep that continuation inside the same final video.
 - `post.hook` must be fully contained inside the first selected cut.
 - Prefer selecting the hook with `hook_id` from `HOOK CANDIDATES`.
@@ -287,13 +298,13 @@ Use `shorts_content` only as a complement or fallback.
   ]
 }}
 
-Return `final_videos` with at most 2 separate final videos.
+Return `final_videos` with at most {max_final_videos} separate final video(s).
 Each `final_videos[i]` must directly include `title`, `hook_id`, `span_ids`, `hook`, `hook_start`, `hook_end`, `description`, `hashtags`, `thumbnail`, `soundtrack_suggestion`, `speaker_focus` and `shorts_content`.
-Prefer final videos around 100 to 120 seconds when the material supports it.
-Validate the total duration of each `final_video` before responding: it must stay between {self.render_min_long_video_duration_sec} and 120 seconds.
-If any `final_video` exceeds 120 seconds, shorten the last cut of that video before responding.
+Prefer final videos around {self.render_target_long_video_duration_sec} seconds when the material supports it.
+Validate the total duration of each `final_video` before responding: it must stay between {self.render_min_long_video_duration_sec} and {self.render_max_long_video_duration_sec} seconds.
+If any `final_video` exceeds {self.render_max_long_video_duration_sec} seconds, shorten the last cut of that video before responding.
 By default, return only 1 `final_video`.
-Return 2 `final_videos` only if the material clearly contains two distinct, complete and non-redundant chapters.
+{self._build_long_final_instruction(max_final_videos)}
 In `long`, prefer 2 or 3 larger connected cuts inside the same `final_video` instead of several short-like videos.
 If there is only enough strong material for 1 good final video, return only 1.
 """
@@ -307,7 +318,7 @@ SHORT
 - Prefer a complete beginning, development and ending.
 """
 
-        if clip_mode == "long":
+        if clip_mode in {"long", "long_series"}:
             return """
 LONG
 - Generate connected blocks for a larger coherent narrative.
@@ -323,11 +334,21 @@ SHORT_SERIE
 """
 
     def _response_min_total_duration(self, clip_mode: str) -> int:
-        if clip_mode == "long":
+        if clip_mode in {"long", "long_series"}:
             return int(self.render_min_long_video_duration_sec)
         return 60
 
     def _preferred_duration_band(self, clip_mode: str) -> str:
-        if clip_mode == "long":
-            return "100 to 120 seconds"
+        if clip_mode in {"long", "long_series"}:
+            return f"around {self.render_target_long_video_duration_sec} seconds"
         return "60 to 90 seconds"
+
+    def _build_long_count_rule(self, max_final_videos: int) -> str:
+        if max_final_videos <= 1:
+            return "- Do not generate a second final video; concentrate the strongest arc into one cohesive long excerpt."
+        return "- Only produce 2 final videos if there are two clearly distinct, complete and strong chapters."
+
+    def _build_long_final_instruction(self, max_final_videos: int) -> str:
+        if max_final_videos <= 1:
+            return "Return only 1 `final_video`; if there is more strong material, include it as connected cuts inside the same final video."
+        return "Return 2 `final_videos` only if the material clearly contains two distinct, complete and non-redundant chapters."

@@ -1,6 +1,8 @@
 import re
 from typing import Dict, List
 
+from app.pipeline.presets import resolve_clip_preset
+
 
 DEFAULT_TRANSITION = "hard_cut"
 DEFAULT_CAPTION_STYLE = "clean_subtitles"
@@ -25,6 +27,7 @@ class RenderPlanBuilder:
         soundtrack: Dict | None = None,
         qa_report: Dict | None = None,
     ) -> Dict:
+        preset = resolve_clip_preset(clip_mode, video_ratio)
         qa_by_index = {
             int(clip.get("clip_index", 0)): clip
             for clip in (qa_report or {}).get("clips", [])
@@ -44,6 +47,10 @@ class RenderPlanBuilder:
                 post_payload=post_payload or {},
                 transcript_segments=transcript_segments or [],
             )
+            transition_after = self._normalized_transition(
+                cut.get("transition_after"),
+                transition_profile=preset.transition_profile,
+            )
             clips.append(
                 {
                     "clip_index": index,
@@ -53,9 +60,14 @@ class RenderPlanBuilder:
                     "safe_end": float(cut.get("safe_end", end)),
                     "duration": max(0.0, end - start),
                     "speaker_focus": cut.get("speaker_focus"),
-                    "transition_after": self._normalized_transition(cut.get("transition_after")),
-                    "transition_duration_ms": self._transition_duration_ms(cut.get("transition_after")),
-                    "caption_style": cut.get("caption_style") or DEFAULT_CAPTION_STYLE,
+                    "transition_after": transition_after,
+                    "transition_duration_ms": self._transition_duration_ms(
+                        transition_after,
+                        transition_profile=preset.transition_profile,
+                    ),
+                    "caption_style": cut.get("caption_style") or preset.caption_style,
+                    "playback_speed": preset.render_playback_speed,
+                    "visual_filter_profile": preset.visual_filter_profile,
                     "overlay_enabled": False,
                     "on_screen_text": cut.get("on_screen_text") or "",
                     "emphasis_words": cut.get("emphasis_words", []),
@@ -69,31 +81,48 @@ class RenderPlanBuilder:
 
         return {
             "job_id": job_id,
-            "clip_mode": clip_mode,
-            "video_ratio": video_ratio,
-            "render_intent": "social_ready_short_form",
-            "global_style": self._global_style(video_ratio),
+            "clip_mode": preset.clip_mode,
+            "video_ratio": preset.video_ratio,
+            "preset_id": preset.preset_id,
+            "render_intent": preset.render_intent,
+            "global_style": self._global_style(preset.video_ratio, preset=preset),
+            "playback_speed": preset.render_playback_speed,
+            "visual_filter_profile": preset.visual_filter_profile,
+            "transition_profile": preset.transition_profile,
             "soundtrack": soundtrack or {},
             "clips": clips,
         }
 
-    def _global_style(self, video_ratio: str) -> Dict:
+    def _global_style(self, video_ratio: str, *, preset) -> Dict:
         if video_ratio == "portrait":
             return {
                 "aspect_ratio": "9:16",
                 "caption_position": "lower_third_center",
                 "hook_text_treatment": "bold_punchy",
                 "default_transition": DEFAULT_TRANSITION,
+                "caption_style": preset.caption_style,
             }
 
         return {
             "aspect_ratio": "16:9",
-            "caption_position": "bottom_center",
+            "caption_position": "bottom_center" if not preset.is_long_form else "safe_lower_third",
             "hook_text_treatment": "clean",
-            "default_transition": DEFAULT_TRANSITION,
+            "default_transition": "fade" if preset.is_long_form else DEFAULT_TRANSITION,
+            "caption_style": preset.caption_style,
         }
 
-    def _transition_duration_ms(self, transition_after: str | None) -> int:
+    def _transition_duration_ms(self, transition_after: str | None, *, transition_profile: str) -> int:
+        transition = str(transition_after or "").strip().lower()
+        if transition_profile == "long_editorial":
+            mapping = {
+                "none": 0,
+                "hard_cut": 0,
+                "punch_in": 0,
+                "whoosh": 0,
+                "fade": 180,
+            }
+            return mapping.get(transition, 0)
+
         mapping = {
             "none": 0,
             "hard_cut": 0,
@@ -101,16 +130,20 @@ class RenderPlanBuilder:
             "whoosh": 240,
             "fade": 320,
         }
-        return mapping.get(self._normalized_transition(transition_after), 0)
+        return mapping.get(transition, 0)
 
-    def _normalized_transition(self, transition_after: str | None) -> str:
+    def _normalized_transition(self, transition_after: str | None, *, transition_profile: str) -> str:
         transition = str(transition_after or DEFAULT_TRANSITION).strip().lower()
         allowed = {"none", "hard_cut", "punch_in", "whoosh", "fade"}
         if transition in allowed:
+            if transition_profile == "long_editorial":
+                if transition in {"punch_in", "whoosh"}:
+                    return "fade"
+                return transition
             if transition in {"none", "hard_cut"}:
                 return "fade"
             return transition
-        return DEFAULT_TRANSITION
+        return "fade" if transition_profile == "long_editorial" else DEFAULT_TRANSITION
 
     def _text_timing(self, cut: Dict) -> Dict:
         start = float(cut.get("safe_start", cut.get("start", 0.0)))
