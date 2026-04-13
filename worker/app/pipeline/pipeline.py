@@ -1,4 +1,5 @@
 import ast
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -342,17 +343,31 @@ ERROR:
         self._log("🧠 Transcribing video in segments...")
         self._mark_step("transcribe", "started")
 
-        segments = self.transcriber.transcribe(video_path)
-        self.language_metadata = self._resolve_language_metadata(self.transcriber.last_transcription_info)
+        cache_key = self._transcript_cache_key(video_path)
+        cached_payload = self._load_transcript_cache(cache_key)
+        if cached_payload:
+            raw_segments = list(cached_payload.get("raw_segments") or [])
+            segments = list(cached_payload.get("segments") or [])
+            self.language_metadata = dict(cached_payload.get("language_metadata") or {})
+            self._restore_cached_speaker_turns(cached_payload)
+            self._mark_step("transcribe", "completed", segment_count=len(raw_segments), cache_hit=True)
+        else:
+            segments = self.transcriber.transcribe(video_path)
+            self.language_metadata = self._resolve_language_metadata(self.transcriber.last_transcription_info)
 
-        if not segments:
-            raise RuntimeError("Transcription returned no segments")
-        self._mark_step("transcribe", "completed", segment_count=len(segments))
-        self.transcriber.release_resources()
+            if not segments:
+                raise RuntimeError("Transcription returned no segments")
+            self._mark_step("transcribe", "completed", segment_count=len(segments), cache_hit=False)
+            self.transcriber.release_resources()
 
-        raw_segments = [dict(segment) for segment in segments]
-        segments = self._apply_diarization(video_path, raw_segments)
-        self.diarizer.release_resources()
+            raw_segments = [dict(segment) for segment in segments]
+            segments = self._apply_diarization(video_path, raw_segments)
+            self.diarizer.release_resources()
+            self._store_transcript_cache(
+                cache_key,
+                raw_segments=raw_segments,
+                segments=segments,
+            )
 
         if self.preset.is_raw_edit:
             return self._prepare_raw_edit_prompt(
@@ -522,6 +537,113 @@ para continuar o processamento.
             self.storage.download(self.source_storage_key, str(video_path))
             return video_path
         return self.downloader.download(self.video_url)
+
+    def _transcript_cache_key(self, video_path: Path) -> str:
+        digest = hashlib.sha256()
+        with open(video_path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+
+        config = {
+            "cache_version": 1,
+            "asr_model_size": settings.asr_model_size,
+            "asr_language": settings.asr_language,
+            "asr_vad_filter": settings.asr_vad_filter,
+            "asr_segment_duration_sec": settings.asr_segment_duration_sec,
+            "asr_max_merged_segment_duration_sec": settings.asr_max_merged_segment_duration_sec,
+            "diarization_enabled": settings.diarization_enabled,
+            "diarization_model_name": settings.diarization_model_name if settings.diarization_enabled else None,
+            "diarization_min_overlap_sec": settings.diarization_min_overlap_sec if settings.diarization_enabled else None,
+        }
+        config_hash = hashlib.sha256(
+            json.dumps(config, sort_keys=True, ensure_ascii=False).encode("utf-8")
+        ).hexdigest()[:16]
+        return f"{digest.hexdigest()}-{config_hash}"
+
+    def _transcript_cache_object_name(self, cache_key: str) -> str:
+        prefix = str(settings.transcript_cache_prefix or "cache/transcripts").strip().strip("/")
+        return f"{prefix}/{cache_key}.json"
+
+    def _load_transcript_cache(self, cache_key: str) -> dict | None:
+        if not settings.transcript_cache_enabled:
+            return None
+
+        object_name = self._transcript_cache_object_name(cache_key)
+        if not self.storage.exists(object_name):
+            self._mark_step("transcript_cache", "skipped", cache_hit=False, cache_key=cache_key)
+            return None
+
+        cache_path = self.work_dir / "transcript_cache.json"
+        try:
+            self.storage.download(object_name, str(cache_path))
+            payload = self._load_json_file(cache_path)
+            if not isinstance(payload, dict):
+                return None
+            if not payload.get("raw_segments") or not payload.get("segments"):
+                return None
+            self._mark_step("transcript_cache", "completed", cache_hit=True, cache_key=cache_key)
+            return payload
+        except Exception:
+            self.logger.exception(
+                "Failed to load transcript cache; continuing with fresh transcription",
+                extra={
+                    "job_id": self.job_id,
+                    "pipeline_stage": settings.pipeline_stage,
+                    "step": "transcript_cache",
+                    "status": "failed",
+                    "cache_key": cache_key,
+                },
+            )
+            return None
+
+    def _store_transcript_cache(
+        self,
+        cache_key: str,
+        *,
+        raw_segments: list[dict],
+        segments: list[dict],
+    ) -> None:
+        if not settings.transcript_cache_enabled:
+            return
+
+        speaker_turns_path = self.work_dir / "speaker_turns.json"
+        speaker_turns = self._load_json_file(speaker_turns_path) if speaker_turns_path.exists() else []
+        payload = {
+            "cache_key": cache_key,
+            "raw_segments": raw_segments,
+            "segments": segments,
+            "speaker_turns": speaker_turns if isinstance(speaker_turns, list) else [],
+            "language_metadata": self.language_metadata,
+        }
+        cache_path = self.work_dir / "transcript_cache_store.json"
+        with open(cache_path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, ensure_ascii=False)
+
+        object_name = self._transcript_cache_object_name(cache_key)
+        try:
+            self.storage.upload(str(cache_path), object_name)
+            self._mark_step("transcript_cache_store", "completed", cache_key=cache_key)
+        except Exception:
+            self.logger.exception(
+                "Failed to store transcript cache",
+                extra={
+                    "job_id": self.job_id,
+                    "pipeline_stage": settings.pipeline_stage,
+                    "step": "transcript_cache_store",
+                    "status": "failed",
+                    "cache_key": cache_key,
+                },
+            )
+
+    def _restore_cached_speaker_turns(self, payload: dict) -> None:
+        speaker_turns = payload.get("speaker_turns")
+        if not isinstance(speaker_turns, list):
+            return
+        self._write_json_artifact(
+            "speaker_turns.json",
+            speaker_turns,
+            "speaker_turns",
+        )
 
     def _prepare_raw_edit_prompt(
         self,
@@ -842,32 +964,21 @@ Envie o JSON de roteiro/plano de edição para registrar a decisão editorial.
         self._log("🎬 Generating cuts...")
         self._mark_step("render_cuts", "started")
 
-        filtered_cuts = []
-        min_cut_duration = (
-            self._min_internal_cut_duration_sec()
-            if self.manual_response.get("final_videos")
-            else settings.render_min_clip_duration_sec
-        )
-
-        for cut in cuts:
-
-            start = float(cut["start"])
-            end = float(cut["end"])
-
-            if end <= start:
-                continue
-
-            duration = end - start
-
-            if duration < min_cut_duration:
-                continue
-
-            filtered_cuts.append(cut)
+        filtered_cuts = self._filter_renderable_cuts(cuts)
 
         self._log(f"Valid cuts after filtering: {len(filtered_cuts)}")
 
         if not filtered_cuts:
-            raise RuntimeError("No valid cuts after filtering")
+            durations = [
+                round(float(cut.get("end", 0.0)) - float(cut.get("start", 0.0)), 3)
+                for cut in cuts
+                if isinstance(cut, dict)
+            ]
+            raise RuntimeError(
+                "No valid cuts after filtering "
+                f"(preset={self.preset.preset_id}, min_internal={self._min_internal_cut_duration_sec():.1f}s, "
+                f"received_durations={durations})"
+            )
 
         cut_files = self.cutter.cut(video_path, filtered_cuts)
         self._mark_step("render_cuts", "completed", cut_count=len(cut_files))
@@ -2712,6 +2823,79 @@ Envie o JSON de roteiro/plano de edição para registrar a decisão editorial.
 
     def _min_internal_cut_duration_sec(self) -> float:
         return self.preset.min_internal_cut_duration_sec
+
+    def _filter_renderable_cuts(self, cuts: list[dict]) -> list[dict]:
+        preferred_min = (
+            self._min_internal_cut_duration_sec()
+            if self.manual_response.get("final_videos")
+            else float(settings.render_min_clip_duration_sec)
+        )
+        hard_min = min(
+            preferred_min,
+            8.0 if self.preset.is_long_form else 5.0,
+        )
+
+        renderable: list[dict] = []
+        fallback: list[dict] = []
+        rejected: list[dict] = []
+
+        for index, cut in enumerate(cuts, start=1):
+            if not isinstance(cut, dict):
+                rejected.append({"index": index, "reason": "not_object"})
+                continue
+
+            start = float(cut.get("start", cut.get("safe_start", 0.0)) or 0.0)
+            end = float(cut.get("end", cut.get("safe_end", 0.0)) or 0.0)
+            duration = end - start
+            if duration <= 0:
+                rejected.append({"index": index, "reason": "non_positive_duration", "duration": round(duration, 3)})
+                continue
+            if duration >= preferred_min:
+                renderable.append(cut)
+            elif duration >= hard_min:
+                fallback.append(cut)
+            else:
+                rejected.append({"index": index, "reason": "too_short", "duration": round(duration, 3)})
+
+        if renderable:
+            return renderable
+
+        if fallback:
+            validation = dict(self.manual_response.get("_response_validation") or {})
+            corrections = list(validation.get("corrections") or [])
+            corrections.append(
+                f"render_filter: accepted_fallback_cuts_below_preferred_min:{preferred_min:.1f}s"
+            )
+            validation["corrections"] = corrections
+            validation["render_filter"] = {
+                "preferred_min_duration_sec": preferred_min,
+                "hard_min_duration_sec": hard_min,
+                "fallback_count": len(fallback),
+                "rejected": rejected,
+            }
+            self.manual_response["_response_validation"] = validation
+            self.logger.warning(
+                "Using fallback renderable cuts below preferred minimum duration",
+                extra={
+                    "job_id": self.job_id,
+                    "pipeline_stage": settings.pipeline_stage,
+                    "step": "render_cuts",
+                    "status": "fallback",
+                    "preferred_min_duration_sec": preferred_min,
+                    "hard_min_duration_sec": hard_min,
+                    "fallback_count": len(fallback),
+                },
+            )
+            return fallback
+
+        validation = dict(self.manual_response.get("_response_validation") or {})
+        validation["render_filter"] = {
+            "preferred_min_duration_sec": preferred_min,
+            "hard_min_duration_sec": hard_min,
+            "rejected": rejected,
+        }
+        self.manual_response["_response_validation"] = validation
+        return []
 
     def _total_cuts_duration_sec(self, cuts: list[dict]) -> float:
         return sum(

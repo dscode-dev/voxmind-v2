@@ -53,6 +53,13 @@ class MinioStorage:
 
         self.upload(local_path, object_name)
 
+    def exists(self, object_name: str) -> bool:
+        try:
+            self.client.stat_object(self.bucket, object_name)
+            return True
+        except S3Error:
+            return False
+
     @retry(
         retry=retry_if_exception_type(S3Error),
         stop=stop_after_attempt(settings.integration_retry_attempts),

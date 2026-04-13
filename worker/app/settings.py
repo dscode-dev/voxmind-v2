@@ -110,6 +110,14 @@ class Settings(BaseSettings):
         default="/opt/voxmind-models/asr",
         alias="ASR_PRELOADED_MODELS_DIR"
     )
+    transcript_cache_enabled: bool = Field(
+        default=True,
+        alias="TRANSCRIPT_CACHE_ENABLED"
+    )
+    transcript_cache_prefix: str = Field(
+        default="cache/transcripts",
+        alias="TRANSCRIPT_CACHE_PREFIX"
+    )
 
     asr_language: str = Field(
         default="auto",
