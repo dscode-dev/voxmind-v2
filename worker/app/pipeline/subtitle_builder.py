@@ -70,8 +70,8 @@ class SubtitleBuilder:
 
         if cuts and cold_open.get("enabled") and int(cold_open.get("source_clip_index", 1) or 1) == 1:
             first_cut = cuts[0]
-            first_start = float(first_cut.get("safe_start", first_cut.get("start", 0.0)))
-            first_end = float(first_cut.get("safe_end", first_cut.get("end", 0.0)))
+            first_start = float(first_cut.get("start", first_cut.get("safe_start", 0.0)))
+            first_end = float(first_cut.get("end", first_cut.get("safe_end", 0.0)))
             relative_start = max(0.0, float(cold_open.get("relative_start_sec", 0.0) or 0.0))
             teaser_duration = max(0.0, float(cold_open.get("duration_sec", 0.0) or 0.0))
             teaser_start = first_start + relative_start
@@ -94,8 +94,8 @@ class SubtitleBuilder:
             accumulated_offset = max(0.0, float(lead_in_sec or 0.0))
 
         for cut_index, cut in enumerate(cuts):
-            start = float(cut.get("safe_start", cut.get("start", 0.0)))
-            end = float(cut.get("safe_end", cut.get("end", 0.0)))
+            start = float(cut.get("start", cut.get("safe_start", 0.0)))
+            end = float(cut.get("end", cut.get("safe_end", 0.0)))
             if end <= start:
                 continue
 
@@ -153,8 +153,8 @@ class SubtitleBuilder:
         cut: Dict,
         transcript_segments: List[Dict],
     ) -> List[Dict]:
-        start = float(cut.get("safe_start", cut.get("start", 0.0)))
-        end = float(cut.get("safe_end", cut.get("end", 0.0)))
+        start = float(cut.get("start", cut.get("safe_start", 0.0)))
+        end = float(cut.get("end", cut.get("safe_end", 0.0)))
         if end <= start:
             return []
 
@@ -286,7 +286,7 @@ PlayResY: {play_res_y}
 
 [V4+ Styles]
 Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding
-Style: VoxMind,DejaVu Sans,{font_size},&H00000000,&H00000000,&H00FFFFFF,&H00FFFFFF,1,0,0,0,100,100,1.2,0,3,1,0,2,80,80,{margin_v},1
+Style: VoxMind,DejaVu Sans,{font_size},&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,1,0,0,0,100,100,1.2,0,3,1,0,2,80,80,{margin_v},1
 
 [Events]
 Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text

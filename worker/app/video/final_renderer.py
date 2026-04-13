@@ -202,9 +202,9 @@ class FinalVideoRenderer:
             "-c:v",
             "libx264",
             "-preset",
-            "fast",
+            self._encode_preset(),
             "-crf",
-            "22",
+            self._encode_crf(),
             "-pix_fmt",
             "yuv420p",
             "-c:a",
@@ -249,9 +249,9 @@ class FinalVideoRenderer:
             "-c:v",
             "libx264",
             "-preset",
-            "fast",
+            self._encode_preset(),
             "-crf",
-            "22",
+            self._encode_crf(),
             "-c:a",
             "aac",
             "-movflags",
@@ -303,9 +303,9 @@ class FinalVideoRenderer:
                     "-c:v",
                     "libx264",
                     "-preset",
-                    "fast",
+                    self._encode_preset(),
                     "-crf",
-                    "22",
+                    self._encode_crf(),
                     "-pix_fmt",
                     "yuv420p",
                     "-c:a",
@@ -342,9 +342,9 @@ class FinalVideoRenderer:
                     "-c:v",
                     "libx264",
                     "-preset",
-                    "fast",
+                    self._encode_preset(),
                     "-crf",
-                    "22",
+                    self._encode_crf(),
                     "-pix_fmt",
                     "yuv420p",
                     "-c:a",
@@ -394,9 +394,9 @@ class FinalVideoRenderer:
                 "-c:v",
                 "libx264",
                 "-preset",
-                "fast",
+                self._encode_preset(),
                 "-crf",
-                "22",
+                self._encode_crf(),
                 "-pix_fmt",
                 "yuv420p",
                 "-c:a",
@@ -418,16 +418,22 @@ class FinalVideoRenderer:
     def _canvas_filter_chain(self, video_ratio: str) -> List[str]:
         if video_ratio == "landscape":
             return [
-                "scale=1920:1080:force_original_aspect_ratio=decrease",
+                "scale=1920:1080:force_original_aspect_ratio=decrease:flags=lanczos",
                 "pad=1920:1080:(ow-iw)/2:(oh-ih)/2",
                 "setsar=1",
             ]
 
         return [
-            "scale=1080:1920:force_original_aspect_ratio=decrease",
+            "scale=1080:1920:force_original_aspect_ratio=decrease:flags=lanczos",
             "pad=1080:1920:(ow-iw)/2:(oh-ih)/2",
             "setsar=1",
         ]
+
+    def _encode_preset(self) -> str:
+        return "medium"
+
+    def _encode_crf(self) -> str:
+        return "18"
 
     def _visual_filter_chain(self, profile: str) -> List[str]:
         if profile == "long_soft_vignette":
@@ -566,9 +572,9 @@ class FinalVideoRenderer:
             "-c:v",
             "libx264",
             "-preset",
-            "fast",
+            self._encode_preset(),
             "-crf",
-            "22",
+            self._encode_crf(),
             "-pix_fmt",
             "yuv420p",
             "-c:a",
@@ -648,9 +654,9 @@ class FinalVideoRenderer:
             "-c:v",
             "libx264",
             "-preset",
-            "fast",
+            self._encode_preset(),
             "-crf",
-            "22",
+            self._encode_crf(),
             "-pix_fmt",
             "yuv420p",
             "-af",
@@ -746,9 +752,9 @@ class FinalVideoRenderer:
             "-c:v",
             "libx264",
             "-preset",
-            "fast",
+            self._encode_preset(),
             "-crf",
-            "22",
+            self._encode_crf(),
             "-pix_fmt",
             "yuv420p",
             "-c:a",
