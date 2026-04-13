@@ -54,6 +54,10 @@ class Settings(BaseSettings):
         default=999999,
         alias="DEFAULT_ADMIN_CREDITS",
     )
+    lab_unlimited_credit_phone_numbers: str = Field(
+        default="",
+        alias="LAB_UNLIMITED_CREDIT_PHONE_NUMBERS",
+    )
     otp_request_limit_per_ip_window: int = Field(
         default=5,
         alias="OTP_REQUEST_LIMIT_PER_IP_WINDOW",

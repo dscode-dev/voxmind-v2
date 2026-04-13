@@ -8,6 +8,7 @@ from app.core.settings import settings
 from app.db.session import get_db
 from app.models.enums import UserRole, UserStatus
 from app.models.user import User
+from app.security.access_control import can_bypass_credits
 from app.security.auth_middleware import get_current_user
 from app.security.phone import normalize_phone_number
 from app.security.jwt_service import _fingerprint, generate_token
@@ -341,7 +342,7 @@ def me(user: User = Depends(get_current_user)):
         id=str(user.id),
         full_name=user.full_name,
         phone_number=user.phone_number,
-        credits=user.credits,
+        credits=settings.default_admin_credits if can_bypass_credits(user) else user.credits,
         status=user.status.value,
         role=user.role.value,
         is_admin=user.role == UserRole.ADMIN,
