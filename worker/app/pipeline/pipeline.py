@@ -955,7 +955,7 @@ Envie o JSON de roteiro/plano de edição para registrar a decisão editorial.
             caption_lines = [str(video_post.get("title") or f"Video final {index}").strip()]
             if str(video_post.get("hook") or "").strip():
                 caption_lines.append(str(video_post.get("hook")).strip())
-            self.telegram.send_video(
+            self.telegram.send_video_safe(
                 str(path),
                 caption="\n".join(line for line in caption_lines if line),
             )

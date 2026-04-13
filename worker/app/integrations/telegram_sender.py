@@ -113,3 +113,55 @@ class TelegramSender:
                 files=files,
                 timeout=settings.telegram_upload_timeout_sec
             )
+
+    def send_video_safe(self, file_path: str, caption: str | None = None) -> bool:
+        if not self.base_url:
+            return False
+
+        path = Path(file_path)
+        try:
+            self.send_video(file_path, caption=caption)
+            return True
+        except requests.RequestException as exc:
+            self.logger.warning(
+                "Telegram sendVideo failed; trying sendDocument fallback",
+                extra={
+                    "step": "telegram_send_video",
+                    "status": "failed",
+                    "file_name": path.name,
+                    "file_size_bytes": path.stat().st_size if path.exists() else None,
+                    "error": self._safe_error(exc),
+                },
+            )
+
+        try:
+            self.send_document(file_path, caption=caption)
+            return True
+        except requests.RequestException as exc:
+            self.logger.warning(
+                "Telegram sendDocument fallback failed; continuing without Telegram video delivery",
+                extra={
+                    "step": "telegram_send_document_fallback",
+                    "status": "failed",
+                    "file_name": path.name,
+                    "file_size_bytes": path.stat().st_size if path.exists() else None,
+                    "error": self._safe_error(exc),
+                },
+            )
+            try:
+                self.send_message(
+                    "⚠️ O vídeo final foi renderizado, mas o Telegram recusou o upload. "
+                    "Use o ClipFlow Studio para baixar o arquivo final."
+                )
+            except Exception:
+                pass
+            return False
+
+    def _safe_error(self, exc: requests.RequestException) -> str:
+        response = getattr(exc, "response", None)
+        if response is not None:
+            try:
+                return f"{response.status_code}: {response.text[:300]}"
+            except Exception:
+                return str(response.status_code)
+        return str(exc)[:300]
