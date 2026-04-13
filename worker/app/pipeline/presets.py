@@ -44,7 +44,13 @@ class ClipPreset:
         return self.clip_mode in {"long", "long_series"}
 
     @property
+    def is_raw_edit(self) -> bool:
+        return self.clip_mode == "raw_edit"
+
+    @property
     def prompt_clip_mode(self) -> str:
+        if self.is_raw_edit:
+            return "raw_edit"
         return "long" if self.is_long_form else self.clip_mode
 
 
@@ -52,7 +58,7 @@ def resolve_clip_preset(clip_mode: str | None, video_ratio: str | None) -> ClipP
     normalized_mode = _normalize_clip_mode(clip_mode)
     normalized_ratio = _normalize_video_ratio(video_ratio)
 
-    if normalized_mode in {"long", "long_series"} and not video_ratio:
+    if normalized_mode in {"long", "long_series", "raw_edit"} and not video_ratio:
         normalized_ratio = "landscape"
 
     preset_key = (normalized_mode, normalized_ratio)
@@ -62,6 +68,8 @@ def resolve_clip_preset(clip_mode: str | None, video_ratio: str | None) -> ClipP
         return _short_series_portrait()
     if preset_key in {("long", "landscape"), ("long_series", "landscape")}:
         return _long_landscape(normalized_mode)
+    if normalized_mode == "raw_edit":
+        return _raw_edit_landscape(normalized_ratio)
     if normalized_mode in {"long", "long_series"}:
         return _long_non_landscape(normalized_mode, normalized_ratio)
     if normalized_mode == "short":
@@ -75,6 +83,10 @@ def resolve_clip_preset(clip_mode: str | None, video_ratio: str | None) -> ClipP
 def resolve_product_preset(job_preset: str | None) -> ClipPreset:
     value = str(job_preset or "").strip().lower().replace("-", "_")
     mapping = {
+        "raw_edit": ("raw_edit", "landscape"),
+        "raw_edit_landscape": ("raw_edit", "landscape"),
+        "authorial_edit": ("raw_edit", "landscape"),
+        "video_edit": ("raw_edit", "landscape"),
         "short_individual": ("short", "portrait"),
         "short_individual_portrait": ("short", "portrait"),
         "short_series": ("short_serie", "portrait"),
@@ -113,8 +125,11 @@ def _normalize_clip_mode(clip_mode: str | None) -> str:
         "longform": "long",
         "long_series": "long_series",
         "long_serie": "long_series",
+        "raw_video_edit": "raw_edit",
+        "authorial_edit": "raw_edit",
+        "video_edit": "raw_edit",
     }
-    return aliases.get(value, value if value in {"short", "short_serie", "long", "long_series"} else "short_serie")
+    return aliases.get(value, value if value in {"short", "short_serie", "long", "long_series", "raw_edit"} else "short_serie")
 
 
 def _normalize_video_ratio(video_ratio: str | None) -> str:
@@ -257,6 +272,44 @@ def _long_non_landscape(clip_mode: str, video_ratio: str) -> ClipPreset:
             "chunk_max_duration_sec": 240.0,
             "chunk_overlap_sec": 16.0,
         }
+    )
+
+
+def _raw_edit_landscape(video_ratio: str) -> ClipPreset:
+    return ClipPreset(
+        preset_id="raw_edit_landscape" if video_ratio == "landscape" else "raw_edit_portrait",
+        clip_mode="raw_edit",
+        video_ratio=video_ratio,
+        render_intent="authorial_video_edit",
+        max_final_videos=1,
+        min_final_duration_sec=60.0,
+        target_final_duration_sec=180.0,
+        max_final_duration_sec=900.0,
+        min_internal_cut_duration_sec=12.0,
+        chunk_min_duration_sec=45.0,
+        chunk_target_duration_sec=120.0,
+        chunk_max_duration_sec=220.0,
+        chunk_overlap_sec=12.0,
+        candidate_min_duration_sec=30.0,
+        candidate_preferred_duration_sec=90.0,
+        candidate_max_duration_sec=180.0,
+        candidate_max_per_window=2,
+        scorer_max_candidates=8,
+        scorer_max_per_window=2,
+        scorer_min_start_gap_sec=45.0,
+        scorer_overlap_iou_threshold=0.5,
+        scorer_prefer_thematic_continuity=True,
+        scorer_thematic_similarity_threshold=0.08,
+        prompt_context_padding_sec=90,
+        prompt_min_total_segments=120,
+        prompt_max_segments_per_candidate=60,
+        sequence_bridge_max_gap_sec=120.0,
+        context_backfill_max_sec=30.0,
+        closure_extension_max_sec=60.0,
+        render_playback_speed=1.0,
+        visual_filter_profile="long_soft_vignette",
+        transition_profile="long_editorial",
+        caption_style="editorial_subtitles",
     )
 
 

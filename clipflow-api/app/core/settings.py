@@ -126,5 +126,26 @@ class Settings(BaseSettings):
         alias="VOXMIND_REDIS_QUEUE",
     )
 
+    # =====================================
+    # Script Agent
+    # =====================================
+
+    script_agent_provider: str = Field(
+        default="local",
+        alias="SCRIPT_AGENT_PROVIDER",
+    )
+    script_agent_openai_api_key: str | None = Field(
+        default=None,
+        alias="SCRIPT_AGENT_OPENAI_API_KEY",
+    )
+    script_agent_openai_model: str = Field(
+        default="gpt-4o-mini",
+        alias="SCRIPT_AGENT_OPENAI_MODEL",
+    )
+    script_agent_timeout_sec: int = Field(
+        default=45,
+        alias="SCRIPT_AGENT_TIMEOUT_SEC",
+    )
+
 
 settings = Settings()

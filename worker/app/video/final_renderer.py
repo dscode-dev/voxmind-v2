@@ -274,7 +274,9 @@ class FinalVideoRenderer:
         output_path: Path,
         clip_plan: Dict,
     ) -> None:
-        video_filters: List[str] = ["fps=30"]
+        video_ratio = str(clip_plan.get("video_ratio") or "portrait").strip().lower()
+        video_filters: List[str] = self._canvas_filter_chain(video_ratio)
+        video_filters.append("fps=30")
         playback_speed = max(0.5, float(clip_plan.get("playback_speed") or settings.render_playback_speed or 1.0))
         if settings.render_visual_filter_enabled:
             video_filters.extend(self._visual_filter_chain(str(clip_plan.get("visual_filter_profile") or "")))
@@ -412,6 +414,20 @@ class FinalVideoRenderer:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+
+    def _canvas_filter_chain(self, video_ratio: str) -> List[str]:
+        if video_ratio == "landscape":
+            return [
+                "scale=1920:1080:force_original_aspect_ratio=decrease",
+                "pad=1920:1080:(ow-iw)/2:(oh-ih)/2",
+                "setsar=1",
+            ]
+
+        return [
+            "scale=1080:1920:force_original_aspect_ratio=decrease",
+            "pad=1080:1920:(ow-iw)/2:(oh-ih)/2",
+            "setsar=1",
+        ]
 
     def _visual_filter_chain(self, profile: str) -> List[str]:
         if profile == "long_soft_vignette":

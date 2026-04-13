@@ -59,6 +59,7 @@ class RenderPlanBuilder:
                     "safe_start": float(cut.get("safe_start", start)),
                     "safe_end": float(cut.get("safe_end", end)),
                     "duration": max(0.0, end - start),
+                    "video_ratio": preset.video_ratio,
                     "speaker_focus": cut.get("speaker_focus"),
                     "transition_after": transition_after,
                     "transition_duration_ms": self._transition_duration_ms(

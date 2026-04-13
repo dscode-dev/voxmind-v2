@@ -11,6 +11,7 @@ from app.models.usage_metric import UsageMetric
 from app.models.audit_log import AuditLog
 from app.models.private_scheduler_profile import PrivateSchedulerProfile
 from app.models.private_scheduler_run import PrivateSchedulerRun
+from app.models.script_job import ScriptJob
 
 __all__ = [
     "User",
@@ -26,4 +27,5 @@ __all__ = [
     "AuditLog",
     "PrivateSchedulerProfile",
     "PrivateSchedulerRun",
+    "ScriptJob",
 ]

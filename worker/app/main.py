@@ -63,15 +63,21 @@ def run_pipeline(job: dict):
     job_id = job.get("job_id") or str(uuid.uuid4())
     pipeline_stage = job.get("pipeline_stage", "prepare")
     manual_response = job.get("manual_response")
+    source_storage_key = job.get("source_storage_key")
+    preset = resolve_job_preset(
+        job.get("job_preset") or job.get("preset_id"),
+        job.get("clip_mode", "short_serie"),
+        job.get("video_ratio", "portrait"),
+    )
 
     # ==========================================
     # validações por estágio
     # ==========================================
 
     if pipeline_stage == "prepare":
-        if not video_url:
+        if not video_url and not source_storage_key:
             logger.error(
-                "Prepare job received without video_url",
+                "Prepare job received without video_url or source_storage_key",
                 extra={"job_id": job_id, "pipeline_stage": pipeline_stage, "step": "validate_job", "status": "failed"},
             )
             return
@@ -84,16 +90,20 @@ def run_pipeline(job: dict):
             )
             return
 
-        if "shorts_content" not in manual_response and "final_videos" not in manual_response:
+        if (
+            not preset.is_raw_edit
+            and "shorts_content" not in manual_response
+            and "final_videos" not in manual_response
+        ):
             logger.error(
                 "Finalize job received invalid manual_response",
                 extra={"job_id": job_id, "pipeline_stage": pipeline_stage, "step": "validate_job", "status": "failed"},
             )
             return
 
-        if not video_url:
+        if not video_url and not source_storage_key:
             logger.error(
-                "Finalize job received without video_url",
+                "Finalize job received without video_url or source_storage_key",
                 extra={"job_id": job_id, "pipeline_stage": pipeline_stage, "step": "validate_job", "status": "failed"},
             )
             return
@@ -103,12 +113,6 @@ def run_pipeline(job: dict):
     # ==========================================
 
     settings.pipeline_stage = pipeline_stage
-    preset = resolve_job_preset(
-        job.get("job_preset") or job.get("preset_id"),
-        job.get("clip_mode", "short_serie"),
-        job.get("video_ratio", "portrait"),
-    )
-
     logger.info(
         f"Starting pipeline {job_id} ({pipeline_stage})",
         extra={
@@ -130,6 +134,8 @@ def run_pipeline(job: dict):
         video_ratio=preset.video_ratio,
         job_preset=preset.preset_id,
         build_ia=bool(job.get("build_ia", False)),
+        source_storage_key=source_storage_key,
+        edit_brief=job.get("edit_brief"),
     )
 
     storage = MinioStorage()

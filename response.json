@@ -1,0 +1,87 @@
+{
+“job_id”: “2ab041e9-96bc-4330-8529-3ad9cced7be1”,
+“final_videos”: [
+{
+“video_index”: 1,
+“hook_id”: “hook_0018”,
+“span_ids”: [“span_0003”, “span_0004”, “span_0005”, “span_0007”, “span_0008”],
+“title”: “O lado cruel da fama no futebol”,
+“hook”: “não foi, não foi, você sempre tem que brigar com o seu, mesmo sendo mentira, e como é que, havia uma pressão assim…”,
+“hook_source_cut_index”: 0,
+“hook_start”: 30.28,
+“hook_end”: 36.82,
+“description”: “Cacá revela como a fama chegou da noite para o dia e o lado cruel do sistema do futebol. Um relato real sobre pressão, exposição e valores.”,
+“hashtags”: [”#futebol”, “#kaka”, “#fama”, “#mentalidade”, “#sucesso”],
+“thumbnail”: “Cacá sério com texto: O sistema é cruel”,
+“soundtrack_suggestion”: “mystery_tension”,
+“speaker_focus”: “SPEAKER_02”,
+“shorts_content”: [
+{
+“start”: 30.28,
+“end”: 70.52,
+“safe_start”: 30.28,
+“safe_end”: 70.52,
+“reason”: “introduz a pressão do futebol e conecta com a explosão da fama de forma clara e impactante”,
+“narrative_role”: “hook”,
+“merge_group”: “story_1”,
+“continuity_note”: “abre com a pergunta sobre pressão e entra direto na experiência pessoal da fama repentina”,
+“speaker_focus”: “SPEAKER_02”,
+“transition_after”: “whoosh”
+},
+{
+“start”: 70.52,
+“end”: 104.72,
+“safe_start”: 70.52,
+“safe_end”: 104.72,
+“reason”: “aprofunda o impacto da fama e fecha com reflexão sobre valores e convicção”,
+“narrative_role”: “payoff”,
+“merge_group”: “story_1”,
+“continuity_note”: “continua naturalmente mostrando como ele lidou com a pressão através dos valores”,
+“speaker_focus”: “SPEAKER_02”,
+“transition_after”: “none”
+}
+]
+},
+{
+“video_index”: 2,
+“hook_id”: “hook_0011”,
+“span_ids”: [“span_0009”, “span_0010”, “span_0011”, “span_0012”, “span_0014”],
+“title”: “Criticado por falar de Deus no futebol”,
+“hook”: “E você sofreu muita crítica?”,
+“hook_source_cut_index”: 0,
+“hook_start”: 165.92,
+“hook_end”: 167.24,
+“description”: “Cacá conta como foi criticado por falar da sua fé no futebol e a decisão que mudou tudo: escolher pelo que vale a pena ser criticado.”,
+“hashtags”: [”#fe”, “#kaka”, “#motivacao”, “#valores”, “#futebol”],
+“thumbnail”: “Cacá com mãos para o céu e texto: Eu escolhi minha verdade”,
+“soundtrack_suggestion”: “inspirational”,
+“speaker_focus”: “SPEAKER_02”,
+“shorts_content”: [
+{
+“start”: 105.38,
+“end”: 147.16,
+“safe_start”: 105.38,
+“safe_end”: 147.16,
+“reason”: “mostra o conflito inicial entre orientação externa e identidade pessoal”,
+“narrative_role”: “setup”,
+“merge_group”: “story_2”,
+“continuity_note”: “explica o contexto da pressão para não misturar fé e futebol”,
+“speaker_focus”: “SPEAKER_02”,
+“transition_after”: “whoosh”
+},
+{
+“start”: 147.96,
+“end”: 184.38,
+“safe_start”: 147.96,
+“safe_end”: 184.38,
+“reason”: “traz o clímax com a decisão de assumir sua verdade e o exemplo das críticas”,
+“narrative_role”: “payoff”,
+“merge_group”: “story_2”,
+“continuity_note”: “fecha com a reflexão forte sobre escolher pelo que vale a pena ser criticado”,
+“speaker_focus”: “SPEAKER_02”,
+“transition_after”: “none”
+}
+]
+}
+]
+}

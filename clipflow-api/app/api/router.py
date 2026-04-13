@@ -8,6 +8,7 @@ from app.api import jobs
 from app.api import products
 from app.api import purchases
 from app.api import register
+from app.api import script_jobs
 from app.api import users
 
 
@@ -61,6 +62,13 @@ api_router.include_router(products.router)
 # ==========================================
 
 api_router.include_router(purchases.router)
+
+
+# ==========================================
+# Script Jobs
+# ==========================================
+
+api_router.include_router(script_jobs.router)
 
 
 # ==========================================

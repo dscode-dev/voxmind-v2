@@ -150,7 +150,7 @@ async def stream_job_events(
             finally:
                 stream_db.close()
 
-            if signature[0] in {"completed", "failed", "canceled", "awaiting_manual_llm"}:
+            if signature[0] in {"completed", "failed", "canceled"}:
                 break
 
             await asyncio.sleep(2)

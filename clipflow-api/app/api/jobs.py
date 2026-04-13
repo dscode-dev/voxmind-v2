@@ -6,8 +6,8 @@ from redis.exceptions import RedisError
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import Response
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi.responses import Response, StreamingResponse
 from minio import Minio
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -18,7 +18,7 @@ from app.models.clip_job import ClipJob
 from app.models.billing_product import BillingProduct
 from app.models.purchase import Purchase
 from app.models.clip_asset import ClipAsset
-from app.models.enums import BillingProvider, ClipAssetType, JobEventType, ProductType, PurchaseStatus
+from app.models.enums import BillingProvider, ClipAssetType, JobEventType, JobSourceType, ProductType, PurchaseStatus
 from app.models.job_event import JobEvent
 from app.models.user import User
 from app.security.auth_middleware import get_current_user
@@ -49,7 +49,9 @@ def _worker_queue() -> redis.Redis:
 
 
 class CreateJobInput(BaseModel):
-    source_url: str
+    source_url: str | None = None
+    source_type: str = Field(default="youtube_url")
+    source_storage_key: str | None = None
     product_id: str | None = None
     job_preset: str | None = Field(default=None)
     clip_mode: str = Field(default="short_serie")
@@ -59,6 +61,7 @@ class CreateJobInput(BaseModel):
     output_language: str | None = None
     subtitle_language: str | None = None
     prompt_mode: str = Field(default="manual")
+    edit_brief: str | None = None
 
 
 class SubmitAiResponseInput(BaseModel):
@@ -97,6 +100,7 @@ def _job_config(job: ClipJob) -> dict:
         "output_language": config.get("output_language") or metadata.get("output_language"),
         "subtitle_language": config.get("subtitle_language") or metadata.get("subtitle_language"),
         "prompt_mode": str(config.get("prompt_mode") or job.prompt_mode or "manual"),
+        "edit_brief": config.get("edit_brief") or metadata.get("edit_brief"),
     }
 
 
@@ -108,6 +112,27 @@ def _resolve_job_preset_config(
 ) -> dict:
     requested = str(job_preset or "").strip().lower().replace("-", "_")
     mapping = {
+        "raw_edit": {
+            "job_preset": "raw_edit",
+            "preset_id": "raw_edit_landscape",
+            "clip_mode": "raw_edit",
+            "video_ratio": "landscape",
+            "render_intent": "authorial_video_edit",
+        },
+        "raw_edit_landscape": {
+            "job_preset": "raw_edit",
+            "preset_id": "raw_edit_landscape",
+            "clip_mode": "raw_edit",
+            "video_ratio": "landscape",
+            "render_intent": "authorial_video_edit",
+        },
+        "authorial_edit": {
+            "job_preset": "raw_edit",
+            "preset_id": "raw_edit_landscape",
+            "clip_mode": "raw_edit",
+            "video_ratio": "landscape",
+            "render_intent": "authorial_video_edit",
+        },
         "short_individual": {
             "job_preset": "short_individual",
             "preset_id": "short_individual_portrait",
@@ -162,6 +187,8 @@ def _resolve_job_preset_config(
         return mapping["long_single"]
     if normalized_mode in {"long_series", "long_serie"}:
         return mapping["long_series"]
+    if normalized_mode in {"raw_edit", "authorial_edit", "video_edit"}:
+        return mapping["raw_edit"]
     return {**mapping["short_series"], "video_ratio": normalized_ratio}
 
 
@@ -248,11 +275,14 @@ def _publish_job(
         "job_id": str(job.id),
         "pipeline_stage": pipeline_stage,
         "manual_response": manual_response,
+        "source_type": job.source_type.value,
+        "source_storage_key": job.source_storage_key,
         "job_preset": config.get("job_preset") or config.get("preset_id"),
         "preset_id": config.get("preset_id"),
         "clip_mode": config.get("clip_mode", "short_serie"),
         "video_ratio": config.get("video_ratio", "portrait"),
         "build_ia": bool(config.get("build_ia", False)),
+        "edit_brief": config.get("edit_brief"),
     }
     _worker_queue().lpush(settings.voxmind_redis_queue, json.dumps(payload))
 
@@ -320,12 +350,48 @@ def _enrich_delivery_package(job_id: str, payload: dict | None) -> dict:
     return package
 
 
+@router.post("/jobs/source-upload")
+async def upload_job_source(
+    file: UploadFile = File(...),
+    user: User = Depends(get_current_user),
+):
+    if not file.content_type or not file.content_type.startswith("video/"):
+        raise HTTPException(status_code=400, detail="Only video files are supported")
+
+    suffix = "".join(ch for ch in (file.filename or "video.mp4") if ch.isalnum() or ch in {".", "-", "_"})[-120:]
+    object_name = f"job_sources/{user.id}/{uuid.uuid4()}_{suffix or 'video.mp4'}"
+    file.file.seek(0, io.SEEK_END)
+    size_bytes = file.file.tell()
+    file.file.seek(0)
+    if size_bytes <= 0:
+        raise HTTPException(status_code=400, detail="Empty file")
+
+    artifact_storage_client.put_object(
+        settings.worker_artifacts_bucket,
+        object_name,
+        file.file,
+        size_bytes,
+        content_type=file.content_type,
+    )
+    return {
+        "source_type": JobSourceType.DIRECT_UPLOAD.value,
+        "source_storage_key": object_name,
+        "source_url": f"clipflow-upload://{object_name}",
+        "filename": file.filename,
+        "content_type": file.content_type,
+        "size_bytes": size_bytes,
+    }
+
+
 @router.post("/jobs")
 def create_job(
     payload: CreateJobInput,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+
+    if not payload.source_url and not payload.source_storage_key:
+        raise HTTPException(status_code=400, detail="source_url or source_storage_key is required")
 
     preset_config = _resolve_job_preset_config(
         job_preset=payload.job_preset,
@@ -363,7 +429,9 @@ def create_job(
         user_id=user.id,
         purchase_id=purchase.id,
         product_id=product.id,
-        source_url=payload.source_url,
+        source_type=JobSourceType.DIRECT_UPLOAD if payload.source_storage_key else JobSourceType.YOUTUBE_URL,
+        source_url=payload.source_url or f"clipflow-upload://{payload.source_storage_key}",
+        source_storage_key=payload.source_storage_key,
         status=JobStatus.QUEUED,
         pipeline_stage="prepare",
         prompt_mode=payload.prompt_mode,
@@ -380,6 +448,7 @@ def create_job(
                 "output_language": payload.output_language,
                 "subtitle_language": payload.subtitle_language,
                 "prompt_mode": payload.prompt_mode,
+                "edit_brief": payload.edit_brief,
             }
         },
     )
@@ -399,6 +468,8 @@ def create_job(
                 "clip_mode": preset_config["clip_mode"],
                 "video_ratio": preset_config["video_ratio"],
                 "build_ia": payload.build_ia,
+                "source_type": JobSourceType.DIRECT_UPLOAD.value if payload.source_storage_key else JobSourceType.YOUTUBE_URL.value,
+                "source_storage_key": payload.source_storage_key,
             },
         )
     )
@@ -582,6 +653,75 @@ def download_job_prompt(
     )
 
 
+@router.get("/jobs/{job_id}/final-videos/{video_index}/download")
+def download_job_final_video(
+    job_id: str,
+    video_index: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    job = (
+        scope_job_query(db.query(ClipJob), user, ClipJob)
+        .filter(ClipJob.id == job_id)
+        .first()
+    )
+
+    if not job:
+        raise HTTPException(status_code=404)
+
+    _refresh_job_from_artifacts(db, job)
+
+    delivery_package_content = artifact_content_service.load_json(job.delivery_package_storage_key)
+    package_payload = delivery_package_content if isinstance(delivery_package_content, dict) else {}
+    videos = [
+        video
+        for video in (package_payload.get("videos") or [])
+        if isinstance(video, dict)
+    ]
+    selected = next(
+        (
+            video
+            for video in videos
+            if int(video.get("video_index") or 0) == video_index
+        ),
+        None,
+    )
+    if selected is None and 1 <= video_index <= len(videos):
+        selected = videos[video_index - 1]
+    if selected is None:
+        raise HTTPException(status_code=404, detail="Final video not available")
+
+    storage_key = selected.get("final_storage_key")
+    file_name = selected.get("final_file_name")
+    if not storage_key and file_name:
+        storage_key = f"jobs/{job.id}/final_clips/{file_name}"
+    if not storage_key:
+        raise HTTPException(status_code=404, detail="Final video storage key not available")
+
+    response = None
+    try:
+        response = artifact_storage_client.get_object(settings.worker_artifacts_bucket, storage_key)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail="Final video not available") from exc
+
+    def iter_object():
+        try:
+            for chunk in response.stream(1024 * 1024):
+                yield chunk
+        finally:
+            response.close()
+            response.release_conn()
+
+    filename = str(file_name or f"job-{job.id}-video-{video_index}.mp4")
+    return StreamingResponse(
+        iter_object(),
+        media_type="video/mp4",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+        },
+    )
+
+
 @router.get("/jobs/{job_id}/delivery-package")
 def job_delivery_package(
     job_id: str,
@@ -638,6 +778,8 @@ def job_delivery_package(
                 job.delivery_package_storage_key or (delivery_asset.storage_key if delivery_asset else None)
             ) or (delivery_asset.public_url if delivery_asset else None),
         },
+        "raw_authorial_edit": package_payload.get("raw_authorial_edit"),
+        "post": package_payload.get("post") or {},
         "videos": package_payload.get("videos") or [],
         "final_assets": package_payload.get("final_assets") or {},
         "language": package_payload.get("language") or {},

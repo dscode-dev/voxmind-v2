@@ -11,6 +11,7 @@ from app.media.transcript_merger import TranscriptSpeakerMerger
 from app.video.cutter import VideoCutter
 from app.video.final_renderer import FinalVideoRenderer
 from app.video.qa import ClipQA
+from app.video.raw_edit_renderer import RawEditRenderer
 
 from app.pipeline.chunker import Chunker
 from app.pipeline.auto_review import AutoReviewPolicy
@@ -27,6 +28,7 @@ from app.pipeline.hook_detector import HookDetector
 from app.pipeline.render_plan_builder import RenderPlanBuilder
 from app.pipeline.audio_peak_detector import AudioPeakDetector
 from app.pipeline.story_shift_detector import StoryShiftDetector
+from app.prompts.raw_edit_prompt_builder import RawEditPromptBuilder
 
 from app.integrations.telegram_sender import TelegramSender
 from app.integrations.clipflow_api_client import ClipFlowApiClient
@@ -47,9 +49,13 @@ class Pipeline:
         video_ratio: str = "portrait",
         job_preset: str | None = None,
         build_ia: bool = False,
+        source_storage_key: str | None = None,
+        edit_brief: str | None = None,
     ):
 
         self.video_url = video_url
+        self.source_storage_key = source_storage_key
+        self.edit_brief = edit_brief
         self.job_id = job_id
         self.manual_response = manual_response
 
@@ -136,6 +142,7 @@ class Pipeline:
             min_clip_duration_sec=settings.render_min_clip_duration_sec,
         )
         self.final_renderer = FinalVideoRenderer(self.work_dir)
+        self.raw_edit_renderer = RawEditRenderer(self.work_dir)
         self.clip_qa = ClipQA(
             min_duration_sec=settings.qa_min_clip_duration_sec,
             max_duration_sec=self._max_final_video_duration_sec(),
@@ -145,6 +152,7 @@ class Pipeline:
         self.telegram = TelegramSender()
         self.clipflow_api = ClipFlowApiClient()
         self.prompt_builder = ManualPromptBuilder()
+        self.raw_edit_prompt_builder = RawEditPromptBuilder()
 
     def _build_chunker(self) -> Chunker:
         return Chunker(
@@ -251,6 +259,10 @@ JOB_ID: {self.job_id}
         )
         return path
 
+    def _load_json_file(self, path: Path) -> object:
+        with open(path, "r", encoding="utf-8") as handle:
+            return json.load(handle)
+
     # ==================================================
     # Main runner
     # ==================================================
@@ -315,7 +327,7 @@ ERROR:
         self._log("⬇️ Downloading video...")
         self._mark_step("download_video", "started")
 
-        video_path = self.downloader.download(self.video_url)
+        video_path = self._prepare_source_video()
         self._mark_step("download_video", "completed", video_path=str(video_path))
 
         self._log("💾 Uploading video to storage...")
@@ -341,6 +353,13 @@ ERROR:
         raw_segments = [dict(segment) for segment in segments]
         segments = self._apply_diarization(video_path, raw_segments)
         self.diarizer.release_resources()
+
+        if self.preset.is_raw_edit:
+            return self._prepare_raw_edit_prompt(
+                video_path=video_path,
+                raw_segments=raw_segments,
+                segments=segments,
+            )
 
         self._log("✂️ Generating chunks...")
         self._mark_step("chunk", "started")
@@ -491,6 +510,95 @@ para continuar o processamento.
             "candidates_path": str(candidates_path),
             "span_catalog_path": str(span_catalog_path),
             "hook_candidates_path": str(hook_candidates_path),
+            "language_detection_path": str(language_detection_path),
+            "prompt_path": str(prompt_path),
+            "runtime_status_path": str(self.runtime.runtime_path),
+            "artifacts_manifest_path": str(self.artifacts.manifest_path),
+        }
+
+    def _prepare_source_video(self) -> Path:
+        video_path = self.work_dir / "source_video.mp4"
+        if self.source_storage_key:
+            self.storage.download(self.source_storage_key, str(video_path))
+            return video_path
+        return self.downloader.download(self.video_url)
+
+    def _prepare_raw_edit_prompt(
+        self,
+        *,
+        video_path: Path,
+        raw_segments: list[dict],
+        segments: list[dict],
+    ) -> dict:
+        self._log("🧠 Building authorial edit prompt...")
+        self._mark_step("raw_edit_prompt_build", "started")
+
+        speaker_turns_path = self.work_dir / "speaker_turns.json"
+        speaker_turns = self._load_json_file(speaker_turns_path) if speaker_turns_path.exists() else []
+        prompt = self.raw_edit_prompt_builder.build(
+            job_id=self.job_id,
+            transcript=segments,
+            speaker_turns=speaker_turns if isinstance(speaker_turns, list) else [],
+            language=str(
+                self.language_metadata.get("output_language")
+                or self.language_metadata.get("source_language")
+                or "auto"
+            ),
+            edit_brief=self.edit_brief,
+            video_ratio=self.video_ratio,
+        )
+        self._mark_step("raw_edit_prompt_build", "completed", prompt_chars=len(prompt))
+
+        transcript_path = self._write_json_artifact(
+            "transcript.json",
+            raw_segments,
+            "transcript",
+        )
+        transcript_with_speakers_path = self._write_json_artifact(
+            "transcript_with_speakers.json",
+            segments,
+            "transcript_with_speakers",
+        )
+        language_detection_path = self._write_json_artifact(
+            "language_detection.json",
+            self.language_metadata,
+            "language_detection",
+        )
+        prompt_path = self._write_text_artifact(
+            "prompt.txt",
+            prompt,
+            "prompt",
+        )
+
+        self.telegram.send_document(
+            str(prompt_path),
+            caption=f"""
+🎬 VOXMIND — PROMPT DE EDIÇÃO AUTORAL
+
+JOB_ID: {self.job_id}
+
+Use este prompt para gerar o JSON com roteiro e plano de edição do vídeo bruto.
+""",
+        )
+        self.telegram.send_message(
+            f"""
+📊 ANÁLISE DO VÍDEO BRUTO PRONTA
+
+JOB_ID: {self.job_id}
+
+Envie o JSON de roteiro/plano de edição para registrar a decisão editorial.
+"""
+        )
+        self._mark_step("prepare", "completed")
+
+        return {
+            "status": "awaiting_manual_llm",
+            "job_id": self.job_id,
+            "transcript_path": str(transcript_path),
+            "transcript_with_speakers_path": str(transcript_with_speakers_path),
+            "candidates_path": None,
+            "span_catalog_path": None,
+            "hook_candidates_path": None,
             "language_detection_path": str(language_detection_path),
             "prompt_path": str(prompt_path),
             "runtime_status_path": str(self.runtime.runtime_path),
@@ -653,6 +761,10 @@ para continuar o processamento.
 
         except Exception:
             raise RuntimeError("Invalid JSON received from AI")
+
+        if self.preset.is_raw_edit:
+            self._mark_step("validate_ai_response", "completed")
+            return self._finalize_raw_edit_response()
 
         transcript_segments = self._load_finalize_transcript()
         span_catalog = self.span_catalog_builder.build(
@@ -869,6 +981,134 @@ para continuar o processamento.
             "subtitle_path": str(subtitle_path) if subtitle_path is not None else None,
             "qa_report_path": str(self.work_dir / "qa_report.json") if qa_report is not None else None,
             "render_plan_path": str(render_plan_path),
+            "delivery_package_path": str(delivery_package_path),
+            "publish_package_path": str(publish_package_path),
+            "runtime_status_path": str(self.runtime.runtime_path),
+            "artifacts_manifest_path": str(self.artifacts.manifest_path),
+        }
+
+    def _finalize_raw_edit_response(self) -> dict:
+        self._mark_step("raw_edit_decision", "started")
+        response = dict(self.manual_response or {})
+        response.setdefault("job_id", self.job_id)
+        response.setdefault("workflow", "raw_authorial_edit")
+
+        self._log("⬇️ Downloading raw source video from storage...")
+        self._mark_step("download_video", "started")
+        video_path = self.work_dir / "video.mp4"
+        self.storage.download(
+            f"jobs/{self.job_id}/video.mp4",
+            str(video_path),
+        )
+        if not video_path.exists():
+            raise RuntimeError("Video not found in storage")
+        self._mark_step("download_video", "completed", video_path=str(video_path))
+
+        self._log("🎬 Rendering authorial edit...")
+        self._mark_step("raw_edit_render", "started")
+        final_video_path, rendered_timeline = self.raw_edit_renderer.render(
+            source_video=video_path,
+            edit_response=response,
+            output_path=self.work_dir / "raw_edit_final.mp4",
+        )
+        self._mark_step(
+            "raw_edit_render",
+            "completed",
+            timeline_blocks=len(rendered_timeline),
+            output_path=str(final_video_path),
+        )
+
+        rendered_duration = sum(
+            float(item.get("rendered_duration_sec") or 0.0)
+            for item in rendered_timeline
+        )
+        response.setdefault("final_video_plan", {})
+        if isinstance(response["final_video_plan"], dict):
+            response["final_video_plan"]["rendered_timeline"] = rendered_timeline
+            response["final_video_plan"]["rendered_duration_sec"] = round(rendered_duration, 3)
+
+        delivery_package = {
+            "job_id": self.job_id,
+            "status": "completed",
+            "pipeline_stage": "finalize",
+            "preset_id": self.preset.preset_id,
+            "render_intent": self.preset.render_intent,
+            "raw_authorial_edit": response,
+            "post": response.get("post") or {},
+            "videos": [
+                {
+                    "video_index": 1,
+                    "clip_count": len(rendered_timeline),
+                    "final_file_name": final_video_path.name,
+                    "final_local_path": str(final_video_path),
+                    "post": response.get("post") or {},
+                    "render_intent": self.preset.render_intent,
+                }
+            ],
+            "clips": [],
+            "final_assets": {
+                "final_clips": [
+                    {
+                        "clip_index": 1,
+                        "status": "ready",
+                        "file_name": final_video_path.name,
+                        "local_path": str(final_video_path),
+                    }
+                ],
+                "final_reel": {
+                    "status": "ready",
+                    "file_name": final_video_path.name,
+                    "local_path": str(final_video_path),
+                },
+                "subtitles": None,
+            },
+        }
+        publish_package = {
+            "job_id": self.job_id,
+            "workflow": "raw_authorial_edit",
+            "post": response.get("post") or {},
+            "editorial_strategy": response.get("editorial_strategy") or {},
+            "final_video_plan": response.get("final_video_plan") or {},
+            "style_guide": response.get("style_guide") or {},
+        }
+        qa_report = {
+            "decision": "editorial_plan_ready",
+            "summary": {
+                "workflow": "raw_authorial_edit",
+                "rendered_video": True,
+                "timeline_blocks": len(rendered_timeline),
+                "rendered_duration_sec": round(rendered_duration, 3),
+            },
+            "warnings": [],
+        }
+
+        delivery_package_path = self._write_json_artifact(
+            "delivery_package.json",
+            delivery_package,
+            "delivery_package",
+        )
+        publish_package_path = self._write_json_artifact(
+            "publish_package.json",
+            publish_package,
+            "publish_package",
+        )
+        qa_report_path = self._write_json_artifact(
+            "qa_report.json",
+            qa_report,
+            "qa_report",
+        )
+        self._mark_step("raw_edit_decision", "completed")
+        self._mark_step("finalize", "completed")
+
+        return {
+            "status": "success",
+            "job_id": self.job_id,
+            "cut_files": [],
+            "final_clip_files": [str(final_video_path)],
+            "final_reel_path": str(final_video_path),
+            "subtitle_path": None,
+            "qa_report_path": str(qa_report_path),
+            "render_plan_path": None,
             "delivery_package_path": str(delivery_package_path),
             "publish_package_path": str(publish_package_path),
             "runtime_status_path": str(self.runtime.runtime_path),
