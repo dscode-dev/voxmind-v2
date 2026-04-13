@@ -8,8 +8,9 @@ from app.settings import settings
 
 class FinalVideoRenderer:
 
-    def __init__(self, work_dir: Path):
+    def __init__(self, work_dir: Path, default_video_ratio: str = "portrait"):
         self.work_dir = work_dir
+        self.default_video_ratio = str(default_video_ratio or "portrait").strip().lower()
         self.render_dir = self.work_dir / "rendered_sequence"
         self.render_dir.mkdir(parents=True, exist_ok=True)
 
@@ -274,7 +275,7 @@ class FinalVideoRenderer:
         output_path: Path,
         clip_plan: Dict,
     ) -> None:
-        video_ratio = str(clip_plan.get("video_ratio") or "portrait").strip().lower()
+        video_ratio = str(clip_plan.get("video_ratio") or self.default_video_ratio or "portrait").strip().lower()
         video_filters: List[str] = self._canvas_filter_chain(video_ratio)
         video_filters.append("fps=30")
         playback_speed = max(0.5, float(clip_plan.get("playback_speed") or settings.render_playback_speed or 1.0))

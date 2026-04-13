@@ -142,7 +142,10 @@ class Pipeline:
             self.work_dir,
             min_clip_duration_sec=settings.render_min_clip_duration_sec,
         )
-        self.final_renderer = FinalVideoRenderer(self.work_dir)
+        self.final_renderer = FinalVideoRenderer(
+            self.work_dir,
+            default_video_ratio=self.preset.video_ratio,
+        )
         self.raw_edit_renderer = RawEditRenderer(self.work_dir)
         self.clip_qa = ClipQA(
             min_duration_sec=settings.qa_min_clip_duration_sec,
@@ -3144,6 +3147,8 @@ Envie o JSON de roteiro/plano de edição para registrar a decisão editorial.
         final_video_specs = list(self.manual_response.get("_final_video_specs") or [])
         if not final_video_specs:
             final_video_specs = self._build_final_video_specs(transcript_segments)
+        final_video_specs = self._dedupe_final_video_specs_by_timeline(final_video_specs)
+        self.manual_response["_final_video_specs"] = final_video_specs
         if final_video_specs:
             outputs: list[Path] = []
             for index, spec in enumerate(final_video_specs, start=1):
@@ -3210,6 +3215,28 @@ Envie o JSON de roteiro/plano de edição para registrar a decisão editorial.
 
         self._mark_step("final_clips", "completed", clip_count=len(outputs))
         return outputs
+
+    def _dedupe_final_video_specs_by_timeline(self, specs: list[dict]) -> list[dict]:
+        if len(specs) < 2:
+            return specs
+
+        seen: set[tuple[tuple[float, float], ...]] = set()
+        deduped: list[dict] = []
+        for spec in specs:
+            signature = tuple(
+                (
+                    round(float(cut.get("safe_start", cut.get("start", 0.0))), 1),
+                    round(float(cut.get("safe_end", cut.get("end", 0.0))), 1),
+                )
+                for cut in (spec.get("cuts") or [])
+                if float(cut.get("safe_end", cut.get("end", 0.0))) > float(cut.get("safe_start", cut.get("start", 0.0)))
+            )
+            if not signature or signature in seen:
+                continue
+            seen.add(signature)
+            deduped.append(spec)
+
+        return deduped or specs
 
     def _build_final_video_specs(self, transcript_segments: list[dict]) -> list[dict]:
         specs: list[dict] = []
@@ -3346,7 +3373,7 @@ Envie o JSON de roteiro/plano de edição para registrar a decisão editorial.
                 max(float(cut.get("safe_end", cut.get("end", 0.0))) for cut in adjusted_cuts),
             )
 
-        return deduped if len(deduped) == len(specs) else specs
+        return deduped or specs
 
     def _consolidate_long_final_video_specs(
         self,
