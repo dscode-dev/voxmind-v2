@@ -1,0 +1,5 @@
+SHORT_SERIE
+- Generate connected cuts that together form one cohesive short narrative.
+- Related cuts should share the same merge_group.
+- Prefer 2 connected cuts per final video whenever there is a strong continuation in the material.
+- Use a single cut only when one continuous block already delivers hook, development and closure.

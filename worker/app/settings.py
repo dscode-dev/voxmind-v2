@@ -53,6 +53,14 @@ class Settings(BaseSettings):
         alias="LLM_MODE"
     )
 
+    # AI execution mode for the worker: "automatic" calls the AI provider router and
+    # auto-continues to finalize; "manual" keeps the legacy Telegram prompt/response flow.
+    # A per-job `build_ia` flag overrides this default.
+    ai_mode: str = Field(
+        default="automatic",
+        alias="AI_MODE"
+    )
+
     openai_api_key: str | None = Field(
         default=None,
         alias="OPENAI_API_KEY"
@@ -75,6 +83,31 @@ class Settings(BaseSettings):
     openai_timeout_sec: int = Field(
         default=90,
         alias="OPENAI_TIMEOUT_SEC"
+    )
+
+    # ======================================
+    # Local LLM node (optional — e.g. iPad M4 running an Ollama-compatible API)
+    # ======================================
+
+    local_llm_enabled: bool = Field(
+        default=False,
+        alias="LOCAL_LLM_ENABLED"
+    )
+    local_llm_base_url: str | None = Field(
+        default=None,
+        alias="LOCAL_LLM_BASE_URL"
+    )
+    local_llm_model: str = Field(
+        default="qwen3:8b",
+        alias="LOCAL_LLM_MODEL"
+    )
+    local_llm_timeout_sec: int = Field(
+        default=120,
+        alias="LOCAL_LLM_TIMEOUT_SEC"
+    )
+    local_llm_healthcheck_timeout_sec: int = Field(
+        default=5,
+        alias="LOCAL_LLM_HEALTHCHECK_TIMEOUT_SEC"
     )
 
     llm_max_chars: int = Field(

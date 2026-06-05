@@ -126,6 +126,14 @@ def run_pipeline(job: dict):
         },
     )
 
+    # Resolve AI mode: explicit per-job build_ia wins; otherwise fall back to the worker
+    # default (AI_MODE, default "automatic"). Manual mode keeps the legacy Telegram flow.
+    build_ia_raw = job.get("build_ia")
+    if build_ia_raw is None:
+        automatic = settings.ai_mode == "automatic"
+    else:
+        automatic = bool(build_ia_raw)
+
     pipeline = Pipeline(
         video_url=video_url,
         job_id=job_id,
@@ -133,7 +141,7 @@ def run_pipeline(job: dict):
         clip_mode=preset.clip_mode,
         video_ratio=preset.video_ratio,
         job_preset=preset.preset_id,
-        build_ia=bool(job.get("build_ia", False)),
+        build_ia=automatic,
         source_storage_key=source_storage_key,
         edit_brief=job.get("edit_brief"),
     )
@@ -290,6 +298,36 @@ def run_pipeline(job: dict):
                 pipeline_stage="prepare",
                 status="awaiting_manual_llm",
             )
+
+            # Automatic mode attached a follow-up finalize job. Prepare artifacts are now in
+            # storage, so it is safe to enqueue finalize for the next worker pickup.
+            auto_finalize_job = result.get("auto_finalize_job")
+            if auto_finalize_job:
+                try:
+                    redis.Redis(
+                        host=settings.redis_host,
+                        port=settings.redis_port,
+                        decode_responses=True,
+                    ).lpush(settings.redis_queue_name, json.dumps(auto_finalize_job))
+                    logger.info(
+                        "Auto-enqueued finalize job",
+                        extra={
+                            "job_id": job_id,
+                            "pipeline_stage": "finalize",
+                            "step": "auto_finalize_enqueue",
+                            "status": "queued",
+                        },
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to auto-enqueue finalize job",
+                        extra={
+                            "job_id": job_id,
+                            "pipeline_stage": "finalize",
+                            "step": "auto_finalize_enqueue",
+                            "status": "failed",
+                        },
+                    )
             return
 
         # ==========================================

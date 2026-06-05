@@ -166,6 +166,81 @@ class ClipFlowApiClient:
         stop=stop_after_attempt(settings.integration_retry_attempts),
         reraise=True,
     )
+    def publish_event(
+        self,
+        *,
+        service: str,
+        type: str = "info",
+        pipeline_job_id: str | None = None,
+        stage: str | None = None,
+        message: str | None = None,
+        payload: dict[str, Any] | None = None,
+        worker_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        if not self.enabled:
+            return None
+
+        url = f"{self.base_url}/internal/events"
+        response = requests.post(
+            url,
+            json={
+                "service": service,
+                "type": type,
+                "pipeline_job_id": pipeline_job_id,
+                "stage": stage,
+                "message": message,
+                "payload": payload,
+                "worker_id": worker_id,
+            },
+            headers=self._headers(),
+            timeout=settings.clipflow_api_timeout_sec,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def publish_event_safe(
+        self,
+        *,
+        service: str,
+        type: str = "info",
+        pipeline_job_id: str | None = None,
+        stage: str | None = None,
+        message: str | None = None,
+        payload: dict[str, Any] | None = None,
+        worker_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        try:
+            return self.publish_event(
+                service=service,
+                type=type,
+                pipeline_job_id=pipeline_job_id,
+                stage=stage,
+                message=message,
+                payload=payload,
+                worker_id=worker_id,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to publish pipeline event to ClipFlow API",
+                extra={
+                    "pipeline_job_id": pipeline_job_id,
+                    "service": service,
+                    "stage": stage,
+                    "step": "publish_event",
+                    "status": "failed",
+                },
+            )
+            return None
+
+    @retry(
+        retry=retry_if_exception_type(requests.RequestException),
+        wait=wait_exponential(
+            min=settings.integration_retry_min_sec,
+            max=settings.integration_retry_max_sec,
+        ),
+        stop=stop_after_attempt(settings.integration_retry_attempts),
+        reraise=True,
+    )
     def claim_due_private_scheduler_runs(
         self,
         worker_id: str,

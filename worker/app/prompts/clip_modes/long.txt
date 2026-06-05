@@ -1,0 +1,6 @@
+LONG
+- Generate connected blocks for a larger coherent narrative.
+- Preserve continuity between cuts.
+- Keep more context than short-form outputs.
+- Prefer sequences that feel like strong excerpts from a normal video, not shorts disguised as long clips.
+- Preserve setup, development, examples and closure.

@@ -55,8 +55,11 @@ Uso:
 
 /new [--short | --long | --long-series | --short-serie]
      [--portrait | --landscape]
-     [--build-ia]
+     [--manual | --build-ia]
      <url>
+
+Por padrão o pipeline roda em modo AUTOMÁTICO (IA gera os cortes).
+Use --manual para o fluxo legado de prompt/response.json via Telegram.
 """
             )
             return
@@ -65,7 +68,8 @@ Uso:
         video_ratio = "portrait"
         job_preset = "short_series"
         ratio_explicit = False
-        build_ia = False
+        # Default is automatic (AI provider). Manual Telegram flow is opt-in via --manual.
+        build_ia = True
         video_url = None
 
         for arg in context.args:
@@ -96,6 +100,9 @@ Uso:
 
             elif arg == "--build-ia":
                 build_ia = True
+
+            elif arg == "--manual":
+                build_ia = False
 
             elif arg.startswith("http"):
                 video_url = arg

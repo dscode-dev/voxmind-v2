@@ -1,44 +1,49 @@
-# VoxMind V2 (Kubernetes-native)
+# VoxMind / ClipFlow V2
 
-Production-oriented, Kubernetes-native architecture for VoxMind V2.
+Autonomous, observable AI content factory. Discovers trending videos per theme, generates
+cuts, and publishes — with a frontend that acts as a live **Operations Center**.
+
+> **Deployment: Docker Compose** (single main server). Kubernetes is no longer used; the
+> `k8s/` directory is historical/deprecated. See `docs/ARCHITECTURE_V2.md` for the full
+> architecture and the V2 evolution plan.
 
 ## Components
-- **control-plane**: FastAPI service that receives requests (Telegram bot or HTTP), creates Kubernetes Jobs, tracks status, and can notify Telegram.
-- **worker**: Stateless container executed as a Kubernetes Job (1 video = 1 pod). Performs download → audio extraction → ASR → (next phases: chunking/LLM/cutting/rendering).
 
-## Quick Start (cluster already running)
+- **control-plane** — Telegram bot (`/new`, `/finalize`) that enqueues jobs onto a Redis queue.
+- **worker** — GPU container that runs the pipeline (download → faster-whisper → diarize →
+  chunk → candidates → prompt → LLM → cut/render). One video = one run.
+- **clipflow-api** — FastAPI backend: auth, jobs, pipeline state, artifacts, and the realtime
+  event hub (SSE).
+- **clipflow-studio** — React/Vite dashboard + Operations Center.
+- **redis** (queue + event pub/sub), **minio** (artifacts), **postgres** (state).
 
-1) Create namespace + RBAC
+## Quick start
+
 ```bash
-kubectl apply -f k8s/namespace.yaml
-kubectl apply -f k8s/rbac-control-plane.yaml
+cp .env.compose.example .env   # edit secrets (Telegram, MinIO, Postgres, JWT, OpenAI...)
+docker compose up -d --build
 ```
 
-2) Create Secrets (edit values first)
+clipflow-api runs `alembic upgrade head` on boot. Default ports: studio `:3000`,
+api `:8010`, control-plane `:8000`, MinIO `:9000/:9001`.
+
+## Pipeline flows
+
+- **Manual / paid (`ClipJob`)**: `/new <url>` → prepare → operator returns `response.json`
+  (or uses `--build-ia` for the OpenAI path) → `/finalize` → cuts.
+- **Autonomous (`PipelineJob`, V2)**: scheduler discovers a candidate → enqueues → worker
+  runs the same pipeline → publish. Tracked by the `PipelineState` machine and streamed to the
+  Ops Center.
+
+## Development
+
 ```bash
-kubectl apply -f k8s/secrets.yaml
+# API
+cd clipflow-api && poetry install && alembic upgrade head && pytest
+# Worker
+cd worker && poetry install && pytest
+# Studio
+cd clipflow-studio && npm install && npm run dev
 ```
 
-3) Deploy control-plane
-```bash
-kubectl apply -f k8s/control-plane-deployment.yaml
-```
-
-4) Build/push images and update manifests
-- Build `control-plane` and `worker` images
-- Push to your registry
-- Update `image:` fields in `k8s/control-plane-deployment.yaml`
-
-5) Trigger a job (example)
-```bash
-kubectl -n voxmind-v2 port-forward svc/voxmind-control-plane 8080:80
-curl -X POST http://localhost:8080/v1/jobs \
-  -H 'Content-Type: application/json' \
-  -H 'X-Api-Key: <CONTROL_PLANE_API_KEY>' \
-  -d '{"video_url":"https://www.youtube.com/watch?v=VIDEO_ID","mode":"v2"}'
-```
-
-## MVP Scope
-This MVP focuses on **production-grade scaffolding**: RBAC, structured logs, settings, timeouts/retries, resource limits, secure defaults, and a real **download+ASR** step in the worker (CPU, faster-whisper).
-
-Next iterations will plug in: chunking, LLM routing, scoring, rendering, subtitles, artifact storage (MinIO/S3), and Telegram ingestion.
+See `docs/ARCHITECTURE_V2.md` for module map, state machine, and event model.

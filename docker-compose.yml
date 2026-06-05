@@ -120,6 +120,12 @@ services:
         condition: service_started
     environment:
       WORKER_MODE: queue
+      AI_MODE: ${AI_MODE:-automatic}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      LOCAL_LLM_ENABLED: ${LOCAL_LLM_ENABLED:-false}
+      LOCAL_LLM_BASE_URL: ${LOCAL_LLM_BASE_URL:-}
+      LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-qwen3:8b}
       LOG_LEVEL: ${WORKER_LOG_LEVEL}
       VIDEO_URL: ""
       PIPELINE_STAGE: prepare

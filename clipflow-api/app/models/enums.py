@@ -115,3 +115,98 @@ class UsageMetricType(str, enum.Enum):
     LLM_TOKENS = "llm_tokens"
 
     TRANSCRIPTION_SECONDS = "transcription_seconds"
+
+
+# =====================================================
+# V2 — Autonomous pipeline (PipelineJob lineage)
+# =====================================================
+
+
+class PipelineState(str, enum.Enum):
+    """Granular state machine for autonomous PipelineJobs (brief §PIPELINE STATE MACHINE)."""
+
+    DISCOVERED = "discovered"
+    SELECTED = "selected"
+    DOWNLOADING = "downloading"
+    DOWNLOADED = "downloaded"
+    TRANSCRIBING = "transcribing"
+    TRANSCRIBED = "transcribed"
+    ANALYZING = "analyzing"
+    PROMPT_BUILDING = "prompt_building"
+    WAITING_AI = "waiting_ai"
+    AI_COMPLETED = "ai_completed"
+    RENDERING = "rendering"
+    RENDERED = "rendered"
+    READY_TO_PUBLISH = "ready_to_publish"
+    PUBLISHING = "publishing"
+    PUBLISHED = "published"
+    FAILED = "failed"
+    CANCELED = "canceled"
+
+
+class PipelineEventType(str, enum.Enum):
+    """Coarse classification for the generic PipelineEvent stream."""
+
+    STATE_CHANGED = "state_changed"
+    INFO = "info"
+    WARNING = "warning"
+    ERROR = "error"
+    RETRY = "retry"
+    HEARTBEAT = "heartbeat"
+
+
+class VideoCandidateStatus(str, enum.Enum):
+    DISCOVERED = "discovered"
+    RANKED = "ranked"
+    SELECTED = "selected"
+    REJECTED = "rejected"
+    CONSUMED = "consumed"
+
+
+class DiscoverySourceKind(str, enum.Enum):
+    YOUTUBE_TRENDING = "youtube_trending"
+    YOUTUBE_SEARCH = "youtube_search"
+    NEWS = "news"
+    RSS = "rss"
+    MANUAL = "manual"
+
+
+class GeneratedAssetKind(str, enum.Enum):
+    CLIP = "clip"
+    FINAL_VIDEO = "final_video"
+    THUMBNAIL = "thumbnail"
+    THUMBNAIL_PROMPT = "thumbnail_prompt"
+    TITLE = "title"
+    DESCRIPTION = "description"
+    HASHTAGS = "hashtags"
+    SUBTITLES = "subtitles"
+    METADATA = "metadata"
+
+
+class PublishPlatform(str, enum.Enum):
+    TELEGRAM = "telegram"
+    YOUTUBE = "youtube"
+    TIKTOK = "tiktok"
+    INSTAGRAM = "instagram"
+
+
+class PublishAttemptStatus(str, enum.Enum):
+    PENDING = "pending"
+    IN_PROGRESS = "in_progress"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELED = "canceled"
+
+
+class ConnectedNodeStatus(str, enum.Enum):
+    ONLINE = "online"
+    OFFLINE = "offline"
+    DEGRADED = "degraded"
+    UNKNOWN = "unknown"
+
+
+class AIExecutionStatus(str, enum.Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"

@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv/bin/alembic heads *)",
+      "Bash(.venv/bin/alembic history *)",
+      "Bash(python3 -c \"import ast,pathlib; s=pathlib.Path\\('app/integrations/clipflow_api_client.py'\\).read_text\\(\\); ast.parse\\(s\\); print\\('parses OK; publish_event_safe present:', 'def publish_event_safe' in s\\)\")",
+      "Bash(.venv/bin/python -c \"import importlib.util as u; s=u.spec_from_file_location\\('m','alembic/versions/f1a2b3c4d5e6_add_v2_pipeline_models.py'\\); m=u.module_from_spec\\(s\\); s.loader.exec_module\\(m\\); print\\('parses OK; enums:', len\\(m._ALL_ENUMS\\)\\); print\\('all create_type False:', all\\(e.create_type is False for e in m._ALL_ENUMS\\)\\)\")",
+      "Bash(.venv/bin/python -m pytest -q)",
+      "Bash(.venv/bin/ruff check *)",
+      "Bash(python3 -m py_compile app/settings.py app/main.py app/pipeline/pipeline.py app/ai/__init__.py app/ai/events.py app/ai/validation.py app/ai/provider_router.py app/ai/providers/base_provider.py app/ai/providers/openai_provider.py app/ai/providers/local_provider.py app/prompts/builder.py app/agents/base_agent.py app/agents/editorial_agent.py app/agents/metadata_agent.py app/agents/trend_agent.py app/graph/graph_builder.py app/graph/pipeline_graph.py)",
+      "Bash(python3 -c \"import openai, requests, tenacity, pydantic_settings; print\\('deps ok'\\)\")",
+      "Bash(python3 -c \"import pydantic_settings, tenacity, requests; print\\('worker deps ok'\\)\")",
+      "Bash(python3 -m pytest tests/test_ai_provider.py -q)",
+      "Bash(python3 -m venv voxai_venv)",
+      "Bash(/tmp/voxai_venv/bin/pip -q install pydantic pydantic-settings tenacity requests pytest)",
+      "Bash(/tmp/voxai_venv/bin/python -m pytest tests/test_ai_provider.py -q)",
+      "Bash(/tmp/voxai_venv/bin/python -c ' *)",
+      "Bash(python3 -m py_compile control-plane/app/bot.py)",
+      "Bash(grep -n \"WORKER_MODE: queue\\\\|CLIPFLOW_API_INTERNAL_TOKEN: \\\\${INTERNAL_API_TOKEN}\" docker-compose.yml)",
+      "Bash(python3 -c \"import yaml,sys; d=yaml.safe_load\\(open\\('docker-compose.yml'\\)\\); env=d['services']['voxmind-worker']['environment']; print\\('worker AI env keys present:', [k for k in ['AI_MODE','OPENAI_API_KEY','OPENAI_MODEL','LOCAL_LLM_ENABLED','LOCAL_LLM_BASE_URL','LOCAL_LLM_MODEL'] if k in env]\\); print\\('compose YAML valid'\\)\")"
+    ]
+  }
+}

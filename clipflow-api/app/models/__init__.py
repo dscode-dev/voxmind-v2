@@ -13,6 +13,18 @@ from app.models.private_scheduler_profile import PrivateSchedulerProfile
 from app.models.private_scheduler_run import PrivateSchedulerRun
 from app.models.script_job import ScriptJob
 
+# V2 — autonomous pipeline lineage
+from app.models.content_topic import ContentTopic
+from app.models.discovery_source import DiscoverySource
+from app.models.video_candidate import VideoCandidate
+from app.models.pipeline_job import PipelineJob
+from app.models.pipeline_event import PipelineEvent
+from app.models.generated_asset import GeneratedAsset
+from app.models.publish_target import PublishTarget
+from app.models.publish_attempt import PublishAttempt
+from app.models.connected_node import ConnectedNode
+from app.models.ai_execution import AIExecution
+
 __all__ = [
     "User",
     "BillingProduct",
@@ -28,4 +40,14 @@ __all__ = [
     "PrivateSchedulerProfile",
     "PrivateSchedulerRun",
     "ScriptJob",
+    "ContentTopic",
+    "DiscoverySource",
+    "VideoCandidate",
+    "PipelineJob",
+    "PipelineEvent",
+    "GeneratedAsset",
+    "PublishTarget",
+    "PublishAttempt",
+    "ConnectedNode",
+    "AIExecution",
 ]

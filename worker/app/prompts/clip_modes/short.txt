@@ -1,0 +1,5 @@
+SHORT
+- Generate independent cuts.
+- Each cut must work as a standalone video.
+- Prefer a complete beginning, development and ending.
+- Do not split one incomplete thought across different final videos.

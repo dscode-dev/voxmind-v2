@@ -30,6 +30,11 @@ from app.pipeline.render_plan_builder import RenderPlanBuilder
 from app.pipeline.audio_peak_detector import AudioPeakDetector
 from app.pipeline.story_shift_detector import StoryShiftDetector
 from app.prompts.raw_edit_prompt_builder import RawEditPromptBuilder
+from app.prompts.builder import PromptBuilder
+
+from app.ai import events as ai_events
+from app.ai.provider_router import ProviderRouter
+from app.ai.validation import validate_cuts_response
 
 from app.integrations.telegram_sender import TelegramSender
 from app.integrations.clipflow_api_client import ClipFlowApiClient
@@ -157,6 +162,11 @@ class Pipeline:
         self.clipflow_api = ClipFlowApiClient()
         self.prompt_builder = ManualPromptBuilder()
         self.raw_edit_prompt_builder = RawEditPromptBuilder()
+
+        # V2 automatic AI path (provider abstraction). Constructed eagerly but only used when
+        # build_ia is true; no network happens at construction time.
+        self.prompt_builder_v2 = PromptBuilder()
+        self.provider_router = ProviderRouter(emitter=self._emit_ai_event)
 
     def _build_chunker(self) -> Chunker:
         return Chunker(
@@ -483,6 +493,33 @@ ERROR:
             "prompt",
         )
 
+        prepare_result = {
+            "status": "awaiting_manual_llm",
+            "job_id": self.job_id,
+            "transcript_path": str(transcript_path),
+            "transcript_with_speakers_path": str(transcript_with_speakers_path),
+            "candidates_path": str(candidates_path),
+            "span_catalog_path": str(span_catalog_path),
+            "hook_candidates_path": str(hook_candidates_path),
+            "language_detection_path": str(language_detection_path),
+            "prompt_path": str(prompt_path),
+            "runtime_status_path": str(self.runtime.runtime_path),
+            "artifacts_manifest_path": str(self.artifacts.manifest_path),
+        }
+
+        # Automatic mode: call the AI provider router and auto-continue to finalize. The manual
+        # Telegram flow below is preserved as a fallback/debug mode (build_ia = false).
+        if self.build_ia:
+            self._run_automatic_ai_and_enqueue(
+                prepare_result,
+                segments=segments,
+                ranked=ranked,
+                span_catalog=span_catalog,
+                hook_candidates=hook_candidates,
+            )
+            self._mark_step("prepare", "completed")
+            return prepare_result
+
         self._log("📤 Sending prompt to Telegram...")
         self._mark_step("send_prompt", "started")
 
@@ -520,19 +557,102 @@ para continuar o processamento.
         )
         self._mark_step("prepare", "completed")
 
-        return {
-            "status": "awaiting_manual_llm",
+        return prepare_result
+
+    def _run_automatic_ai_and_enqueue(
+        self,
+        prepare_result: dict,
+        *,
+        segments: list[dict],
+        ranked: list[dict],
+        span_catalog: list[dict],
+        hook_candidates: list[dict],
+    ) -> None:
+        """Automatic AI section: build prompt → provider router → validate → enqueue finalize.
+
+        Replaces only the AI step. The follow-up finalize job is attached to ``prepare_result``
+        as ``auto_finalize_job`` and enqueued by ``main.run_pipeline`` after prepare artifacts
+        are uploaded, so the existing finalize stage runs unchanged."""
+        self._log("🤖 Generating cuts with AI provider...")
+        self._mark_step("ai_request", "started")
+
+        system_prompt, user_prompt, schema = self.prompt_builder_v2.build(
+            transcript=segments,
+            candidates=ranked,
+            span_catalog=span_catalog,
+            hook_candidates=hook_candidates,
+            job_id=self.job_id,
+            clip_mode=self.clip_mode,
+            video_ratio=self.video_ratio,
+            job_preset=self.preset.preset_id,
+        )
+
+        ai_response = self.provider_router.generate_json(system_prompt, user_prompt, schema)
+        ai_response = validate_cuts_response(ai_response, is_raw_edit=self.preset.is_raw_edit)
+        ai_response.setdefault("job_id", self.job_id)
+        self._mark_step(
+            "ai_request",
+            "completed",
+            provider=self.provider_router.last_provider,
+        )
+
+        ai_path = self._write_json_artifact("ai_response.json", ai_response, "ai_response")
+        try:
+            self.storage.upload(str(ai_path), f"jobs/{self.job_id}/ai_response.json")
+        except Exception:
+            self.logger.exception(
+                "Failed to upload ai_response artifact",
+                extra={"job_id": self.job_id, "pipeline_stage": settings.pipeline_stage},
+            )
+
+        prepare_result["auto_finalize_job"] = {
             "job_id": self.job_id,
-            "transcript_path": str(transcript_path),
-            "transcript_with_speakers_path": str(transcript_with_speakers_path),
-            "candidates_path": str(candidates_path),
-            "span_catalog_path": str(span_catalog_path),
-            "hook_candidates_path": str(hook_candidates_path),
-            "language_detection_path": str(language_detection_path),
-            "prompt_path": str(prompt_path),
-            "runtime_status_path": str(self.runtime.runtime_path),
-            "artifacts_manifest_path": str(self.artifacts.manifest_path),
+            "pipeline_stage": "finalize",
+            "manual_response": ai_response,
+            "video_url": self.video_url,
+            "source_storage_key": self.source_storage_key,
+            "job_preset": self.preset.preset_id,
+            "clip_mode": self.clip_mode,
+            "video_ratio": self.video_ratio,
+            "build_ia": True,
         }
+
+    def _emit_ai_event(
+        self,
+        event_name: str,
+        *,
+        provider: str | None = None,
+        model: str | None = None,
+        latency_ms: int | None = None,
+        error: str | None = None,
+        **extra,
+    ) -> None:
+        """Publish an AI event as a generic PipelineEvent (service="ai") via the EventBus.
+
+        ``pipeline_job_id`` is left None on purpose: these are global provider-health events
+        (the current worker job is a billing-coupled ClipJob, not a PipelineJob), so the
+        OpsCenter shows them on the global feed without violating the FK."""
+        payload: dict = {"ai_event": event_name, "job_id": self.job_id}
+        if provider:
+            payload["provider"] = provider
+        if model:
+            payload["model"] = model
+        if latency_ms is not None:
+            payload["latency_ms"] = latency_ms
+        if error:
+            payload["error"] = error
+        if extra:
+            payload.update(extra)
+
+        self.clipflow_api.publish_event_safe(
+            service="ai",
+            type=ai_events.level_for(event_name),
+            pipeline_job_id=None,
+            stage="ai",
+            message=event_name,
+            payload=payload,
+            worker_id=self.job_id,
+        )
 
     def _prepare_source_video(self) -> Path:
         video_path = self.work_dir / "source_video.mp4"

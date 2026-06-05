@@ -1,0 +1,62 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ClipFlow cuts response",
+  "description": "Structured selection of final videos / cuts returned by the AI provider. The deep editorial normalization happens later in the finalize stage.",
+  "type": "object",
+  "required": ["job_id"],
+  "properties": {
+    "job_id": { "type": "string" },
+    "final_videos": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "video_index": { "type": "integer" },
+          "hook_id": { "type": "string" },
+          "span_ids": { "type": "array", "items": { "type": "string" } },
+          "title": { "type": "string" },
+          "hook": { "type": "string" },
+          "hook_source_cut_index": { "type": "integer" },
+          "hook_start": { "type": "number" },
+          "hook_end": { "type": "number" },
+          "description": { "type": "string" },
+          "hashtags": { "type": "array", "items": { "type": "string" } },
+          "thumbnail": { "type": "string" },
+          "soundtrack_suggestion": { "type": "string" },
+          "speaker_focus": { "type": ["string", "null"] },
+          "shorts_content": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "start": { "type": "number" },
+                "end": { "type": "number" },
+                "safe_start": { "type": "number" },
+                "safe_end": { "type": "number" },
+                "reason": { "type": "string" },
+                "narrative_role": { "type": "string" },
+                "merge_group": { "type": "string" },
+                "continuity_note": { "type": "string" },
+                "speaker_focus": { "type": ["string", "null"] },
+                "transition_after": { "type": "string" }
+              },
+              "required": ["start", "end"]
+            }
+          }
+        }
+      }
+    },
+    "shorts_content": {
+      "type": "array",
+      "description": "Flat fallback list when final_videos is not used.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "start": { "type": "number" },
+          "end": { "type": "number" }
+        },
+        "required": ["start", "end"]
+      }
+    }
+  }
+}
