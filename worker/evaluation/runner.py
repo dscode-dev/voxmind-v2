@@ -464,7 +464,14 @@ def _run_qa(pipeline, specs, transcript, diarization_status) -> Dict[str, Any]:
     return {
         "decision": report.get("decision"),
         "summary": report.get("summary"),
-        "automation_status": automation.get("status"),
+        # This dataset evaluates cut *selection* from synthetic transcripts - there is no
+        # rendered file, so the PR-QA-01 technical gate is legitimately unmeasurable here and
+        # would downgrade every case to needs_review regardless of cut quality. Read the
+        # editorial verdict, which is what this harness has always been measuring.
+        # `status` (both layers combined) is exercised by the final-media harness instead.
+        "automation_status": automation.get("editorial_status", automation.get("status")),
+        "combined_status": automation.get("status"),
+        "technical_gate": (automation.get("publication_eligibility") or {}).get("technical_gate"),
         "readiness_score": automation.get("readiness_score"),
         "clips": len(cuts),
     }

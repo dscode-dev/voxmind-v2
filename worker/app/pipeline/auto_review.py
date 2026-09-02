@@ -1,4 +1,20 @@
+"""Composes the two QA layers into one publication decision.
+
+Source/editorial QA answers "were the right moments chosen?". Final Media QA answers "is the
+file that came out of the renderer technically fit to publish?". They are different
+questions and are kept as separate inputs here: a 96/100 editorial score must never launder
+a final MP4 that is silent, black or truncated.
+
+The invariant this class exists to hold (PR-QA-01 §23):
+
+    a technical failure never produces publication eligibility.
+
+No publisher exists yet. ``publication_eligibility`` is what the publisher will read when it
+does, and it is computed now so the gate is in place before anything can upload.
+"""
 from typing import Dict, List
+
+from app.video.final_media_qa import AUTO_READY, BLOCKED, NEEDS_REVIEW
 
 
 class AutoReviewPolicy:
@@ -15,8 +31,14 @@ class AutoReviewPolicy:
         self.blocked_score_threshold = blocked_score_threshold
         self.max_review_clips = max_review_clips
 
-    def evaluate(self, qa_report: Dict | None, cuts: List[Dict] | None = None) -> Dict:
+    def evaluate(
+        self,
+        qa_report: Dict | None,
+        cuts: List[Dict] | None = None,
+        final_media_report: Dict | None = None,
+    ) -> Dict:
         cuts = cuts or []
+        technical = self._technical_gate(final_media_report)
         if not self.enabled:
             return {
                 "enabled": False,
@@ -27,6 +49,10 @@ class AutoReviewPolicy:
                 "suggested_bulk_action": None,
                 "review_required": True,
                 "auto_publish_eligible": False,
+                "publication_eligibility": self._publication_eligibility(
+                    "disabled", technical, ["auto_review_disabled"]
+                ),
+                "final_media": technical["summary"],
                 "reasons": ["auto_review_disabled"],
                 "recovery_plan": None,
                 "summary": {
@@ -49,6 +75,10 @@ class AutoReviewPolicy:
                 "suggested_bulk_action": None,
                 "review_required": True,
                 "auto_publish_eligible": False,
+                "publication_eligibility": self._publication_eligibility(
+                    "blocked", technical, ["no_clips_available"]
+                ),
+                "final_media": technical["summary"],
                 "reasons": ["no_clips_available"],
                 "recovery_plan": {
                     "severity": "high",
@@ -92,7 +122,7 @@ class AutoReviewPolicy:
             reasons.append("readiness_below_fast_track_threshold")
 
         if blocked_count > 0 or readiness_score <= self.blocked_score_threshold:
-            status = "blocked"
+            editorial_status = "blocked"
             recommended_action = "regenerate_or_manual_recut"
             if readiness_score <= self.blocked_score_threshold:
                 reasons.append("readiness_below_block_threshold")
@@ -101,15 +131,24 @@ class AutoReviewPolicy:
             and review_count <= self.max_review_clips
             and readiness_score >= self.ready_score_threshold
         ):
-            status = "auto_ready"
+            editorial_status = "auto_ready"
             recommended_action = "approve_after_spot_check"
             if not reasons:
                 reasons.append("high_confidence_ready_for_fast_review")
         else:
-            status = "needs_human_review"
+            editorial_status = "needs_human_review"
             recommended_action = "human_review_required"
             if not reasons:
                 reasons.append("manual_editorial_review_required")
+
+        # The final artefact is what gets published, so it can only ever make the decision
+        # stricter. A technically blocked render is blocked no matter how the cuts scored.
+        status = self._combine(editorial_status, technical)
+        if status != editorial_status:
+            recommended_action = (
+                "regenerate_or_manual_recut" if status == "blocked" else "human_review_required"
+            )
+        reasons.extend(technical["reasons"])
 
         return {
             "enabled": True,
@@ -121,11 +160,15 @@ class AutoReviewPolicy:
                 and blocked_count == 0
                 and review_count == 0
                 and auto_ready_count == len(clip_decisions)
+                and technical["gate"] == "pass"
             ),
             "suggested_bulk_action": self._suggested_bulk_action(status),
             "review_required": status != "auto_ready",
             "auto_publish_eligible": False,
-            "reasons": reasons,
+            "publication_eligibility": self._publication_eligibility(status, technical, reasons),
+            "editorial_status": editorial_status,
+            "final_media": technical["summary"],
+            "reasons": sorted(set(reasons)),
             "recovery_plan": self._recovery_plan(status, clip_decisions, reasons),
             "summary": {
                 "total_clips": len(clip_decisions),
@@ -134,6 +177,83 @@ class AutoReviewPolicy:
                 "blocked_clips": blocked_count,
             },
             "clips": clip_decisions,
+        }
+
+    # ------------------------------------------------------------ technical gate
+
+    def _technical_gate(self, final_media_report: Dict | None) -> Dict:
+        """Reduce the Final Media QA report to a gate verdict plus its reasons.
+
+        Absence of a report is *never* a pass. A render that was never checked is
+        indistinguishable from one that failed silently, and treating "we did not look" as
+        "it is fine" is exactly the class of bug this PR exists to close.
+        """
+        if not final_media_report:
+            return {
+                "gate": "unmeasurable",
+                "status": None,
+                "reasons": ["final_media_qa_unavailable"],
+                "blocking_reasons": [],
+                "summary": {
+                    "status": None,
+                    "evaluated": False,
+                    "reason": "final_media_qa_unavailable",
+                },
+            }
+
+        status = str(final_media_report.get("status") or "")
+        reasons = [str(reason) for reason in final_media_report.get("reasons") or []]
+        blocking = [str(reason) for reason in final_media_report.get("blocking_reasons") or []]
+        gate = {AUTO_READY: "pass", NEEDS_REVIEW: "review", BLOCKED: "fail"}.get(status, "unmeasurable")
+
+        prefixed = [f"final_media:{reason}" for reason in reasons]
+        if gate == "unmeasurable":
+            prefixed.append("final_media_status_unrecognised")
+
+        return {
+            "gate": gate,
+            "status": status,
+            "reasons": prefixed,
+            "blocking_reasons": blocking,
+            "summary": {
+                "status": status,
+                "evaluated": True,
+                "summary": final_media_report.get("summary") or {},
+                "reasons": reasons,
+                "blocking_reasons": blocking,
+            },
+        }
+
+    def _combine(self, editorial_status: str, technical: Dict) -> str:
+        """Final media QA can only tighten the editorial verdict, never relax it."""
+        if technical["gate"] == "fail":
+            return "blocked"
+        if editorial_status == "blocked":
+            return "blocked"
+        if technical["gate"] in {"review", "unmeasurable"}:
+            return "needs_human_review"
+        return editorial_status
+
+    def _publication_eligibility(self, status: str, technical: Dict, reasons: List[str]) -> Dict:
+        """What a future publisher may act on.
+
+        No publisher exists in this PR. This field is the contract it will read, computed
+        now so the gate predates the upload path rather than being retrofitted around it.
+        """
+        blocked_by: List[str] = []
+        if technical["gate"] != "pass":
+            blocked_by.append(f"final_media_qa_{technical['gate']}")
+        blocked_by.extend(f"final_media:{code}" for code in technical["blocking_reasons"])
+        if status != "auto_ready":
+            blocked_by.append(f"review_status_{status}")
+
+        return {
+            "eligible": not blocked_by,
+            "technical_gate": technical["gate"],
+            "editorial_reasons": sorted({r for r in reasons if not r.startswith("final_media")}),
+            "blocked_by": sorted(set(blocked_by)),
+            # Kept explicit so nothing reads `eligible` as permission to upload today.
+            "publisher_available": False,
         }
 
     def _evaluate_clip(self, qa_clip: Dict, cut: Dict) -> Dict:

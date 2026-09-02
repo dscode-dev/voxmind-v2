@@ -22,6 +22,7 @@ class DeliveryPackageBuilder:
         automation_report: Dict | None,
         render_plan: Dict | None,
         artifacts_manifest: Dict | None,
+        final_media_report: Dict | None = None,
         response_validation: Dict | None = None,
         final_video_specs: List[Dict] | None = None,
         language_metadata: Dict | None = None,
@@ -91,8 +92,9 @@ class DeliveryPackageBuilder:
             "video_ratio": preset.video_ratio,
             "preset_id": preset.preset_id,
             "render_intent": preset.render_intent,
-            "delivery_status": self._resolve_delivery_status(qa_report),
+            "delivery_status": self._resolve_delivery_status(qa_report, final_media_report),
             "qa_decision": qa_report.get("decision") if qa_report else None,
+            "final_media_qa": final_media_report or {"evaluated": False},
             "response_validation": response_validation or {},
             "language": language_metadata or {},
             "automation": automation_report,
@@ -110,14 +112,20 @@ class DeliveryPackageBuilder:
             "artifacts_manifest": artifacts_manifest or {},
         }
 
-    def _resolve_delivery_status(self, qa_report: Dict | None) -> str:
-        if not qa_report:
-            return "ready"
+    def _resolve_delivery_status(
+        self,
+        qa_report: Dict | None,
+        final_media_report: Dict | None = None,
+    ) -> str:
+        """Source-cut QA and final-media QA together; the stricter of the two wins."""
+        final_status = str((final_media_report or {}).get("status") or "")
+        if final_status == "blocked":
+            return "blocked"
 
-        decision = qa_report.get("decision")
+        decision = (qa_report or {}).get("decision")
         if decision == "blocked":
             return "blocked"
-        if decision == "needs_review":
+        if decision == "needs_review" or final_status == "needs_review":
             return "needs_review"
         return "ready"
 

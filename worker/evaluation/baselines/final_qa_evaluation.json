@@ -1,0 +1,333 @@
+{
+  "generated_at": "2026-09-02T18:29:42.552136+00:00",
+  "cases": 19,
+  "source_type": "synthetic",
+  "before": {
+    "final_files_evaluated": 19,
+    "technical_failures_present": 17,
+    "technical_failures_detected": 17,
+    "failures_detected_with_reason": 0,
+    "technical_failures_missed": 0,
+    "invalid_outputs_auto_ready": 0,
+    "container_failures_detected": 0,
+    "duration_mismatch_detected": "unsupported",
+    "aspect_ratio_failures_detected": "unsupported",
+    "decode_failures_detected": "unsupported",
+    "silent_audio_detected": "unsupported",
+    "missing_audio_detected": "unsupported",
+    "black_or_frozen_detected": "unsupported",
+    "subtitle_timeline_failures_detected": "unsupported",
+    "valid_outputs_blocked": 2,
+    "expected_status_matches": 10
+  },
+  "after": {
+    "final_files_evaluated": 19,
+    "technical_failures_present": 17,
+    "technical_failures_detected": 17,
+    "failures_detected_with_reason": 17,
+    "technical_failures_missed": 0,
+    "invalid_outputs_auto_ready": 0,
+    "container_failures_detected": 4,
+    "duration_mismatch_detected": 1,
+    "aspect_ratio_failures_detected": 1,
+    "decode_failures_detected": 1,
+    "silent_audio_detected": 3,
+    "missing_audio_detected": 1,
+    "black_or_frozen_detected": 2,
+    "subtitle_timeline_failures_detected": 3,
+    "valid_outputs_blocked": 0,
+    "expected_status_matches": 19
+  },
+  "comparison": [
+    {
+      "metric": "final_files_evaluated",
+      "before": 19,
+      "after": 19,
+      "delta": 0
+    },
+    {
+      "metric": "technical_failures_present",
+      "before": 17,
+      "after": 17,
+      "delta": 0
+    },
+    {
+      "metric": "technical_failures_detected",
+      "before": 17,
+      "after": 17,
+      "delta": 0
+    },
+    {
+      "metric": "failures_detected_with_reason",
+      "before": 0,
+      "after": 17,
+      "delta": 17
+    },
+    {
+      "metric": "technical_failures_missed",
+      "before": 0,
+      "after": 0,
+      "delta": 0
+    },
+    {
+      "metric": "invalid_outputs_auto_ready",
+      "before": 0,
+      "after": 0,
+      "delta": 0
+    },
+    {
+      "metric": "container_failures_detected",
+      "before": 0,
+      "after": 4,
+      "delta": 4
+    },
+    {
+      "metric": "duration_mismatch_detected",
+      "before": "unsupported",
+      "after": 1,
+      "delta": null
+    },
+    {
+      "metric": "aspect_ratio_failures_detected",
+      "before": "unsupported",
+      "after": 1,
+      "delta": null
+    },
+    {
+      "metric": "decode_failures_detected",
+      "before": "unsupported",
+      "after": 1,
+      "delta": null
+    },
+    {
+      "metric": "silent_audio_detected",
+      "before": "unsupported",
+      "after": 3,
+      "delta": null
+    },
+    {
+      "metric": "missing_audio_detected",
+      "before": "unsupported",
+      "after": 1,
+      "delta": null
+    },
+    {
+      "metric": "black_or_frozen_detected",
+      "before": "unsupported",
+      "after": 2,
+      "delta": null
+    },
+    {
+      "metric": "subtitle_timeline_failures_detected",
+      "before": "unsupported",
+      "after": 3,
+      "delta": null
+    },
+    {
+      "metric": "valid_outputs_blocked",
+      "before": 2,
+      "after": 0,
+      "delta": -2
+    },
+    {
+      "metric": "expected_status_matches",
+      "before": 10,
+      "after": 19,
+      "delta": 9
+    }
+  ],
+  "performance": {
+    "media_duration_sec": 134.0,
+    "qa_duration_sec": 3.658,
+    "qa_realtime_factor": 0.0273
+  },
+  "per_case": [
+    {
+      "case_id": "valid_portrait",
+      "expected_status": "auto_ready",
+      "before_status": "needs_review",
+      "after_status": "auto_ready",
+      "after_reasons": [],
+      "matched": true
+    },
+    {
+      "case_id": "valid_landscape",
+      "expected_status": "auto_ready",
+      "before_status": "needs_review",
+      "after_status": "auto_ready",
+      "after_reasons": [],
+      "matched": true
+    },
+    {
+      "case_id": "missing_file",
+      "expected_status": "blocked",
+      "before_status": "blocked",
+      "after_status": "blocked",
+      "after_reasons": [
+        "artifact_missing"
+      ],
+      "matched": true
+    },
+    {
+      "case_id": "zero_byte_file",
+      "expected_status": "blocked",
+      "before_status": "blocked",
+      "after_status": "blocked",
+      "after_reasons": [
+        "artifact_empty"
+      ],
+      "matched": true
+    },
+    {
+      "case_id": "invalid_container",
+      "expected_status": "blocked",
+      "before_status": "blocked",
+      "after_status": "blocked",
+      "after_reasons": [
+        "invalid_container"
+      ],
+      "matched": true
+    },
+    {
+      "case_id": "truncated_container",
+      "expected_status": "blocked",
+      "before_status": "blocked",
+      "after_status": "blocked",
+      "after_reasons": [
+        "invalid_container"
+      ],
+      "matched": true
+    },
+    {
+      "case_id": "missing_audio",
+      "expected_status": "blocked",
+      "before_status": "needs_review",
+      "after_status": "blocked",
+      "after_reasons": [
+        "audio_stream_missing"
+      ],
+      "matched": true
+    },
+    {
+      "case_id": "wrong_aspect_ratio",
+      "expected_status": "blocked",
+      "before_status": "needs_review",
+      "after_status": "blocked",
+      "after_reasons": [
+        "wrong_aspect_ratio"
+      ],
+      "matched": true
+    },
+    {
+      "case_id": "duration_mismatch",
+      "expected_status": "blocked",
+      "before_status": "needs_review",
+      "after_status": "blocked",
+      "after_reasons": [
+        "duration_mismatch_severe"
+      ],
+      "matched": true
+    },
+    {
+      "case_id": "long_silence",
+      "expected_status": "needs_review",
+      "before_status": "needs_review",
+      "after_status": "needs_review",
+      "after_reasons": [
+        "audio_long_silence"
+      ],
+      "matched": true
+    },
+    {
+      "case_id": "fully_silent_audio",
+      "expected_status": "blocked",
+      "before_status": "needs_review",
+      "after_status": "blocked",
+      "after_reasons": [
+        "audio_fully_silent"
+      ],
+      "matched": true
+    },
+    {
+      "case_id": "audio_clipping",
+      "expected_status": "needs_review",
+      "before_status": "needs_review",
+      "after_status": "needs_review",
+      "after_reasons": [
+        "audio_peak_clipping"
+      ],
+      "matched": true
+    },
+    {
+      "case_id": "severe_clipping",
+      "expected_status": "blocked",
+      "before_status": "needs_review",
+      "after_status": "blocked",
+      "after_reasons": [
+        "audio_severe_clipping"
+      ],
+      "matched": true
+    },
+    {
+      "case_id": "decode_error",
+      "expected_status": "blocked",
+      "before_status": "needs_review",
+      "after_status": "blocked",
+      "after_reasons": [
+        "decode_error"
+      ],
+      "matched": true
+    },
+    {
+      "case_id": "black_video",
+      "expected_status": "blocked",
+      "before_status": "needs_review",
+      "after_status": "blocked",
+      "after_reasons": [
+        "video_frozen",
+        "video_mostly_black"
+      ],
+      "matched": true
+    },
+    {
+      "case_id": "frozen_video",
+      "expected_status": "needs_review",
+      "before_status": "needs_review",
+      "after_status": "needs_review",
+      "after_reasons": [
+        "video_frozen"
+      ],
+      "matched": true
+    },
+    {
+      "case_id": "subtitle_beyond_duration",
+      "expected_status": "needs_review",
+      "before_status": "needs_review",
+      "after_status": "needs_review",
+      "after_reasons": [
+        "subtitle_out_of_bounds"
+      ],
+      "matched": true
+    },
+    {
+      "case_id": "subtitle_negative_start",
+      "expected_status": "needs_review",
+      "before_status": "needs_review",
+      "after_status": "needs_review",
+      "after_reasons": [
+        "subtitle_negative_timestamp"
+      ],
+      "matched": true
+    },
+    {
+      "case_id": "subtitle_empty_file",
+      "expected_status": "needs_review",
+      "before_status": "needs_review",
+      "after_status": "needs_review",
+      "after_reasons": [
+        "subtitle_file_empty"
+      ],
+      "matched": true
+    }
+  ]
+}

@@ -327,6 +327,44 @@ class Settings(BaseSettings):
         alias="AUTO_REVIEW_MAX_REVIEW_CLIPS"
     )
 
+    # ======================================
+    # Final Media QA (PR-QA-01)
+    # ------------------------------------------------------------------------------
+    # The gate over the MP4 that would actually be published. Source-cut QA above answers
+    # editorial questions; these answer "is this file technically publishable?". The full
+    # policy lives in app/video/final_media_qa.py:FinalMediaQAPolicy; only the knobs an
+    # operator realistically needs to turn are exposed here.
+    # ======================================
+
+    final_qa_enabled: bool = Field(
+        default=True,
+        alias="FINAL_QA_ENABLED"
+    )
+    # Encoder and timebase drift, not editorial slack. The measured error on a real render
+    # of a modelled 38.261s timeline was +0.139s.
+    final_qa_duration_tolerance_sec: float = Field(
+        default=1.5,
+        alias="FINAL_QA_DURATION_TOLERANCE_SEC"
+    )
+    final_qa_max_silence_sec: float = Field(
+        default=8.0,
+        alias="FINAL_QA_MAX_SILENCE_SEC"
+    )
+    # Fraction of the running time that may be (almost) black before the render is blocked.
+    final_qa_black_ratio: float = Field(
+        default=0.60,
+        alias="FINAL_QA_BLACK_RATIO"
+    )
+    final_qa_max_freeze_sec: float = Field(
+        default=4.0,
+        alias="FINAL_QA_MAX_FREEZE_SEC"
+    )
+    # One full decode of the final file. Generous: it is bounded, not tight.
+    final_qa_decode_timeout_sec: int = Field(
+        default=900,
+        alias="FINAL_QA_DECODE_TIMEOUT_SEC"
+    )
+
     render_min_clip_duration_sec: int = Field(
         default=25,
         alias="RENDER_MIN_CLIP_DURATION_SEC"

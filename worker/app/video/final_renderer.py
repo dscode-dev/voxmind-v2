@@ -8,6 +8,9 @@ from app.settings import settings
 
 class FinalVideoRenderer:
 
+    SOUNDTRACK_FADE_IN_SEC = 1.2
+    SOUNDTRACK_FADE_OUT_SEC = 1.6
+
     def __init__(self, work_dir: Path, default_video_ratio: str = "portrait", job_id: str | None = None):
         self.work_dir = work_dir
         self.job_id = job_id
@@ -689,6 +692,26 @@ class FinalVideoRenderer:
             return
 
         volume = max(0.03, min(volume, 0.22))
+
+        # The fade-out used to sit at a hardcoded `st=28`, from a time when every output was
+        # a ~30s short. On anything longer the music bed simply stopped: measured on a 45s
+        # render, the bed went to -91 dB at 29.5s and stayed there for the last 13.8s. The
+        # programme audio still played, so nothing failed loudly — the video just lost its
+        # score two thirds of the way through. The fade now tracks the real duration.
+        duration = self._probe_duration(input_path)
+        fade_out_sec = min(self.SOUNDTRACK_FADE_OUT_SEC, max(0.2, duration / 4.0)) if duration > 0 else 0.0
+        fade_in_sec = min(self.SOUNDTRACK_FADE_IN_SEC, max(0.2, duration / 4.0)) if duration > 0 else 0.0
+        bed_filters = [f"volume={volume}"]
+        if duration > 0:
+            bed_filters.append(f"afade=t=in:st=0:d={fade_in_sec:.3f}")
+            fade_out_start = max(0.0, duration - fade_out_sec)
+            bed_filters.append(f"afade=t=out:st={fade_out_start:.3f}:d={fade_out_sec:.3f}")
+        else:
+            # Duration unknown: a bed with no fade is worse than no fade at all, but far
+            # better than one that stops early. Leave it flat rather than guess.
+            bed_filters.append(f"afade=t=in:st=0:d={self.SOUNDTRACK_FADE_IN_SEC}")
+        bed_chain = ",".join(bed_filters)
+
         command = [
             "ffmpeg",
             "-y",
@@ -700,7 +723,7 @@ class FinalVideoRenderer:
             str(input_path),
             "-filter_complex",
             (
-                f"[0:a]volume={volume},afade=t=in:st=0:d=1.2,afade=t=out:st=28:d=1.6[bed];"
+                f"[0:a]{bed_chain}[bed];"
                 "[1:a][bed]amix=inputs=2:duration=first:dropout_transition=2[aout]"
             ),
             "-map",

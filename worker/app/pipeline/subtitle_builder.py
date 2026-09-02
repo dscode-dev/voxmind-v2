@@ -63,59 +63,82 @@ class SubtitleBuilder:
         lead_in_sec: float = 0.0,
         cold_open: Dict | None = None,
     ) -> List[Dict]:
+        """Lay subtitles on the FINAL timeline, not the source timeline.
+
+        Two frames of reference meet here. Transcript segments are in source seconds; the
+        rendered video is in final seconds, which differ by the playback speed and by the
+        cold open prepended in front of clip 1.
+
+        The previous version skipped the part of clip 1 that the cold open had already
+        shown, and then advanced its running offset by the *shortened* span. But the
+        renderer replays clip 1 in full after the teaser (deliberately - see
+        ``_prepend_cold_open``), so the skip desynchronised every caption that followed.
+        Measured on a 40s clip with a 4s cold open at 1.15x, a line spoken at source 130.0s
+        was captioned at 26.087s when it is on screen at 29.565s: 3.478s early, exactly the
+        length of the cold open, and compounding across cuts.
+
+        Clip 1 is now laid out in full from its own start, so a phrase the cold open
+        previewed is captioned both times it is heard - which is what the picture does.
+        """
         events: List[Dict] = []
-        accumulated_offset = 0.0
         cold_open = dict(cold_open or {})
-        consumed_first_cut_until = None
+        timeline_offset = 0.0
 
-        if cuts and cold_open.get("enabled") and int(cold_open.get("source_clip_index", 1) or 1) == 1:
-            first_cut = cuts[0]
-            first_start = float(first_cut.get("start", first_cut.get("safe_start", 0.0)))
-            first_end = float(first_cut.get("end", first_cut.get("safe_end", 0.0)))
-            relative_start = max(0.0, float(cold_open.get("relative_start_sec", 0.0) or 0.0))
-            teaser_duration = max(0.0, float(cold_open.get("duration_sec", 0.0) or 0.0))
-            teaser_start = first_start + relative_start
-            teaser_end = min(first_end, teaser_start + teaser_duration)
-
-            if teaser_end > teaser_start:
-                events.extend(
-                    self._events_for_range(
-                        transcript_segments=transcript_segments,
-                        source_start=teaser_start,
-                        source_end=teaser_end,
-                        timeline_offset=0.0,
-                    )
+        teaser_range = self._cold_open_source_range(cuts, cold_open)
+        if teaser_range is not None:
+            teaser_start, teaser_end = teaser_range
+            events.extend(
+                self._events_for_range(
+                    transcript_segments=transcript_segments,
+                    source_start=teaser_start,
+                    source_end=teaser_end,
+                    timeline_offset=0.0,
                 )
-                accumulated_offset = max(0.0, float(lead_in_sec or 0.0))
-                consumed_first_cut_until = teaser_end
-            else:
-                accumulated_offset = max(0.0, float(lead_in_sec or 0.0))
-        else:
-            accumulated_offset = max(0.0, float(lead_in_sec or 0.0))
+            )
+        # The teaser occupies `lead_in_sec` on the final timeline; the caller derives that
+        # from the same cold-open plan the renderer used.
+        timeline_offset = max(0.0, float(lead_in_sec or 0.0))
 
-        for cut_index, cut in enumerate(cuts):
+        for cut in cuts:
             start = float(cut.get("start", cut.get("safe_start", 0.0)))
             end = float(cut.get("end", cut.get("safe_end", 0.0)))
             if end <= start:
                 continue
 
-            visible_start = start
-            if cut_index == 0 and consumed_first_cut_until is not None:
-                visible_start = max(visible_start, consumed_first_cut_until)
-            if end <= visible_start:
-                continue
-
             events.extend(
                 self._events_for_range(
                     transcript_segments=transcript_segments,
-                    source_start=visible_start,
+                    source_start=start,
                     source_end=end,
-                    timeline_offset=accumulated_offset,
+                    timeline_offset=timeline_offset,
                 )
             )
-            accumulated_offset += max(0.0, end - visible_start) / self.playback_speed
+            timeline_offset += (end - start) / self.playback_speed
 
         return events
+
+    def _cold_open_source_range(
+        self,
+        cuts: List[Dict],
+        cold_open: Dict,
+    ) -> tuple[float, float] | None:
+        """The source range the teaser previews, or None when there is no cold open."""
+        if not cuts or not cold_open.get("enabled"):
+            return None
+        if int(cold_open.get("source_clip_index", 1) or 1) != 1:
+            return None
+
+        first_cut = cuts[0]
+        first_start = float(first_cut.get("start", first_cut.get("safe_start", 0.0)))
+        first_end = float(first_cut.get("end", first_cut.get("safe_end", 0.0)))
+        relative_start = max(0.0, float(cold_open.get("relative_start_sec", 0.0) or 0.0))
+        teaser_duration = max(0.0, float(cold_open.get("duration_sec", 0.0) or 0.0))
+
+        teaser_start = first_start + relative_start
+        teaser_end = min(first_end, teaser_start + teaser_duration)
+        if teaser_end <= teaser_start:
+            return None
+        return teaser_start, teaser_end
 
     def _events_for_range(
         self,

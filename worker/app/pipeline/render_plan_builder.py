@@ -2,6 +2,7 @@ import re
 from typing import Dict, List
 
 from app.pipeline.presets import resolve_clip_preset
+from app.video.render_timeline import cold_open_metadata
 
 
 DEFAULT_TRANSITION = "hard_cut"
@@ -80,7 +81,7 @@ class RenderPlanBuilder:
                 }
             )
 
-        return {
+        plan = {
             "job_id": job_id,
             "clip_mode": preset.clip_mode,
             "video_ratio": preset.video_ratio,
@@ -93,6 +94,12 @@ class RenderPlanBuilder:
             "soundtrack": soundtrack or {},
             "clips": clips,
         }
+        # PR-QA-01 §18: the cold open is recorded at the top of the plan, not left implicit
+        # inside clip 1. Final Media QA reads it to model the expected duration, and a
+        # reviewer can tell the intended hook replay from an accidental duplicate without
+        # reverse-engineering the plan.
+        plan["cold_open"] = cold_open_metadata(plan)
+        return plan
 
     def _global_style(self, video_ratio: str, *, preset) -> Dict:
         if video_ratio == "portrait":

@@ -271,6 +271,78 @@ Run the seam evaluation:
 python -m evaluation --asr
 ```
 
+## Two quality gates
+
+A job passes through two independent checks that answer different questions.
+
+```
+cut plan -> cuts -> [ Source QA ] -> render -> [ Final Media QA ] -> publication eligibility
+```
+
+**Source QA** (`worker/app/video/qa.py`, `qa_report.json`, `qa_scope: "source_cut"`) judges
+the editing: were the right ranges chosen, do they land on speaker boundaries, is the post
+metadata there.
+
+**Final Media QA** (`worker/app/video/final_media_qa.py`, `final_qa_report.json`,
+`qa_scope: "final_output"`) judges the MP4 that would actually be published. Between the two,
+the renderer changes playback speed, prepends a cold open, applies transitions, concatenates,
+mixes a soundtrack and burns in subtitles — six transformations, any of which can produce a
+file that is silent, black, truncated, the wrong shape or undecodable while every source-cut
+check still passes.
+
+The file is measured, not assumed: one `ffprobe` for the container, and one
+`ffmpeg -f null -` decode pass carrying `blackdetect`, `freezedetect`, `silencedetect` and
+`volumedetect` together. That pass is the decode-integrity check, so the analysis rides along
+for free. Cost on a real render: **0.027x realtime** — 134s of media analysed in 3.7s.
+
+Each check reports separately, so a decision can be explained:
+
+```json
+{
+  "status": "blocked",
+  "checks": {
+    "container_valid":  {"status": "pass"},
+    "duration":         {"status": "pass"},
+    "dimensions":       {"status": "fail", "code": "wrong_aspect_ratio"},
+    "audio_silence":    {"status": "fail", "code": "audio_fully_silent"},
+    "subtitle_timing":  {"status": "pass"}
+  },
+  "reasons": ["audio_fully_silent", "wrong_aspect_ratio"],
+  "retry_classification": "retry_will_not_help"
+}
+```
+
+| Check | Blocks | Needs review |
+|---|---|---|
+| container / streams / duration | missing, empty, unopenable, no video, no audio, duration ≤ 0 | — |
+| decode integrity | decode errors, decode timeout | — |
+| duration vs plan | beyond 4x tolerance | beyond tolerance |
+| dimensions | ratio off contract by more than 0.02 | — |
+| picture | ≥60% black | ≥25% black, freeze > 4s |
+| audio | fully silent, ≥50% silent, flat-topped waveform | longest silence > 8s, peak at 0 dBFS, mean < −45 dB |
+| subtitles | — | out of bounds, negative, out of order, empty |
+| transitions | — | fade longer than its clip |
+
+**Expected duration is modelled, not guessed.** `sum(source_cut_duration)` is the wrong
+baseline: the renderer divides each clip by the playback speed and prepends a cold open.
+Measured on a real render, the naive comparison is off by 2.3s while the model is off by
+0.19s — a tolerance wide enough to absorb the naive error would let a truncated render
+through. Transitions are `fade`/`afade` *inside* a clip rather than crossfades, so they are
+duration-neutral; the concat, the soundtrack mix and the subtitle burn are too.
+
+**Nothing technical is laundered by a good score.** `auto_ready` requires both layers.
+A blocked final file blocks the job whatever the editorial score, and — the invariant a
+publisher will depend on — a technical failure never yields publication eligibility. Absence
+of a verdict is not a pass either: if Final Media QA did not run, the technical gate reads
+`unmeasurable` and the job needs a human. There is no publisher yet;
+`publication_eligibility.publisher_available` is `false`.
+
+Run the gate's own evaluation (it generates real MP4 fixtures with ffmpeg, then deletes them):
+
+```bash
+python -m evaluation --final-qa
+```
+
 ## Cut quality evaluation
 
 Editorial changes are measured, not eyeballed. The harness runs the real analysis chain,

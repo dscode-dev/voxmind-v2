@@ -15,6 +15,11 @@ def main() -> int:
     parser.add_argument("--summary", action="store_true", help="print the dataset summary only")
     parser.add_argument("--asr", action="store_true", help="run the ASR seam evaluation")
     parser.add_argument(
+        "--final-qa",
+        action="store_true",
+        help="run the final-output media QA evaluation (generates real MP4 fixtures)",
+    )
+    parser.add_argument(
         "--compare",
         nargs=2,
         type=Path,
@@ -57,6 +62,42 @@ def main() -> int:
                   f"overhead={row['overhead_ratio']:.4f}")
         if args.out:
             write_asr(report, args.out)
+            print()
+            print(f"wrote {args.out}")
+        return 0
+
+    if args.final_qa:
+        from evaluation.final_qa_report import run_final_qa_evaluation, write_report as write_final
+
+        report = run_final_qa_evaluation()
+        width = max(len(row["metric"]) for row in report["comparison"])
+        print(f"Final media QA evaluation ({report['cases']} synthetic final-output cases)")
+        print()
+        print(f"{'metric'.ljust(width)}  {'before':>12}  {'after':>12}  {'delta':>7}")
+        for row in report["comparison"]:
+            delta = "" if row["delta"] is None else f"{row['delta']:+d}"
+            print(
+                f"{row['metric'].ljust(width)}  {str(row['before']):>12}  "
+                f"{str(row['after']):>12}  {delta:>7}"
+            )
+        print()
+        print("per case:")
+        case_width = max(len(row["case_id"]) for row in report["per_case"])
+        for row in report["per_case"]:
+            mark = "ok " if row["matched"] else "MISS"
+            print(
+                f"  {mark} {row['case_id'].ljust(case_width)}  before={row['before_status']:<12} "
+                f"after={row['after_status']:<12} {','.join(row['after_reasons'][:3])}"
+            )
+        performance = report["performance"]
+        print()
+        print(
+            f"performance: {performance['media_duration_sec']}s of media analysed in "
+            f"{performance['qa_duration_sec']}s "
+            f"(realtime factor {performance['qa_realtime_factor']})"
+        )
+        if args.out:
+            write_final(report, args.out)
             print()
             print(f"wrote {args.out}")
         return 0

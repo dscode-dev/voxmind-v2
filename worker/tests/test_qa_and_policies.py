@@ -111,10 +111,17 @@ def test_auto_ready_is_reachable(qa):
     segments = transcript(30)
     # A cut on exact segment boundaries with complete post metadata.
     report = evaluate(qa, [cut(0.0, 42.0)], GOOD_POST, segments)
-    decision = policy.evaluate(qa_report=report, cuts=[cut(0.0, 42.0)])
+    decision = policy.evaluate(
+        qa_report=report,
+        cuts=[cut(0.0, 42.0)],
+        # Since PR-QA-01 the editorial layer alone cannot reach auto_ready: the rendered
+        # artefact has to have passed its own technical gate as well.
+        final_media_report={"status": "auto_ready", "reasons": [], "blocking_reasons": []},
+    )
 
     assert report["clips"][0]["score"] >= 85
     assert decision["status"] == "auto_ready"
+    assert decision["editorial_status"] == "auto_ready"
 
 
 def test_needs_review_is_reachable(qa):

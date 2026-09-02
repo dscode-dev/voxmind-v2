@@ -2,6 +2,7 @@ import ast
 import hashlib
 import json
 import re
+import time
 from pathlib import Path
 
 from app.media.audio_extractor import AudioExtractor
@@ -11,6 +12,11 @@ from app.media.seam_reconciler import SeamPolicy
 from app.media.transcriber import ASR_PIPELINE_VERSION, Transcriber
 from app.media.transcript_merger import TranscriptSpeakerMerger
 from app.video.cutter import VideoCutter
+from app.video.final_media_qa import (
+    FinalMediaQA,
+    FinalMediaQAInput,
+    FinalMediaQAPolicy,
+)
 from app.video.final_renderer import FinalVideoRenderer
 from app.video.qa import ClipQA
 from app.video.raw_edit_renderer import RawEditRenderer
@@ -186,6 +192,24 @@ class Pipeline:
             max_duration_sec=self.duration_contract.max_final_video_duration_sec,
             max_speakers_per_clip=settings.qa_max_speakers_per_clip,
         )
+
+        # Layer B. Evaluates the assembled MP4, which the ClipQA above never sees: between
+        # its verdict and the publishable file the renderer changes playback speed, prepends
+        # a cold open, applies transitions, concatenates, mixes a soundtrack and burns
+        # subtitles.
+        self.final_media_qa = FinalMediaQA(
+            policy=FinalMediaQAPolicy(
+                duration_tolerance_sec=settings.final_qa_duration_tolerance_sec,
+                max_silence_sec=settings.final_qa_max_silence_sec,
+                black_ratio_block=settings.final_qa_black_ratio,
+                max_freeze_sec=settings.final_qa_max_freeze_sec,
+                decode_timeout_sec=float(settings.final_qa_decode_timeout_sec),
+            ),
+            job_id=self.job_id,
+        )
+        # Filled by _render_final_clips: each rendered artefact together with the plan and
+        # subtitle file that produced it, so QA evaluates the file it can actually explain.
+        self.final_render_records: list[dict] = []
 
         self.telegram = TelegramSender()
         self.clipflow_api = ClipFlowApiClient()
@@ -1224,11 +1248,8 @@ Envie o JSON de roteiro/plano de edição para registrar a decisão editorial.
 
         self._log(f"📦 {len(cut_files)} cuts generated")
 
+        # Layer A: source/editorial QA over the cut ranges and the intermediate cut files.
         qa_report = self._run_clip_qa(filtered_cuts, cut_files, transcript_segments)
-        automation_report = self._run_auto_review(qa_report, filtered_cuts)
-        if qa_report is not None:
-            qa_report["automation"] = automation_report
-            qa_report["response_validation"] = self.manual_response.get("_response_validation", {})
         render_plan = self._build_render_plan(filtered_cuts, transcript_segments, qa_report)
         subtitle_path = self._build_final_reel_subtitles(
             filtered_cuts,
@@ -1243,6 +1264,16 @@ Envie o JSON de roteiro/plano de edição para registrar a decisão editorial.
             transcript_segments,
         )
         self._log(f"🎞️ Final videos generated: {len(final_clip_files)}")
+
+        # Layer B: the technical gate over the assembled MP4s. This runs AFTER the render —
+        # auto-review used to decide publication readiness before a single final frame
+        # existed, so a silent, black or truncated output could still be reported ready.
+        final_media_report = self._run_final_media_qa()
+        automation_report = self._run_auto_review(qa_report, filtered_cuts, final_media_report)
+        if qa_report is not None:
+            qa_report["automation"] = automation_report
+            qa_report["response_validation"] = self.manual_response.get("_response_validation", {})
+
         final_reel_path = None
         publish_package = self._build_publish_package(
             filtered_cuts,
@@ -1251,6 +1282,7 @@ Envie o JSON de roteiro/plano de edição para registrar a decisão editorial.
             subtitle_path,
             qa_report,
             automation_report,
+            final_media_report,
         )
         delivery_package = self._build_delivery_package(
             filtered_cuts,
@@ -1261,11 +1293,24 @@ Envie o JSON de roteiro/plano de edição para registrar a decisão editorial.
             qa_report,
             automation_report,
             render_plan,
+            final_media_report,
         )
 
         self._mark_step("send_cuts", "started")
         if qa_report is not None:
             qa_report_path = self._write_json_artifact("qa_report.json", qa_report, "qa_report")
+
+        # A separate artefact, not an extra key on qa_report.json: the two layers answer
+        # different questions over different inputs, and merging them would make the
+        # combined document impossible to read without knowing which scope each field came
+        # from. qa_report.json carries qa_scope="source_cut"; this one "final_output".
+        final_qa_report_path = None
+        if final_media_report is not None:
+            final_qa_report_path = self._write_json_artifact(
+                "final_qa_report.json",
+                final_media_report,
+                "final_qa_report",
+            )
 
         render_plan_path = self._write_json_artifact(
             "render_plan.json",
@@ -1322,6 +1367,8 @@ Envie o JSON de roteiro/plano de edição para registrar a decisão editorial.
             "final_reel_path": str(final_reel_path) if final_reel_path is not None else None,
             "subtitle_path": str(subtitle_path) if subtitle_path is not None else None,
             "qa_report_path": str(self.work_dir / "qa_report.json") if qa_report is not None else None,
+            "final_qa_report_path": str(final_qa_report_path) if final_qa_report_path else None,
+            "final_media_qa_status": (final_media_report or {}).get("status"),
             "render_plan_path": str(render_plan_path),
             "delivery_package_path": str(delivery_package_path),
             "publish_package_path": str(publish_package_path),
@@ -3230,6 +3277,82 @@ Envie o JSON de roteiro/plano de edição para registrar a decisão editorial.
 
         return candidate
 
+    def _record_final_render(
+        self,
+        *,
+        index: int,
+        path: Path | None,
+        render_plan: dict,
+        subtitle_path: Path | None,
+        post: dict,
+        cuts: list[dict],
+        video_index: int,
+    ) -> None:
+        if path is None:
+            return
+        self.final_render_records.append(
+            {
+                "artifact_id": f"{self.job_id}:final_clip_{index:02d}",
+                "index": index,
+                "video_index": video_index,
+                "path": path,
+                "render_plan": render_plan,
+                "subtitle_path": subtitle_path,
+                "post": post or {},
+                "cut_ids": [str(cut.get("cut_id")) for cut in cuts if cut.get("cut_id")],
+            }
+        )
+
+    def _run_final_media_qa(self) -> dict | None:
+        """Layer B: the technical gate over the files that would actually be published."""
+        if not settings.final_qa_enabled:
+            self._mark_step("final_media_qa", "skipped", reason="disabled")
+            return None
+        if not self.final_render_records:
+            self._mark_step("final_media_qa", "skipped", reason="no_final_artifacts")
+            return None
+
+        self._mark_step("final_media_qa", "started")
+        started_at = time.monotonic()
+
+        requests = [
+            FinalMediaQAInput(
+                final_file=record["path"],
+                artifact_id=record["artifact_id"],
+                render_plan=record["render_plan"],
+                subtitle_path=record["subtitle_path"],
+                post_metadata=record["post"],
+                video_ratio=self.video_ratio,
+                video_index=record["video_index"],
+                cut_ids=record["cut_ids"],
+                expect_audio=True,
+                expect_subtitles=record["subtitle_path"] is not None,
+            )
+            for record in self.final_render_records
+        ]
+        report = self.final_media_qa.evaluate_many(requests)
+
+        # QA must not double the cost of the pipeline, so the cost is measured, not assumed.
+        elapsed = time.monotonic() - started_at
+        media_duration = sum(
+            float((artifact.get("probe") or {}).get("duration_sec") or 0.0)
+            for artifact in report.get("artifacts", [])
+        )
+        report["performance"] = {
+            "qa_duration_sec": round(elapsed, 3),
+            "media_duration_sec": round(media_duration, 3),
+            "qa_realtime_factor": round(elapsed / media_duration, 4) if media_duration > 0 else None,
+        }
+
+        self._mark_step(
+            "final_media_qa",
+            "completed",
+            final_status=report.get("status"),
+            blocked=report.get("summary", {}).get("blocked"),
+            qa_duration_sec=report["performance"]["qa_duration_sec"],
+        )
+        return report
+
     def _run_clip_qa(
         self,
         filtered_cuts: list[dict],
@@ -3261,6 +3384,7 @@ Envie o JSON de roteiro/plano de edição para registrar a decisão editorial.
         qa_report: dict | None,
         automation_report: dict | None,
         render_plan: dict | None,
+        final_media_report: dict | None = None,
     ) -> dict:
         self._mark_step("delivery_package", "started")
         package = self.delivery_package_builder.build(
@@ -3277,6 +3401,7 @@ Envie o JSON de roteiro/plano de edição para registrar a decisão editorial.
             qa_report=qa_report,
             automation_report=automation_report,
             render_plan=render_plan,
+            final_media_report=final_media_report,
             artifacts_manifest=self.artifacts.read(),
             response_validation=self.manual_response.get("_response_validation"),
             final_video_specs=self.manual_response.get("_final_video_specs"),
@@ -3298,6 +3423,7 @@ Envie o JSON de roteiro/plano de edição para registrar a decisão editorial.
         subtitle_path: Path | None,
         qa_report: dict | None,
         automation_report: dict | None,
+        final_media_report: dict | None = None,
     ) -> dict:
         self._mark_step("publish_package", "started")
         package = self.publish_package_builder.build(
@@ -3311,6 +3437,7 @@ Envie o JSON de roteiro/plano de edição para registrar a decisão editorial.
             subtitle_path=subtitle_path,
             qa_report=qa_report,
             automation_report=automation_report,
+            final_media_report=final_media_report,
             final_video_specs=self.manual_response.get("_final_video_specs"),
             language_metadata=self.language_metadata,
         )
@@ -3417,6 +3544,7 @@ Envie o JSON de roteiro/plano de edição para registrar a decisão editorial.
         transcript_segments: list[dict],
     ) -> list[Path]:
         self._mark_step("final_clips", "started")
+        self.final_render_records = []
         final_clips_dir = self.work_dir / "final_clips"
         final_clips_dir.mkdir(parents=True, exist_ok=True)
         final_video_specs = list(self.manual_response.get("_final_video_specs") or [])
@@ -3458,7 +3586,20 @@ Envie o JSON de roteiro/plano de edição para registrar a decisão editorial.
                 clip_output = final_clips_dir / f"final_clip_{index:02d}.mp4"
                 if rendered_path is not None and rendered_path.exists() and rendered_path != clip_output:
                     rendered_path.replace(clip_output)
-                outputs.append(clip_output if clip_output.exists() else rendered_path)
+                final_path = clip_output if clip_output.exists() else rendered_path
+                outputs.append(final_path)
+                # Bind the artefact to the plan and subtitles that produced it. Without this
+                # the gate would have to guess which plan describes which file, and a verdict
+                # that cannot name its artefact is how you approve final_01 and ship final_02.
+                self._record_final_render(
+                    index=index,
+                    path=final_path,
+                    render_plan=local_render_plan,
+                    subtitle_path=clip_subtitle_path,
+                    post=spec["post"],
+                    cuts=spec["cuts"],
+                    video_index=int(spec.get("video_index") or index),
+                )
 
             self._mark_step("final_clips", "completed", clip_count=len(outputs))
             return [path for path in outputs if path is not None]
@@ -3487,6 +3628,20 @@ Envie o JSON de roteiro/plano de edição para registrar a decisão editorial.
                 output_path=clip_output,
             )
             outputs.append(rendered_path)
+            # One cut per artefact on this path, so the plan handed to QA describes exactly
+            # that clip rather than the whole sequence.
+            self._record_final_render(
+                index=index,
+                path=rendered_path,
+                render_plan={
+                    **render_plan,
+                    "clips": [clips_plan.get(index, {})] if clips_plan.get(index) else [],
+                },
+                subtitle_path=clip_subtitle_path,
+                post=self.manual_response.get("post") or {},
+                cuts=[cut],
+                video_index=index,
+            )
 
         self._mark_step("final_clips", "completed", clip_count=len(outputs))
         return outputs
@@ -4120,6 +4275,7 @@ Envie o JSON de roteiro/plano de edição para registrar a decisão editorial.
         self,
         qa_report: dict | None,
         filtered_cuts: list[dict],
+        final_media_report: dict | None = None,
     ) -> dict | None:
         if qa_report is None:
             self._mark_step("auto_review", "skipped", reason="qa_unavailable")
@@ -4129,11 +4285,13 @@ Envie o JSON de roteiro/plano de edição para registrar a decisão editorial.
         report = self.auto_review_policy.evaluate(
             qa_report=qa_report,
             cuts=filtered_cuts,
+            final_media_report=final_media_report,
         )
         self._mark_step(
             "auto_review",
             "completed",
             review_status=report.get("status"),
             readiness_score=report.get("readiness_score"),
+            technical_gate=(report.get("publication_eligibility") or {}).get("technical_gate"),
         )
         return report

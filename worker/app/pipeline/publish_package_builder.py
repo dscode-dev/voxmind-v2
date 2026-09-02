@@ -4,6 +4,19 @@ from typing import Dict, List
 from app.pipeline.presets import resolve_clip_preset
 
 
+def _final_media_summary(final_media_report: Dict | None) -> Dict:
+    """The technical verdict, kept small enough to read but never reduced to a boolean."""
+    if not final_media_report:
+        return {"evaluated": False, "status": None, "reason": "final_media_qa_unavailable"}
+    return {
+        "evaluated": True,
+        "status": final_media_report.get("status"),
+        "summary": final_media_report.get("summary") or {},
+        "reasons": final_media_report.get("reasons") or [],
+        "blocking_reasons": final_media_report.get("blocking_reasons") or [],
+    }
+
+
 class PublishPackageBuilder:
 
     def build(
@@ -19,6 +32,7 @@ class PublishPackageBuilder:
         subtitle_path: Path | None,
         qa_report: Dict | None,
         automation_report: Dict | None,
+        final_media_report: Dict | None = None,
         final_video_specs: List[Dict] | None = None,
         language_metadata: Dict | None = None,
     ) -> Dict:
@@ -39,7 +53,10 @@ class PublishPackageBuilder:
             "video_ratio": preset.video_ratio,
             "preset_id": preset.preset_id,
             "render_intent": preset.render_intent,
-            "publish_status": self._publish_status(qa_report, final_reel_path, final_clip_files),
+            "publish_status": self._publish_status(
+                qa_report, final_reel_path, final_clip_files, final_media_report
+            ),
+            "final_media_qa": _final_media_summary(final_media_report),
             "language": language_metadata or {},
             "primary_hook": primary_hook,
             "primary_title": primary_title,
@@ -61,21 +78,34 @@ class PublishPackageBuilder:
         qa_report: Dict | None,
         final_reel_path: Path | None,
         final_clip_files: List[Path],
+        final_media_report: Dict | None = None,
     ) -> str:
+        """The publishable status of the job.
+
+        Final Media QA can only make this stricter. "ready" here used to be derived purely
+        from source-cut QA, so a technically broken render could be announced as ready to
+        publish; it now requires the assembled file to have passed as well.
+        """
         has_final_reel = final_reel_path is not None and final_reel_path.exists()
         has_final_clips = any(path.exists() for path in final_clip_files)
         if not has_final_reel and not has_final_clips:
             return "missing_final_assets"
 
-        if not qa_report:
-            return "ready"
-
-        decision = str(qa_report.get("decision") or "approved")
-        if decision == "blocked":
+        final_status = str((final_media_report or {}).get("status") or "")
+        if final_status == "blocked":
             return "blocked"
-        if decision == "needs_review":
+
+        editorial = "ready"
+        if qa_report:
+            decision = str(qa_report.get("decision") or "approved")
+            if decision == "blocked":
+                return "blocked"
+            if decision == "needs_review":
+                editorial = "needs_review"
+
+        if final_status == "needs_review":
             return "needs_review"
-        return "ready"
+        return editorial
 
     def _collect_hashtags(self, cuts: List[Dict], post_payload: Dict) -> List[str]:
         seen: set[str] = set()
