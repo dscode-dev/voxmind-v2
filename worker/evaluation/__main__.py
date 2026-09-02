@@ -13,6 +13,7 @@ def main() -> int:
     parser.add_argument("--dataset", default="voxmind")
     parser.add_argument("--out", type=Path, help="write the report to this path")
     parser.add_argument("--summary", action="store_true", help="print the dataset summary only")
+    parser.add_argument("--asr", action="store_true", help="run the ASR seam evaluation")
     parser.add_argument(
         "--compare",
         nargs=2,
@@ -36,6 +37,28 @@ def main() -> int:
                 f"{str(row['metric']).ljust(width)}  {str(row['before']):>12}  "
                 f"{str(row['after']):>12}  {delta:>8}"
             )
+        return 0
+
+    if args.asr:
+        from evaluation.asr_report import run_asr_evaluation, write_report as write_asr
+
+        report = run_asr_evaluation()
+        width = max(len(r["metric"]) for r in report["comparison"])
+        print(f"ASR seam evaluation ({report['cases']} synthetic seam cases)")
+        print()
+        print(f"{'metric'.ljust(width)}  {'before':>8}  {'after':>8}  {'delta':>7}")
+        for row in report["comparison"]:
+            print(f"{row['metric'].ljust(width)}  {row['before']:>8}  {row['after']:>8}  {row['delta']:>+7}")
+        print()
+        print("overlap cost on a 90-minute video at a 900s window:")
+        for row in report["performance"]:
+            print(f"  overlap={row['overlap_sec']:>5}s  windows={row['window_count']:>3}  "
+                  f"processed={row['effective_audio_processed_sec']:>9.1f}s  "
+                  f"overhead={row['overhead_ratio']:.4f}")
+        if args.out:
+            write_asr(report, args.out)
+            print()
+            print(f"wrote {args.out}")
         return 0
 
     if args.summary:

@@ -228,6 +228,49 @@ nothing extra; a failed one logs the captured, truncated stderr against the same
 unreachable, the router falls back to OpenAI — the platform never requires the local node
 to be online.
 
+## Transcription of long videos
+
+Long audio is transcribed in windows. Windows **overlap**, so a sentence spoken across a
+boundary is not cut in half by the extraction:
+
+```
+window 0: [0, 900)
+window 1: [895, 1795)   shared with window 0: 895..900
+window 2: [1790, 2690)  shared with window 1: 1790..1795
+```
+
+The shared region is transcribed twice and then reconciled. Which copy survives is decided
+by where the window edges fall, not by a similarity score alone:
+
+* a segment running into a window's **right** edge was cut off there — the next window saw
+  the whole sentence, so its version wins;
+* a segment starting at a window's **left** edge was cut off there — the previous window had
+  the preceding audio, so its version wins;
+* otherwise the more complete transcription wins, ties broken toward the earlier window.
+
+Complementary halves of one utterance are not duplicates and both survive. Reconciliation
+only ever *chooses between* transcriptions the model produced — it never invents words.
+
+`ASR_WINDOW_OVERLAP_SEC=5` costs about 0.6% extra audio on a 90-minute video
+(`5430s` processed instead of `5400s`). All seam thresholds live in one policy object; see
+`worker/app/media/seam_reconciler.py`.
+
+**Windows are transcribed sequentially.** `ASR_PARALLEL_WORKERS` is passed to the model as
+`num_workers` (intra-window batching) and does not run windows concurrently. Making them
+concurrent would complicate checkpointing and risk GPU OOM, so it is deliberately left for a
+separate change.
+
+Checkpoints are per window and carry the window range plus a hash of the algorithm that
+produced them, so a resume after a configuration change re-transcribes instead of splicing
+mismatched offsets. Checkpoints written before overlap existed are recognised and discarded
+rather than silently reused. The MinIO transcript cache is versioned on the same inputs.
+
+Run the seam evaluation:
+
+```bash
+python -m evaluation --asr
+```
+
 ## Cut quality evaluation
 
 Editorial changes are measured, not eyeballed. The harness runs the real analysis chain,

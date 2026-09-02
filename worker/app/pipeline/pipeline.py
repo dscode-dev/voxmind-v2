@@ -7,7 +7,8 @@ from pathlib import Path
 from app.media.audio_extractor import AudioExtractor
 from app.media.downloader import VideoDownloader
 from app.media.diarizer import SpeakerDiarizer
-from app.media.transcriber import Transcriber
+from app.media.seam_reconciler import SeamPolicy
+from app.media.transcriber import ASR_PIPELINE_VERSION, Transcriber
 from app.media.transcript_merger import TranscriptSpeakerMerger
 from app.video.cutter import VideoCutter
 from app.video.final_renderer import FinalVideoRenderer
@@ -117,6 +118,15 @@ class Pipeline:
                 if item.strip()
             ],
             preloaded_models_dir=settings.asr_preloaded_models_dir,
+            job_id=job_id,
+            window_overlap_sec=settings.asr_window_overlap_sec,
+            word_timestamps=settings.asr_word_timestamps,
+            strip_fillers=settings.asr_strip_fillers,
+            seam_policy=SeamPolicy(
+                min_temporal_iou=settings.asr_seam_min_temporal_iou,
+                min_text_similarity=settings.asr_seam_min_text_similarity,
+                strong_text_similarity=settings.asr_seam_strong_text_similarity,
+            ),
         )
         self.diarizer = SpeakerDiarizer(
             enabled=settings.diarization_enabled,
@@ -720,11 +730,23 @@ para continuar o processamento.
                 digest.update(chunk)
 
         config = {
-            "cache_version": 1,
+            # Bumped for PR-ASR-01: overlapping windows plus seam reconciliation produce a
+            # materially different transcript, so a cache entry from the old algorithm must
+            # not be reused as if it were equivalent.
+            "cache_version": 2,
+            "asr_pipeline_version": ASR_PIPELINE_VERSION,
             "asr_model_size": settings.asr_model_size,
             "asr_language": settings.asr_language,
             "asr_vad_filter": settings.asr_vad_filter,
             "asr_segment_duration_sec": settings.asr_segment_duration_sec,
+            "asr_window_overlap_sec": settings.asr_window_overlap_sec,
+            "asr_word_timestamps": settings.asr_word_timestamps,
+            "asr_strip_fillers": settings.asr_strip_fillers,
+            "asr_seam_policy": {
+                "min_temporal_iou": settings.asr_seam_min_temporal_iou,
+                "min_text_similarity": settings.asr_seam_min_text_similarity,
+                "strong_text_similarity": settings.asr_seam_strong_text_similarity,
+            },
             "asr_max_merged_segment_duration_sec": settings.asr_max_merged_segment_duration_sec,
             "diarization_enabled": settings.diarization_enabled,
             "diarization_model_name": settings.diarization_model_name if settings.diarization_enabled else None,

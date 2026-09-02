@@ -1,0 +1,373 @@
+{
+  "generated_at": "2026-09-02T17:44:22.116983+00:00",
+  "source_type": "synthetic",
+  "cases": 8,
+  "before": {
+    "totals": {
+      "asr_windows": 16,
+      "asr_seams": 8,
+      "segments_out": 23,
+      "duplicate_segments": 6,
+      "missing_seam_segments": 0,
+      "timestamp_ordering_failures": 0,
+      "overlapping_transcript_segments": 6,
+      "expected_seam_text_recovered": 17,
+      "expected_seam_text_total": 17
+    },
+    "cases": [
+      {
+        "case_id": "sentence_crosses_boundary",
+        "description": "Sentence spans the window boundary; window 0's copy is cut off.",
+        "segments_out": 4,
+        "duplicate_segments": 1,
+        "duplicates_removed": 0,
+        "missing_seam_segments": 0,
+        "expected_recovered": "3/3",
+        "ordering_failures": 0,
+        "overlapping_segments": 1,
+        "texts": [
+          "o tecnico assumiu o erro na entrevista.",
+          "e o problema foi que o Palmeiras",
+          "e o problema foi que o Palmeiras nao conseguiu vencer.",
+          "a torcida virou contra o proprio idolo."
+        ]
+      },
+      {
+        "case_id": "word_crosses_boundary",
+        "description": "A word is cut in half by the window edge.",
+        "segments_out": 2,
+        "duplicate_segments": 1,
+        "duplicates_removed": 0,
+        "missing_seam_segments": 0,
+        "expected_recovered": "1/1",
+        "ordering_failures": 0,
+        "overlapping_segments": 1,
+        "texts": [
+          "a comissao tec",
+          "a comissao tecnica sabia do problema."
+        ]
+      },
+      {
+        "case_id": "exact_duplicate_overlap",
+        "description": "Identical transcription of the overlap region from both windows.",
+        "segments_out": 4,
+        "duplicate_segments": 1,
+        "duplicates_removed": 0,
+        "missing_seam_segments": 0,
+        "expected_recovered": "3/3",
+        "ordering_failures": 0,
+        "overlapping_segments": 1,
+        "texts": [
+          "ele chegou no vestiario.",
+          "quando o arbitro apitou o penalti o estadio parou.",
+          "quando o arbitro apitou o penalti o estadio parou.",
+          "a diretoria negou tudo."
+        ]
+      },
+      {
+        "case_id": "fuzzy_duplicate_overlap",
+        "description": "Same utterance, small transcription and timing differences.",
+        "segments_out": 2,
+        "duplicate_segments": 1,
+        "duplicates_removed": 0,
+        "missing_seam_segments": 0,
+        "expected_recovered": "1/1",
+        "ordering_failures": 0,
+        "overlapping_segments": 1,
+        "texts": [
+          "o contrato tinha uma clausula que ninguem tinha lido direito.",
+          "o contrato tinha uma clausula que ninguem leu"
+        ]
+      },
+      {
+        "case_id": "speaker_change_near_boundary",
+        "description": "Speaker turn changes inside the shared region.",
+        "segments_out": 4,
+        "duplicate_segments": 1,
+        "duplicates_removed": 0,
+        "missing_seam_segments": 0,
+        "expected_recovered": "3/3",
+        "ordering_failures": 0,
+        "overlapping_segments": 1,
+        "texts": [
+          "existe diferenca entre pressao de torcida.",
+          "mas a imprensa cobra de outro jeito",
+          "mas a imprensa cobra de outro jeito completamente.",
+          "por isso aquela temporada e lembrada."
+        ]
+      },
+      {
+        "case_id": "silence_at_boundary",
+        "description": "Silence spans the window boundary.",
+        "segments_out": 2,
+        "duplicate_segments": 0,
+        "duplicates_removed": 0,
+        "missing_seam_segments": 0,
+        "expected_recovered": "2/2",
+        "ordering_failures": 0,
+        "overlapping_segments": 0,
+        "texts": [
+          "ele perdeu o gol e nunca mais foi o mesmo.",
+          "a diretoria assumiu o erro publicamente."
+        ]
+      },
+      {
+        "case_id": "short_final_window",
+        "description": "Final window is a 7s remainder.",
+        "segments_out": 3,
+        "duplicate_segments": 1,
+        "duplicates_removed": 0,
+        "missing_seam_segments": 0,
+        "expected_recovered": "2/2",
+        "ordering_failures": 0,
+        "overlapping_segments": 1,
+        "texts": [
+          "aquele foi o momento decisivo da temporada.",
+          "aquele foi o momento decisivo da temporada.",
+          "e ninguem esqueceu."
+        ]
+      },
+      {
+        "case_id": "partial_complementary",
+        "description": "Complementary halves of an utterance; neither may be discarded.",
+        "segments_out": 2,
+        "duplicate_segments": 0,
+        "duplicates_removed": 0,
+        "missing_seam_segments": 0,
+        "expected_recovered": "2/2",
+        "ordering_failures": 0,
+        "overlapping_segments": 0,
+        "texts": [
+          "o resultado daquela partida",
+          "mudou a temporada inteira do clube."
+        ]
+      }
+    ]
+  },
+  "after": {
+    "totals": {
+      "asr_windows": 16,
+      "asr_seams": 8,
+      "segments_out": 17,
+      "duplicate_segments": 0,
+      "missing_seam_segments": 0,
+      "timestamp_ordering_failures": 0,
+      "overlapping_transcript_segments": 0,
+      "expected_seam_text_recovered": 17,
+      "expected_seam_text_total": 17
+    },
+    "cases": [
+      {
+        "case_id": "sentence_crosses_boundary",
+        "description": "Sentence spans the window boundary; window 0's copy is cut off.",
+        "segments_out": 3,
+        "duplicate_segments": 0,
+        "duplicates_removed": 1,
+        "missing_seam_segments": 0,
+        "expected_recovered": "3/3",
+        "ordering_failures": 0,
+        "overlapping_segments": 0,
+        "texts": [
+          "o tecnico assumiu o erro na entrevista.",
+          "e o problema foi que o Palmeiras nao conseguiu vencer.",
+          "a torcida virou contra o proprio idolo."
+        ]
+      },
+      {
+        "case_id": "word_crosses_boundary",
+        "description": "A word is cut in half by the window edge.",
+        "segments_out": 1,
+        "duplicate_segments": 0,
+        "duplicates_removed": 1,
+        "missing_seam_segments": 0,
+        "expected_recovered": "1/1",
+        "ordering_failures": 0,
+        "overlapping_segments": 0,
+        "texts": [
+          "a comissao tecnica sabia do problema."
+        ]
+      },
+      {
+        "case_id": "exact_duplicate_overlap",
+        "description": "Identical transcription of the overlap region from both windows.",
+        "segments_out": 3,
+        "duplicate_segments": 0,
+        "duplicates_removed": 1,
+        "missing_seam_segments": 0,
+        "expected_recovered": "3/3",
+        "ordering_failures": 0,
+        "overlapping_segments": 0,
+        "texts": [
+          "ele chegou no vestiario.",
+          "quando o arbitro apitou o penalti o estadio parou.",
+          "a diretoria negou tudo."
+        ]
+      },
+      {
+        "case_id": "fuzzy_duplicate_overlap",
+        "description": "Same utterance, small transcription and timing differences.",
+        "segments_out": 1,
+        "duplicate_segments": 0,
+        "duplicates_removed": 1,
+        "missing_seam_segments": 0,
+        "expected_recovered": "1/1",
+        "ordering_failures": 0,
+        "overlapping_segments": 0,
+        "texts": [
+          "o contrato tinha uma clausula que ninguem tinha lido direito."
+        ]
+      },
+      {
+        "case_id": "speaker_change_near_boundary",
+        "description": "Speaker turn changes inside the shared region.",
+        "segments_out": 3,
+        "duplicate_segments": 0,
+        "duplicates_removed": 1,
+        "missing_seam_segments": 0,
+        "expected_recovered": "3/3",
+        "ordering_failures": 0,
+        "overlapping_segments": 0,
+        "texts": [
+          "existe diferenca entre pressao de torcida.",
+          "mas a imprensa cobra de outro jeito completamente.",
+          "por isso aquela temporada e lembrada."
+        ]
+      },
+      {
+        "case_id": "silence_at_boundary",
+        "description": "Silence spans the window boundary.",
+        "segments_out": 2,
+        "duplicate_segments": 0,
+        "duplicates_removed": 0,
+        "missing_seam_segments": 0,
+        "expected_recovered": "2/2",
+        "ordering_failures": 0,
+        "overlapping_segments": 0,
+        "texts": [
+          "ele perdeu o gol e nunca mais foi o mesmo.",
+          "a diretoria assumiu o erro publicamente."
+        ]
+      },
+      {
+        "case_id": "short_final_window",
+        "description": "Final window is a 7s remainder.",
+        "segments_out": 2,
+        "duplicate_segments": 0,
+        "duplicates_removed": 1,
+        "missing_seam_segments": 0,
+        "expected_recovered": "2/2",
+        "ordering_failures": 0,
+        "overlapping_segments": 0,
+        "texts": [
+          "aquele foi o momento decisivo da temporada.",
+          "e ninguem esqueceu."
+        ]
+      },
+      {
+        "case_id": "partial_complementary",
+        "description": "Complementary halves of an utterance; neither may be discarded.",
+        "segments_out": 2,
+        "duplicate_segments": 0,
+        "duplicates_removed": 0,
+        "missing_seam_segments": 0,
+        "expected_recovered": "2/2",
+        "ordering_failures": 0,
+        "overlapping_segments": 0,
+        "texts": [
+          "o resultado daquela partida",
+          "mudou a temporada inteira do clube."
+        ]
+      }
+    ]
+  },
+  "comparison": [
+    {
+      "metric": "asr_seams",
+      "before": 8,
+      "after": 8,
+      "delta": 0
+    },
+    {
+      "metric": "asr_windows",
+      "before": 16,
+      "after": 16,
+      "delta": 0
+    },
+    {
+      "metric": "duplicate_segments",
+      "before": 6,
+      "after": 0,
+      "delta": -6
+    },
+    {
+      "metric": "expected_seam_text_recovered",
+      "before": 17,
+      "after": 17,
+      "delta": 0
+    },
+    {
+      "metric": "expected_seam_text_total",
+      "before": 17,
+      "after": 17,
+      "delta": 0
+    },
+    {
+      "metric": "missing_seam_segments",
+      "before": 0,
+      "after": 0,
+      "delta": 0
+    },
+    {
+      "metric": "overlapping_transcript_segments",
+      "before": 6,
+      "after": 0,
+      "delta": -6
+    },
+    {
+      "metric": "segments_out",
+      "before": 23,
+      "after": 17,
+      "delta": -6
+    },
+    {
+      "metric": "timestamp_ordering_failures",
+      "before": 0,
+      "after": 0,
+      "delta": 0
+    }
+  ],
+  "performance": [
+    {
+      "audio_duration_sec": 5400.0,
+      "window_count": 6,
+      "overlap_seconds_total": 0.0,
+      "effective_audio_processed_sec": 5400.0,
+      "overhead_ratio": 1.0,
+      "overlap_sec": 0.0
+    },
+    {
+      "audio_duration_sec": 5400.0,
+      "window_count": 7,
+      "overlap_seconds_total": 30.0,
+      "effective_audio_processed_sec": 5430.0,
+      "overhead_ratio": 1.0056,
+      "overlap_sec": 5.0
+    },
+    {
+      "audio_duration_sec": 5400.0,
+      "window_count": 7,
+      "overlap_seconds_total": 60.0,
+      "effective_audio_processed_sec": 5460.0,
+      "overhead_ratio": 1.0111,
+      "overlap_sec": 10.0
+    },
+    {
+      "audio_duration_sec": 5400.0,
+      "window_count": 7,
+      "overlap_seconds_total": 180.0,
+      "effective_audio_processed_sec": 5580.0,
+      "overhead_ratio": 1.0333,
+      "overlap_sec": 30.0
+    }
+  ]
+}

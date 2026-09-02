@@ -1,5 +1,5 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import Field
+from pydantic import AliasChoices, Field
 
 
 class Settings(BaseSettings):
@@ -200,9 +200,50 @@ class Settings(BaseSettings):
     # Long Video Transcription
     # ======================================
 
+    # Window duration. ASR_WINDOW_DURATION_SEC is the clearer name; the historical
+    # ASR_SEGMENT_DURATION_SEC is still honoured so existing deployments keep working.
     asr_segment_duration_sec: int = Field(
         default=600,
-        alias="ASR_SEGMENT_DURATION_SEC"
+        validation_alias=AliasChoices("ASR_WINDOW_DURATION_SEC", "ASR_SEGMENT_DURATION_SEC"),
+    )
+
+    # Seconds each window shares with its predecessor. Without it a sentence spoken across a
+    # window boundary is cut in half by the extraction and transcribed twice without
+    # context. 5s comfortably spans a spoken clause while costing <1% extra audio at a
+    # 900s window.
+    asr_window_overlap_sec: float = Field(
+        default=5.0,
+        alias="ASR_WINDOW_OVERLAP_SEC"
+    )
+
+    # Word-level timings improve seam matching but add an alignment pass. Off by default;
+    # the reconciler uses them when present.
+    asr_word_timestamps: bool = Field(
+        default=False,
+        alias="ASR_WORD_TIMESTAMPS"
+    )
+
+    # Seam duplicate-detection policy (see app/media/seam_reconciler.py).
+    asr_seam_min_temporal_iou: float = Field(
+        default=0.30,
+        alias="ASR_SEAM_MIN_TEMPORAL_IOU"
+    )
+    asr_seam_min_text_similarity: float = Field(
+        default=0.60,
+        alias="ASR_SEAM_MIN_TEXT_SIMILARITY"
+    )
+    asr_seam_strong_text_similarity: float = Field(
+        default=0.85,
+        alias="ASR_SEAM_STRONG_TEXT_SIMILARITY"
+    )
+
+    # Aggressive filler/repetition stripping used to be applied to the stored transcript
+    # without adjusting timestamps. Real speech has editorial value (hesitation, repetition),
+    # so the transcript keeps what was said and the aggressive form is derived only for
+    # matching. Enable only if a downstream consumer genuinely needs pre-cleaned text.
+    asr_strip_fillers: bool = Field(
+        default=False,
+        alias="ASR_STRIP_FILLERS"
     )
 
     asr_parallel_workers: int = Field(
