@@ -1,9 +1,10 @@
 from typing import Dict, List
 
-from app.prompts.prompt_context import (
-    build_hook_candidate_context,
-    build_span_catalog_context,
-    build_transcript_context,
+from app.prompts.context_window import (
+    build_grounded_context,
+    render_candidate_block,
+    render_hook_block,
+    render_span_block,
 )
 from app.pipeline.presets import resolve_job_preset
 
@@ -13,6 +14,8 @@ class ApiPromptBuilder:
     def __init__(self, max_context_chars: int | None = None):
         from app.settings import settings
 
+        self.prompt_max_candidates = settings.prompt_max_candidates
+        self.last_context = None
         self.prompt_long_max_segments_per_candidate = settings.prompt_long_max_segments_per_candidate
         self.render_min_long_video_duration_sec = settings.render_min_long_video_duration_sec
         self.render_target_long_video_duration_sec = settings.render_target_long_video_duration_sec
@@ -37,28 +40,35 @@ class ApiPromptBuilder:
         preset = resolve_job_preset(job_preset, clip_mode, video_ratio)
         clip_mode = preset.clip_mode
         video_ratio = preset.video_ratio
-        transcript_context = build_transcript_context(
+
+        # Candidate-driven windowing. The spans offered for selection are exactly those
+        # whose text appears in the transcript excerpt below, so the model can never pick a
+        # span_id it was not shown. `self.last_context` lets the caller record grounding and
+        # size statistics without rebuilding the prompt.
+        context = build_grounded_context(
             transcript=transcript,
-            candidates=[],
-            max_chars=int(self.max_context_chars * 0.80),
-            max_segments_per_candidate=preset.prompt_max_segments_per_candidate,
-            context_padding_sec=preset.prompt_context_padding_sec,
-            min_total_segments=preset.prompt_min_total_segments,
-        )
-        span_catalog_context = build_span_catalog_context(
-            spans=span_catalog,
-            max_chars=int(self.max_context_chars * 0.08),
-        )
-        hook_candidate_context = build_hook_candidate_context(
+            candidates=candidates,
+            span_catalog=span_catalog,
             hook_candidates=hook_candidates,
-            max_chars=int(self.max_context_chars * 0.08),
+            max_chars=int(self.max_context_chars * 0.80),
+            context_before_sec=float(preset.prompt_context_padding_sec),
+            context_after_sec=float(preset.prompt_context_padding_sec),
+            max_candidates=self.prompt_max_candidates,
         )
+        self.last_context = context
+
+        max_final_duration = int(preset.max_final_duration_sec)
+        transcript_context = context.transcript_text
+        span_catalog_context = render_span_block(context.spans)
+        hook_candidate_context = render_hook_block(context.hook_candidates)
+        candidate_context = render_candidate_block(context.candidates)
 
         if preset.is_long_form:
             return self._build_long_prompt(
                 transcript_context=transcript_context,
                 span_catalog_context=span_catalog_context,
                 hook_candidate_context=hook_candidate_context,
+                candidate_context=candidate_context,
                 job_id=job_id,
                 video_ratio=video_ratio,
                 max_final_videos=preset.max_final_videos,
@@ -115,6 +125,22 @@ MANDATORY RULES
 MODE RULES
 
 {self._build_mode_instructions(clip_mode)}
+
+RANKED CANDIDATES (ADVISORY EVIDENCE)
+
+These are regions the deterministic analysis scored highly. They are evidence, NOT ground truth.
+
+You may reject a high-ranked candidate if the transcript context shows that it starts
+mid-thought, lacks a payoff, depends on context that is missing, or is editorially weak.
+You may also select material the scorer missed. Judge from the transcript.
+
+{candidate_context}
+
+GROUNDING RULE
+
+Every span_id in SPAN CATALOG and every hook_id in HOOK CANDIDATES corresponds to text that
+appears in the transcript above. Regions marked as omitted are NOT available: never select a
+span from them, and never invent a span_id.
 
 TRANSCRIPT WITH SPEAKERS
 
@@ -185,10 +211,10 @@ Do not mechanically replicate the number of items shown in the JSON example.
 Choose the real number of cuts based on context and narrative strength.
 Prefer final videos around {self._preferred_duration_band(clip_mode)} when the material supports it.
 Only go below {self._response_min_total_duration(clip_mode)} seconds when there is truly no strong continuation available in the material.
-You may go beyond 75 seconds only when that extension is necessary to conclude the subject clearly.
+You may go beyond the preferred band only when that extension is necessary to conclude the subject clearly.
 Prefer concluding the idea correctly even if that pushes the final video beyond 1 minute.
-Validate the total duration of each `final_video` before responding: it must stay between {self._response_min_total_duration(clip_mode)} and 120 seconds.
-If any `final_video` exceeds 120 seconds, shorten the last cut of that video before responding.
+Validate the total duration of each `final_video` before responding: it must stay between {self._response_min_total_duration(clip_mode)} and {max_final_duration} seconds.
+If any `final_video` exceeds {max_final_duration} seconds, shorten the last cut of that video before responding.
 `final_videos[i].hook_source_cut_index` must point to the cut index inside `final_videos[i].shorts_content` that fully contains the main hook.
 `final_videos[i].shorts_content[0]` must fully contain the main hook for that final video.
 If there is only enough strong material for 1 or 2 good final videos, return only 1 or 2.
@@ -200,6 +226,7 @@ If there is only enough strong material for 1 or 2 good final videos, return onl
         transcript_context: str,
         span_catalog_context: str,
         hook_candidate_context: str,
+        candidate_context: str,
         job_id: str,
         video_ratio: str,
         max_final_videos: int,
@@ -244,6 +271,22 @@ MANDATORY RULES
 - Also provide `hook_start` and `hook_end` in seconds for the exact location of the hook.
 - `hook_start` must mark the first real word of the hook and `hook_end` the last real word of the hook.
 - The final cut must close the narrative clearly.
+
+RANKED CANDIDATES (ADVISORY EVIDENCE)
+
+These are regions the deterministic analysis scored highly. They are evidence, NOT ground truth.
+
+You may reject a high-ranked candidate if the transcript context shows that it starts
+mid-thought, lacks a payoff, depends on context that is missing, or is editorially weak.
+You may also select material the scorer missed. Judge from the transcript.
+
+{candidate_context}
+
+GROUNDING RULE
+
+Every span_id in SPAN CATALOG and every hook_id in HOOK CANDIDATES corresponds to text that
+appears in the transcript above. Regions marked as omitted are NOT available: never select a
+span from them, and never invent a span_id.
 
 TRANSCRIPT WITH SPEAKERS
 

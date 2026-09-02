@@ -19,6 +19,7 @@ from app.pipeline.auto_review import AutoReviewPolicy
 from app.pipeline.candidate_builder import CandidateBuilder
 from app.pipeline.delivery_package_builder import DeliveryPackageBuilder
 from app.pipeline.publish_package_builder import PublishPackageBuilder
+from app.pipeline.cut_contract import CutLedger, DurationContract, assign_cut_ids, make_cut_id
 from app.pipeline.presets import ClipPreset, resolve_job_preset
 from app.pipeline.soundtrack_selector import SoundtrackSelector
 from app.pipeline.span_catalog_builder import SpanCatalogBuilder
@@ -34,7 +35,12 @@ from app.prompts.builder import PromptBuilder
 
 from app.ai import events as ai_events
 from app.ai.provider_router import ProviderRouter
-from app.ai.validation import validate_cuts_response
+from app.ai.validation import (
+    AIResponseValidationError,
+    generate_validated_cuts,
+    validate_cuts_response,
+    validate_span_grounding,
+)
 
 from app.integrations.telegram_sender import TelegramSender
 from app.integrations.clipflow_api_client import ClipFlowApiClient
@@ -81,6 +87,9 @@ class Pipeline:
         self.work_dir = Path(settings.work_dir) / job_id
         self.work_dir.mkdir(parents=True, exist_ok=True)
         self.failed = False
+        # "degraded" until diarization actually produces speaker turns. Absence of data must
+        # never be read downstream as "one clean speaker".
+        self.diarization_status = "degraded"
 
         self.storage = MinioStorage()
         self.runtime = RuntimeTracker(self.work_dir, job_id)
@@ -143,18 +152,28 @@ class Pipeline:
         self.audio_peak_detector = AudioPeakDetector()
         self.story_shift_detector = StoryShiftDetector()
 
+        self.duration_contract = DurationContract.from_preset(
+            self.preset,
+            min_renderable_cut_duration_sec=settings.render_min_renderable_cut_duration_sec,
+        )
+        self.cut_ledger = CutLedger()
         self.cutter = VideoCutter(
             self.work_dir,
-            min_clip_duration_sec=settings.render_min_clip_duration_sec,
+            min_renderable_duration_sec=self.duration_contract.min_renderable_cut_duration_sec,
+            job_id=job_id,
         )
         self.final_renderer = FinalVideoRenderer(
             self.work_dir,
             default_video_ratio=self.preset.video_ratio,
         )
         self.raw_edit_renderer = RawEditRenderer(self.work_dir)
+        # QA reads the SAME duration contract as the preset and the cutter. It previously
+        # used QA_MIN_CLIP_DURATION_SEC (25s) while short presets accept internal cuts down
+        # to 12s, so QA blocked cuts every upstream stage had validated — the same
+        # contradiction the cutter used to hide, one stage further downstream.
         self.clip_qa = ClipQA(
-            min_duration_sec=settings.qa_min_clip_duration_sec,
-            max_duration_sec=self._max_final_video_duration_sec(),
+            min_duration_sec=self.duration_contract.min_internal_cut_duration_sec,
+            max_duration_sec=self.duration_contract.max_final_video_duration_sec,
             max_speakers_per_clip=settings.qa_max_speakers_per_clip,
         )
 
@@ -587,13 +606,46 @@ para continuar o processamento.
             job_preset=self.preset.preset_id,
         )
 
-        ai_response = self.provider_router.generate_json(system_prompt, user_prompt, schema)
-        ai_response = validate_cuts_response(ai_response, is_raw_edit=self.preset.is_raw_edit)
+        # Bounded repair: one corrective round-trip at most, never a loop.
+        ai_response, ai_stats = generate_validated_cuts(
+            lambda sp, up: self.provider_router.generate_json(sp, up, schema),
+            system_prompt,
+            user_prompt,
+            is_raw_edit=self.preset.is_raw_edit,
+            emit=self._emit_ai_event,
+        )
         ai_response.setdefault("job_id", self.job_id)
+
+        context = getattr(self.prompt_builder_v2.api_builder, "last_context", None)
+        blind_spans = (
+            validate_span_grounding(ai_response, context.selectable_span_ids)
+            if context is not None
+            else []
+        )
+        if blind_spans:
+            # Should be impossible: the context only offers spans it showed. Reported rather
+            # than raised so a usable selection is not discarded over an unknown id.
+            self.logger.warning(
+                "AI referenced spans that were not present in its context",
+                extra={
+                    "job_id": self.job_id,
+                    "step": "ai_request",
+                    "status": "warning",
+                    "blind_span_references": blind_spans[:10],
+                },
+            )
+
         self._mark_step(
             "ai_request",
             "completed",
             provider=self.provider_router.last_provider,
+            attempts=ai_stats.get("attempts"),
+            repair_attempted=ai_stats.get("repair_attempted"),
+            repair_success=ai_stats.get("repair_success"),
+            blind_span_reference_count=len(blind_spans),
+            context_chars=(context.stats.get("transcript_chars") if context else None),
+            selectable_span_count=(context.stats.get("selectable_span_count") if context else None),
+            candidates_in_context=(context.stats.get("candidate_count") if context else None),
         )
 
         ai_path = self._write_json_artifact("ai_response.json", ai_response, "ai_response")
@@ -899,7 +951,8 @@ Envie o JSON de roteiro/plano de edição para registrar a decisão editorial.
                 diagnostics,
                 "diarization_diagnostics",
             )
-            self._mark_step("diarization", "skipped", reason="disabled")
+            self.diarization_status = "degraded"
+            self._mark_step("diarization", "skipped", reason="disabled", diarization_status="degraded")
             return merged
 
         if not self.diarizer.is_available:
@@ -919,10 +972,12 @@ Envie o JSON de roteiro/plano de edição para registrar a decisão editorial.
                 diagnostics,
                 "diarization_diagnostics",
             )
+            self.diarization_status = "degraded"
             self._mark_step(
                 "diarization",
                 "skipped",
                 reason=self.diarizer.availability_reason,
+                diarization_status="degraded",
             )
             return merged
 
@@ -964,12 +1019,26 @@ Envie o JSON de roteiro/plano de edição para registrar a decisão editorial.
             diarization_path,
             artifact_type="json",
         )
+        # Turns were produced, but if every merged segment is still UNKNOWN the labels are
+        # not usable and the status stays degraded.
+        self.diarization_status = (
+            "available"
+            if speaker_turns and unknown_segment_count < len(merged)
+            else "degraded"
+        )
+        diagnostics["diarization_status"] = self.diarization_status
+        self._write_json_artifact(
+            "diarization_diagnostics.json",
+            diagnostics,
+            "diarization_diagnostics",
+        )
         self._mark_step(
             "diarization",
             "completed",
             speaker_turn_count=len(speaker_turns),
             unknown_segment_count=unknown_segment_count,
             availability_reason=self.diarizer.availability_reason,
+            diarization_status=self.diarization_status,
         )
         return merged
 
@@ -1007,11 +1076,27 @@ Envie o JSON de roteiro/plano de edição para registrar a decisão editorial.
         except Exception:
             raise RuntimeError("Invalid JSON received from AI")
 
+        # One structural contract for both paths. A manual response used to reach the
+        # normalizer having only been parsed as JSON.
+        try:
+            self.manual_response = validate_cuts_response(
+                self.manual_response,
+                is_raw_edit=self.preset.is_raw_edit,
+            )
+        except AIResponseValidationError as exc:
+            self._mark_step("validate_ai_response", "failed", error=str(exc))
+            raise
+
         if self.preset.is_raw_edit:
             self._mark_step("validate_ai_response", "completed")
             return self._finalize_raw_edit_response()
 
         transcript_segments = self._load_finalize_transcript()
+        known_speakers = {
+            str(segment.get("speaker") or "UNKNOWN") for segment in transcript_segments
+        } - {"UNKNOWN"}
+        self.diarization_status = "available" if known_speakers else "degraded"
+
         span_catalog = self.span_catalog_builder.build(
             transcript_segments,
             source_language=str(self.language_metadata.get("source_language") or ""),
@@ -1082,6 +1167,7 @@ Envie o JSON de roteiro/plano de edição para registrar a decisão editorial.
             self.manual_response.get("post", {}),
         )
         cuts = self._prune_disconnected_short_serie_cuts(cuts)
+        cuts = assign_cut_ids(cuts)
         self.manual_response["shorts_content"] = cuts
 
         self._log("🎬 Generating cuts...")
@@ -1829,18 +1915,10 @@ Envie o JSON de roteiro/plano de edição para registrar a decisão editorial.
     def _build_response_validation(self, cuts: list[dict], post_payload: dict | None = None) -> dict:
         warnings: list[str] = []
         post_payload = post_payload or {}
-        generic_title_markers = {
-            "o jogo por trás",
-            "quem realmente manda",
-            "o objetivo final",
-            "o tamanho do poder",
-        }
 
-        global_title = str(post_payload.get("title") or "").strip().lower()
+        # The four literal titles previously flagged here were outputs of one old
+        # geopolitics job. Title quality is an editorial judgement, not a blocklist.
         global_hook = str(post_payload.get("hook") or "").strip()
-
-        if global_title in generic_title_markers:
-            warnings.append("post: generic_title")
 
         if global_hook and len(global_hook) < 18:
             warnings.append("post: short_hook")
@@ -2391,21 +2469,73 @@ Envie o JSON de roteiro/plano de edição para registrar a decisão editorial.
         return normalized, index_map
 
     def _prune_disconnected_short_serie_cuts(self, cuts: list[dict]) -> list[dict]:
+        """Select the strongest *coherent chain* of cuts for a short_serie.
+
+        short_serie means several connected cuts that together form ONE coherent short
+        video — not several independent shorts.
+
+        The previous implementation walked the cuts in order and used ``break`` on the first
+        disconnect, which silently discarded **every remaining cut**. For A-B-C / D-E, where
+        C and D are unrelated, it returned [A, B, C] and threw away D and E even when [D, E]
+        was the stronger pair — and when the disconnect fell at position 1 it returned a
+        single cut, destroying the format.
+
+        The policy now splits at every disconnect into candidate chains and picks one,
+        deterministically. Not combinatorially optimal, and deliberately so: it is a greedy
+        rule that can be read, predicted and tested.
+
+        Chain ranking, in order:
+          1. chains that reach the preset's minimum final-video duration beat those that do not;
+          2. then more cuts (a series should feel like a series);
+          3. then greater total duration;
+          4. then earlier start, so ties are stable across runs.
+        """
         if self.clip_mode != "short_serie" or len(cuts) < 2:
             return cuts
 
         ordered = sorted((dict(cut) for cut in cuts), key=lambda item: float(item["start"]))
-        selected = [ordered[0]]
         max_soft_gap = min(float(settings.short_serie_max_gap_sec), 12.0)
 
+        chains: list[list[dict]] = [[ordered[0]]]
         for candidate in ordered[1:]:
-            previous = selected[-1]
+            previous = chains[-1][-1]
             gap = float(candidate["start"]) - float(previous["end"])
-            if gap > max_soft_gap and self._cut_pair_feels_disconnected(previous, candidate):
-                break
-            selected.append(candidate)
+            disconnected = gap > max_soft_gap and self._cut_pair_feels_disconnected(
+                previous, candidate
+            )
+            if disconnected:
+                chains.append([candidate])
+            else:
+                chains[-1].append(candidate)
 
-        return selected
+        if len(chains) == 1:
+            return chains[0]
+
+        min_final = self._min_final_video_duration_sec()
+
+        def rank(chain: list[dict]) -> tuple:
+            total = self._total_cuts_duration_sec(chain)
+            return (
+                1 if total >= min_final else 0,
+                len(chain),
+                total,
+                -float(chain[0]["start"]),
+            )
+
+        best = max(chains, key=rank)
+        self.logger.info(
+            "short_serie chain selected",
+            extra={
+                "job_id": self.job_id,
+                "step": "short_serie_chain",
+                "status": "selected",
+                "chain_count": len(chains),
+                "chain_sizes": [len(chain) for chain in chains],
+                "selected_size": len(best),
+                "selected_duration_sec": round(self._total_cuts_duration_sec(best), 2),
+            },
+        )
+        return best
 
     def _find_segment_covering(self, transcript_segments: list[dict], timestamp: float) -> dict | None:
         for segment in transcript_segments:
@@ -2970,15 +3100,16 @@ Envie o JSON de roteiro/plano de edição para registrar a decisão editorial.
             start = float(cut.get("start", cut.get("safe_start", 0.0)) or 0.0)
             end = float(cut.get("end", cut.get("safe_end", 0.0)) or 0.0)
             duration = end - start
+            cut_id = cut.get("cut_id") or make_cut_id(cut, position=index - 1)
             if duration <= 0:
-                rejected.append({"index": index, "reason": "non_positive_duration", "duration": round(duration, 3)})
+                rejected.append({"index": index, "cut_id": cut_id, "reason": "non_positive_duration", "duration": round(duration, 3)})
                 continue
             if duration >= preferred_min:
                 renderable.append(cut)
             elif duration >= hard_min:
                 fallback.append(cut)
             else:
-                rejected.append({"index": index, "reason": "too_short", "duration": round(duration, 3)})
+                rejected.append({"index": index, "cut_id": cut_id, "reason": "too_short", "duration": round(duration, 3)})
 
         if renderable:
             return renderable
@@ -3092,6 +3223,8 @@ Envie o JSON de roteiro/plano de edição para registrar a decisão editorial.
             requested_cuts=filtered_cuts,
             rendered_files=cut_files,
             transcript_segments=transcript_segments,
+            post_metadata=self.manual_response.get("post") or {},
+            diarization_status=self.diarization_status,
         )
         self._mark_step("qa", "completed", decision=report.get("decision"))
         return report
@@ -3415,11 +3548,12 @@ Envie o JSON de roteiro/plano de edição para registrar a decisão editorial.
             filtered = self._align_first_cut_to_global_hook(filtered, transcript_segments, post)
             filtered = self._assign_default_transitions(filtered)
 
+            video_index = int(video.get("video_index") or index)
             specs.append(
                 {
-                    "video_index": int(video.get("video_index") or index),
+                    "video_index": video_index,
                     "post": post,
-                    "cuts": filtered,
+                    "cuts": assign_cut_ids(filtered, video_index=video_index),
                 }
             )
 
@@ -3826,11 +3960,13 @@ Envie o JSON de roteiro/plano de edição para registrar a decisão editorial.
             text = str(segment.get("text") or "").strip()
             if not text:
                 continue
+            # Structural signals only. This previously added weight for the literals
+            # "deep state" and "blackrock" — leftovers from an old geopolitics job that
+            # never fire on football content and biased hook choice toward one past topic.
+            # Whether a line is a *good* hook is an editorial judgement for the model.
             score = 0.0
             if "?" in text:
                 score += 2.0
-            if any(token in text.lower() for token in ("ninguém", "quem", "por quê", "deep state", "blackrock")):
-                score += 1.5
             if self._segment_has_strong_ending(segment):
                 score += 1.0
             if len(text.split()) >= 6:
@@ -3849,12 +3985,10 @@ Envie o JSON de roteiro/plano de edição para registrar a decisão editorial.
         }
 
     def _hook_feels_strong(self, hook: str) -> bool:
-        lowered = hook.lower()
+        """Structural adequacy only — length and interrogative form. Topic-neutral."""
         if len(hook.strip()) < 20:
             return False
-        if "?" in hook:
-            return True
-        return any(token in lowered for token in ("ninguém", "deep state", "blackrock", "verdade", "quem"))
+        return "?" in hook
 
     def _assign_default_transitions(self, cuts: list[dict]) -> list[dict]:
         if len(cuts) < 2:

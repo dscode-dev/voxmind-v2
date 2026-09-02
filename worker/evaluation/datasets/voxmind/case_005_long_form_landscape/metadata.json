@@ -1,0 +1,9 @@
+{
+  "case_id": "case_005_long_form_landscape",
+  "topic": "football",
+  "clip_mode": "long",
+  "video_ratio": "landscape",
+  "job_preset": "long_single",
+  "source_type": "synthetic",
+  "description": "Long-form landscape excerpt: 45s internal minimum and a 180-420s final video, so the duration contract differs sharply from shorts."
+}

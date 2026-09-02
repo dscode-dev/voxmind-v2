@@ -290,6 +290,13 @@ class Settings(BaseSettings):
         default=25,
         alias="RENDER_MIN_CLIP_DURATION_SEC"
     )
+    # Technical floor only: the shortest range ffmpeg is asked to encode. The EDITORIAL
+    # minimum for a cut is the preset's min_internal_cut_duration_sec. See
+    # app/pipeline/cut_contract.py for the relationship between the three minimums.
+    render_min_renderable_cut_duration_sec: float = Field(
+        default=1.0,
+        alias="RENDER_MIN_RENDERABLE_CUT_DURATION_SEC"
+    )
     render_min_final_video_duration_sec: int = Field(
         default=60,
         alias="RENDER_MIN_FINAL_VIDEO_DURATION_SEC"

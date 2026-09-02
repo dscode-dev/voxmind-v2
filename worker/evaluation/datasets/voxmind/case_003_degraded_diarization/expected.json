@@ -1,0 +1,11 @@
+{
+  "good_regions": [],
+  "bad_start_regions": [],
+  "bad_end_regions": [],
+  "speaker_boundaries": [],
+  "must_include_regions": [],
+  "must_avoid_regions": [],
+  "notes": [
+    "Synthetic fixture: no human labels. Region lists are intentionally empty — inventing labels for generated text would produce meaningless agreement scores. Metrics computed for this case are the structural ones (grounding, duration contract, silent drops, boundaries, candidate coverage, QA states)."
+  ]
+}

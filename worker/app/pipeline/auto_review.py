@@ -96,7 +96,11 @@ class AutoReviewPolicy:
             recommended_action = "regenerate_or_manual_recut"
             if readiness_score <= self.blocked_score_threshold:
                 reasons.append("readiness_below_block_threshold")
-        elif review_count <= self.max_review_clips and readiness_score >= self.ready_score_threshold:
+        elif (
+            auto_ready_count > 0
+            and review_count <= self.max_review_clips
+            and readiness_score >= self.ready_score_threshold
+        ):
             status = "auto_ready"
             recommended_action = "approve_after_spot_check"
             if not reasons:
@@ -168,10 +172,10 @@ class AutoReviewPolicy:
         if "starts_mid_segment" in warning_codes or "ends_mid_segment" in warning_codes:
             reasons.append("speaker_turn_boundary_risk")
 
-        if not cut.get("title"):
-            reasons.append("missing_title")
-        if not cut.get("description"):
-            reasons.append("missing_description")
+        # Post metadata lives on the final video, not on a cut; QA already reports it.
+        for warning in ("missing_title", "missing_description", "missing_hook"):
+            if warning in warning_codes:
+                reasons.append(warning)
 
         return sorted(set(reasons))
 
@@ -180,7 +184,7 @@ class AutoReviewPolicy:
         issue_codes = {issue.get("code") for issue in qa_clip.get("issues", [])}
         return bool(
             {"starts_mid_segment", "ends_mid_segment"} & warning_codes
-            or {"generic_title", "speaker_labels_unavailable", "weak_hook"} & warning_codes
+            or {"speaker_continuity_unmeasurable", "weak_hook"} & warning_codes
             or {"render_duration_mismatch", "too_many_speakers"} & issue_codes
         )
 

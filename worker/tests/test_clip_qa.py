@@ -59,31 +59,30 @@ def test_clip_qa_blocks_invalid_render_duration(tmp_path):
     assert report["clips"][0]["score"] <= 60
 
 
-def test_clip_qa_penalizes_generic_editorial_metadata(tmp_path):
+def test_clip_qa_penalizes_missing_and_unmeasurable_metadata(tmp_path):
     clip_file = tmp_path / "cut_01.mp4"
     clip_file.write_bytes(b"fake")
 
+    # PR-CUT-01 changed two things here:
+    #   * the generic_title/generic_thumbnail blocklists were literal outputs of one old
+    #     geopolitics job; judging whether a title is generic is an editorial call for the
+    #     model, not a hardcoded list, so those warnings are gone;
+    #   * post metadata is read from `post_metadata`, not from the cut, and degraded
+    #     diarization reports `speaker_continuity_unmeasurable` instead of claiming a pass.
     qa = StubClipQA()
     report = qa.evaluate(
-        requested_cuts=[
-            {
-                "start": 0.0,
-                "end": 40.0,
-                "hook": "Porque eles têm muito dinheiro...",
-                "title": "Por que eles mandam?",
-                "description": "Explicacao final.",
-                "thumbnail": "texto 'DINHEIRO = PODER' com efeito glow",
-                "hashtags": ["#dinheiro"],
-            }
-        ],
+        requested_cuts=[{"start": 0.0, "end": 40.0}],
         rendered_files=[clip_file],
         transcript_segments=[
             {"start": 0.0, "end": 40.0, "speaker": "UNKNOWN"},
         ],
+        post_metadata={"hashtags": ["#dinheiro"]},
+        diarization_status="degraded",
     )
 
     warnings = set(report["clips"][0]["warnings"])
-    assert "generic_title" in warnings
-    assert "generic_thumbnail" in warnings
-    assert "speaker_labels_unavailable" in warnings
+    assert "missing_title" in warnings
+    assert "missing_description" in warnings
+    assert "sparse_hashtags" in warnings
+    assert "speaker_continuity_unmeasurable" in warnings
     assert report["clips"][0]["score"] < 100

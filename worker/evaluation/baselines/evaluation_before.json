@@ -1,0 +1,323 @@
+{
+  "generated_at": "2026-09-02T17:17:52.655252+00:00",
+  "totals": {
+    "cases": 5,
+    "cuts_evaluated": 30,
+    "invalid_structural_outputs": 0,
+    "valid_structural_outputs": 5,
+    "repair_attempts": 0,
+    "repair_success": 0,
+    "blind_span_references": 2,
+    "spans_offered": 1248,
+    "spans_shown": 1073,
+    "silent_dropped_cuts": 6,
+    "explained_rejections": 0,
+    "duration_contract_failures": 0,
+    "boundary_start_failures": 26,
+    "boundary_end_failures": 8,
+    "boundary_measurable": 30,
+    "speaker_continuity_failures": 3,
+    "speaker_continuity_measurable": 22,
+    "cases_with_degraded_diarization": 1,
+    "candidate_backed_cuts": 6,
+    "candidate_near_cuts": 1,
+    "candidate_ignored_cuts": 23,
+    "qa_auto_ready": 2,
+    "qa_needs_review": 1,
+    "qa_blocked": 1,
+    "avg_context_chars": 40361.4,
+    "max_context_chars": 92708,
+    "avg_candidates_in_context": 0.0,
+    "avg_spans_in_context": 249.6,
+    "errors": []
+  },
+  "cases": [
+    {
+      "case_id": "case_001_short_serie_dialogue",
+      "ok": true,
+      "source_type": "synthetic",
+      "diarization_status": "available",
+      "candidates_ranked": 2,
+      "candidates_in_prompt": 0,
+      "context": {
+        "transcript_chars": 25900,
+        "selectable_span_count": 60,
+        "total_span_count": 60,
+        "candidate_count": 0,
+        "coverage_ratio": null,
+        "truncated": null
+      },
+      "blind_span_references": 0,
+      "structurally_valid": true,
+      "final_video_specs": 2,
+      "videos": [
+        {
+          "video_index": 1,
+          "cuts": 4,
+          "renderable": 4,
+          "silent_drop_count": 0,
+          "rejections": [],
+          "duration_failures": 0,
+          "candidate_coverage": {
+            "measurable": true,
+            "backed": 2,
+            "near": 0,
+            "ignored": 2
+          }
+        },
+        {
+          "video_index": 2,
+          "cuts": 4,
+          "renderable": 3,
+          "silent_drop_count": 1,
+          "rejections": [],
+          "duration_failures": 0,
+          "candidate_coverage": {
+            "measurable": true,
+            "backed": 0,
+            "near": 0,
+            "ignored": 4
+          }
+        }
+      ],
+      "qa": {
+        "decision": "approved",
+        "summary": {
+          "total_clips": 4,
+          "approved_clips": 4,
+          "needs_review_clips": 0,
+          "blocked_clips": 0,
+          "average_score": 87
+        },
+        "automation_status": "auto_ready",
+        "readiness_score": 87,
+        "clips": 4
+      }
+    },
+    {
+      "case_id": "case_002_long_video_budget_overflow",
+      "ok": true,
+      "source_type": "synthetic",
+      "diarization_status": "available",
+      "candidates_ranked": 3,
+      "candidates_in_prompt": 0,
+      "context": {
+        "transcript_chars": 92708,
+        "selectable_span_count": 900,
+        "total_span_count": 900,
+        "candidate_count": 0,
+        "coverage_ratio": null,
+        "truncated": null
+      },
+      "blind_span_references": 2,
+      "structurally_valid": true,
+      "final_video_specs": 2,
+      "videos": [
+        {
+          "video_index": 1,
+          "cuts": 2,
+          "renderable": 2,
+          "silent_drop_count": 0,
+          "rejections": [],
+          "duration_failures": 0,
+          "candidate_coverage": {
+            "measurable": true,
+            "backed": 0,
+            "near": 0,
+            "ignored": 2
+          }
+        },
+        {
+          "video_index": 2,
+          "cuts": 4,
+          "renderable": 3,
+          "silent_drop_count": 1,
+          "rejections": [],
+          "duration_failures": 0,
+          "candidate_coverage": {
+            "measurable": true,
+            "backed": 0,
+            "near": 0,
+            "ignored": 4
+          }
+        }
+      ],
+      "qa": {
+        "decision": "approved",
+        "summary": {
+          "total_clips": 2,
+          "approved_clips": 2,
+          "needs_review_clips": 0,
+          "blocked_clips": 0,
+          "average_score": 87
+        },
+        "automation_status": "auto_ready",
+        "readiness_score": 87,
+        "clips": 2
+      }
+    },
+    {
+      "case_id": "case_003_degraded_diarization",
+      "ok": true,
+      "source_type": "synthetic",
+      "diarization_status": "degraded",
+      "candidates_ranked": 2,
+      "candidates_in_prompt": 0,
+      "context": {
+        "transcript_chars": 21978,
+        "selectable_span_count": 40,
+        "total_span_count": 40,
+        "candidate_count": 0,
+        "coverage_ratio": null,
+        "truncated": null
+      },
+      "blind_span_references": 0,
+      "structurally_valid": true,
+      "final_video_specs": 2,
+      "videos": [
+        {
+          "video_index": 1,
+          "cuts": 4,
+          "renderable": 4,
+          "silent_drop_count": 0,
+          "rejections": [],
+          "duration_failures": 0,
+          "candidate_coverage": {
+            "measurable": true,
+            "backed": 2,
+            "near": 0,
+            "ignored": 2
+          }
+        },
+        {
+          "video_index": 2,
+          "cuts": 4,
+          "renderable": 2,
+          "silent_drop_count": 2,
+          "rejections": [],
+          "duration_failures": 0,
+          "candidate_coverage": {
+            "measurable": true,
+            "backed": 1,
+            "near": 0,
+            "ignored": 3
+          }
+        }
+      ],
+      "qa": {
+        "decision": "approved",
+        "summary": {
+          "total_clips": 4,
+          "approved_clips": 4,
+          "needs_review_clips": 0,
+          "blocked_clips": 0,
+          "average_score": 81
+        },
+        "automation_status": "needs_human_review",
+        "readiness_score": 81,
+        "clips": 4
+      }
+    },
+    {
+      "case_id": "case_004_short_form_single_speaker",
+      "ok": true,
+      "source_type": "synthetic",
+      "diarization_status": "available",
+      "candidates_ranked": 2,
+      "candidates_in_prompt": 0,
+      "context": {
+        "transcript_chars": 23462,
+        "selectable_span_count": 48,
+        "total_span_count": 48,
+        "candidate_count": 0,
+        "coverage_ratio": null,
+        "truncated": null
+      },
+      "blind_span_references": 0,
+      "structurally_valid": true,
+      "final_video_specs": 2,
+      "videos": [
+        {
+          "video_index": 1,
+          "cuts": 4,
+          "renderable": 3,
+          "silent_drop_count": 1,
+          "rejections": [],
+          "duration_failures": 0,
+          "candidate_coverage": {
+            "measurable": true,
+            "backed": 1,
+            "near": 0,
+            "ignored": 3
+          }
+        },
+        {
+          "video_index": 2,
+          "cuts": 4,
+          "renderable": 3,
+          "silent_drop_count": 1,
+          "rejections": [],
+          "duration_failures": 0,
+          "candidate_coverage": {
+            "measurable": true,
+            "backed": 0,
+            "near": 1,
+            "ignored": 3
+          }
+        }
+      ],
+      "qa": {
+        "decision": "blocked",
+        "summary": {
+          "total_clips": 4,
+          "approved_clips": 3,
+          "needs_review_clips": 0,
+          "blocked_clips": 1,
+          "average_score": 77
+        },
+        "automation_status": "blocked",
+        "readiness_score": 77,
+        "clips": 4
+      }
+    },
+    {
+      "case_id": "case_005_long_form_landscape",
+      "ok": true,
+      "source_type": "synthetic",
+      "diarization_status": "available",
+      "candidates_ranked": 1,
+      "candidates_in_prompt": 0,
+      "context": {
+        "transcript_chars": 37759,
+        "selectable_span_count": 200,
+        "total_span_count": 200,
+        "candidate_count": 0,
+        "coverage_ratio": null,
+        "truncated": null
+      },
+      "blind_span_references": 0,
+      "structurally_valid": true,
+      "final_video_specs": 0,
+      "videos": [],
+      "qa": {
+        "decision": null,
+        "automation": null,
+        "clips": 0
+      }
+    }
+  ],
+  "dataset": "voxmind",
+  "dataset_summary": {
+    "cases_total": 5,
+    "real_cases": 0,
+    "synthetic_cases": 5,
+    "labeled_cases": 5,
+    "case_ids": [
+      "case_001_short_serie_dialogue",
+      "case_002_long_video_budget_overflow",
+      "case_003_degraded_diarization",
+      "case_004_short_form_single_speaker",
+      "case_005_long_form_landscape"
+    ]
+  }
+}

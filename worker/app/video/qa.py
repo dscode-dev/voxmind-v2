@@ -1,25 +1,34 @@
+"""Clip QA.
+
+Two contract fixes over the previous version:
+
+1. **Explicit inputs.** QA used to read ``title``/``hook``/``description``/``hashtags`` off
+   each *cut* dict. The response schema puts that metadata on the ``post`` object of a final
+   video, never on a cut, so every clip was charged ``missing_hook`` + ``missing_title`` +
+   ``missing_description`` + ``sparse_hashtags`` (−13) for metadata that was present all
+   along. ``post_metadata`` is now an explicit parameter.
+
+2. **Diarization honesty.** ``speaker_labels_unavailable`` used to be indistinguishable from
+   "this clip has one speaker". ``diarization_status`` is now explicit, and when it is
+   degraded the speaker checks report *unmeasurable* rather than passing or failing.
+
+Scope note (source-cut vs final-output QA): this evaluates the requested cut ranges against
+the rendered artefact it is handed. The final renderer additionally applies a playback-speed
+change, transitions, a cold open and subtitle burn-in, so a full final-output QA would need
+to probe the assembled file. That gap is documented rather than papered over — see
+``final_output_qa_gap`` in the report.
+"""
 from pathlib import Path
 from typing import Dict, List
 
 from app.runtime.subprocess_runner import run_ffprobe
 
 
+DIARIZATION_AVAILABLE = "available"
+DIARIZATION_DEGRADED = "degraded"
+
+
 class ClipQA:
-    GENERIC_TITLE_MARKERS = {
-        "quem manda de verdade?",
-        "por que eles mandam?",
-        "o jogo por trás",
-        "quem realmente manda",
-        "o objetivo final",
-        "o tamanho do poder",
-    }
-
-    GENERIC_THUMBNAIL_MARKERS = {
-        "quem manda?",
-        "dinheiro = poder",
-        "quem é ele?",
-    }
-
     def __init__(
         self,
         min_duration_sec: int = 25,
@@ -35,8 +44,11 @@ class ClipQA:
         requested_cuts: List[Dict],
         rendered_files: List[Path],
         transcript_segments: List[Dict] | None = None,
+        post_metadata: Dict | None = None,
+        diarization_status: str = DIARIZATION_AVAILABLE,
     ) -> Dict:
         transcript_segments = transcript_segments or []
+        post_metadata = post_metadata or {}
         clip_reports: List[Dict] = []
         summary = {
             "total_clips": 0,
@@ -54,6 +66,8 @@ class ClipQA:
                 requested_cut=cut,
                 rendered_file=rendered_file,
                 transcript_segments=transcript_segments,
+                post_metadata=post_metadata,
+                diarization_status=diarization_status,
             )
             clip_reports.append(report)
             summary["total_clips"] += 1
@@ -72,6 +86,8 @@ class ClipQA:
         return {
             "decision": overall_decision,
             "summary": summary,
+            "diarization_status": diarization_status,
+            "qa_scope": "source_cut",
             "clips": clip_reports,
         }
 
@@ -81,12 +97,14 @@ class ClipQA:
         requested_cut: Dict,
         rendered_file: Path,
         transcript_segments: List[Dict],
+        post_metadata: Dict,
+        diarization_status: str,
     ) -> Dict:
         issues: List[Dict] = []
         warnings: List[str] = []
 
-        requested_start = float(requested_cut.get("start", 0.0))
-        requested_end = float(requested_cut.get("end", 0.0))
+        requested_start = float(requested_cut.get("safe_start", requested_cut.get("start", 0.0)) or 0.0)
+        requested_end = float(requested_cut.get("safe_end", requested_cut.get("end", 0.0)) or 0.0)
         requested_duration = max(0.0, requested_end - requested_start)
         rendered_duration = self._probe_duration(rendered_file)
 
@@ -100,29 +118,27 @@ class ClipQA:
         elif abs(rendered_duration - requested_duration) > 2.5:
             issues.append({"severity": "review", "code": "render_duration_mismatch"})
 
-        if not requested_cut.get("hook"):
+        # Post metadata belongs to the final video, not to an individual cut.
+        if not str(post_metadata.get("hook") or "").strip():
             warnings.append("missing_hook")
-        elif self._is_weak_hook(str(requested_cut.get("hook", ""))):
+        elif self._is_weak_hook(str(post_metadata.get("hook", ""))):
             warnings.append("weak_hook")
-        if not requested_cut.get("title"):
+        if not str(post_metadata.get("title") or "").strip():
             warnings.append("missing_title")
-        elif self._is_generic_title(str(requested_cut.get("title", ""))):
-            warnings.append("generic_title")
-        if not requested_cut.get("description"):
+        if not str(post_metadata.get("description") or "").strip():
             warnings.append("missing_description")
-        if self._has_sparse_hashtags(requested_cut):
+        if self._has_sparse_hashtags(post_metadata):
             warnings.append("sparse_hashtags")
-        if self._is_generic_thumbnail(str(requested_cut.get("thumbnail", ""))):
-            warnings.append("generic_thumbnail")
 
-        speakers = self._speakers_in_range(
-            transcript_segments,
-            requested_start,
-            requested_end,
+        speakers = self._speakers_in_range(transcript_segments, requested_start, requested_end)
+        speaker_measurable = diarization_status == DIARIZATION_AVAILABLE and bool(
+            set(speakers) - {"UNKNOWN"}
         )
-        if transcript_segments and (not speakers or speakers == ["UNKNOWN"]):
-            warnings.append("speaker_labels_unavailable")
-        if len(speakers) > self.max_speakers_per_clip:
+
+        if not speaker_measurable:
+            # Absence of diarization is reported, never scored as a pass.
+            warnings.append("speaker_continuity_unmeasurable")
+        elif len(speakers) > self.max_speakers_per_clip:
             issues.append({"severity": "review", "code": "too_many_speakers"})
 
         if transcript_segments and requested_start > 0 and requested_end > requested_start:
@@ -135,6 +151,7 @@ class ClipQA:
         score = self._score_clip(issues, warnings)
         return {
             "clip_index": clip_index,
+            "cut_id": requested_cut.get("cut_id"),
             "file_name": rendered_file.name,
             "decision": decision,
             "score": score,
@@ -145,6 +162,7 @@ class ClipQA:
             },
             "rendered_duration": rendered_duration,
             "speakers": speakers,
+            "speaker_measurable": speaker_measurable,
             "issues": issues,
             "warnings": warnings,
         }
@@ -183,14 +201,10 @@ class ClipQA:
         for warning in warnings:
             if warning in {"starts_mid_segment", "ends_mid_segment"}:
                 score -= 8
-            elif warning == "generic_title":
-                score -= 8
-            elif warning == "speaker_labels_unavailable":
+            elif warning == "speaker_continuity_unmeasurable":
                 score -= 6
             elif warning == "weak_hook":
                 score -= 5
-            elif warning == "generic_thumbnail":
-                score -= 4
             elif warning == "sparse_hashtags":
                 score -= 3
             elif warning == "missing_hook":
@@ -242,45 +256,35 @@ class ClipQA:
         return sorted(speakers)
 
     def _starts_inside_segment(self, transcript_segments: List[Dict], timestamp: float) -> bool:
-        for segment in transcript_segments:
-            start = float(segment.get("start", 0.0))
-            end = float(segment.get("end", 0.0))
-            if start < timestamp < end:
-                return True
-        return False
+        return any(
+            float(s.get("start", 0.0)) < timestamp < float(s.get("end", 0.0))
+            for s in transcript_segments
+        )
 
     def _ends_inside_segment(self, transcript_segments: List[Dict], timestamp: float) -> bool:
-        for segment in transcript_segments:
-            start = float(segment.get("start", 0.0))
-            end = float(segment.get("end", 0.0))
-            if start < timestamp < end:
-                return True
-        return False
+        return any(
+            float(s.get("start", 0.0)) < timestamp < float(s.get("end", 0.0))
+            for s in transcript_segments
+        )
 
-    def _is_generic_title(self, title: str) -> bool:
-        normalized = title.strip().lower()
-        return normalized in self.GENERIC_TITLE_MARKERS
-
-    def _is_generic_thumbnail(self, thumbnail: str) -> bool:
-        normalized = thumbnail.strip().lower().replace("texto", "").strip(" '\"")
-        return any(marker in normalized for marker in self.GENERIC_THUMBNAIL_MARKERS)
-
-    def _has_sparse_hashtags(self, requested_cut: Dict) -> bool:
-        hashtags = requested_cut.get("hashtags") or []
+    def _has_sparse_hashtags(self, post_metadata: Dict) -> bool:
+        hashtags = post_metadata.get("hashtags") or []
         if not isinstance(hashtags, list):
             return True
         return len([tag for tag in hashtags if str(tag).strip()]) < 3
 
     def _is_weak_hook(self, hook: str) -> bool:
+        """Structural only.
+
+        The previous version additionally matched a hardcoded list of titles and thumbnail
+        texts from an old geopolitics job ("o jogo por trás", "dinheiro = poder", ...). Those
+        penalised a specific past topic and said nothing about a football clip, so they are
+        gone. Whether a hook is *interesting* is an editorial judgement that belongs to the
+        model; what remains here is whether it is structurally usable.
+        """
         text = hook.strip()
         if len(text) < 24:
             return True
         normalized = text.lower()
-        weak_starts = (
-            "porque ",
-            "então ",
-            "aí ",
-            "e o ",
-            "mas ",
-        )
+        weak_starts = ("porque ", "então ", "aí ", "e o ", "mas ")
         return normalized.startswith(weak_starts) and len(text) < 48

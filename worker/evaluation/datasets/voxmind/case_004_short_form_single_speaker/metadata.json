@@ -1,0 +1,9 @@
+{
+  "case_id": "case_004_short_form_single_speaker",
+  "topic": "football",
+  "clip_mode": "short",
+  "video_ratio": "portrait",
+  "job_preset": "short_individual",
+  "source_type": "synthetic",
+  "description": "Single-speaker monologue in `short` mode, where each cut must stand alone. Exercises a different preset's duration contract."
+}

@@ -228,6 +228,31 @@ nothing extra; a failed one logs the captured, truncated stderr against the same
 unreachable, the router falls back to OpenAI — the platform never requires the local node
 to be online.
 
+## Cut quality evaluation
+
+Editorial changes are measured, not eyeballed. The harness runs the real analysis chain,
+prompt assembly, structural validation, normalization, cutter planning and QA offline — no
+Redis, MinIO, Telegram, network, download, ffmpeg or real provider.
+
+```bash
+docker run --rm -v "$PWD/worker:/w" -w /w -e MINIO_ENDPOINT=minio:9000   -e MINIO_ROOT_USER=x -e MINIO_ROOT_PASSWORD=y python:3.11-slim   sh -c "pip install -q poetry==2.0.1 && poetry config virtualenvs.create false          && poetry install --no-root --only main -q          && python -m evaluation --out evaluation/baselines/evaluation_after.json"
+```
+
+Compare two runs with the same metric definitions:
+
+```bash
+python -m evaluation --compare   evaluation/baselines/evaluation_before.json   evaluation/baselines/evaluation_after.json
+```
+
+Metrics are decomposable on purpose — boundary quality, duration-contract failures, silent
+cut drops, candidate coverage, span grounding, structural AI validity, speaker continuity
+and QA states are reported separately, so a regression in one cannot be masked by a gain in
+another. Anything the dataset cannot support is reported as unmeasurable rather than as a
+pass.
+
+Cases live in `worker/evaluation/datasets/voxmind/`; see that directory's README for how to
+add a real one. The current corpus is entirely synthetic.
+
 ## Development
 
 Tests run in Docker, so no host toolchain is required:

@@ -1,0 +1,9 @@
+{
+  "case_id": "case_003_degraded_diarization",
+  "topic": "football",
+  "clip_mode": "short_serie",
+  "video_ratio": "portrait",
+  "job_preset": "short_series",
+  "source_type": "synthetic",
+  "description": "Every speaker label UNKNOWN, as when the HF token is missing and the diarizer silently returns []. Speaker continuity must report unmeasurable, never a pass."
+}

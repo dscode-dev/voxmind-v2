@@ -116,13 +116,25 @@ def test_openai_failure_propagates():
 
 
 def test_validate_accepts_final_videos():
-    data = {"job_id": "x", "final_videos": [{"video_index": 1}]}
-    assert validate_cuts_response(data) is data
+    # PR-CUT-01: validation is now a structural contract, not a pass-through. A final video
+    # must carry an actual selection (span_ids or shorts_content) — `{"video_index": 1}`
+    # alone used to be accepted and reached the normalizer with nothing to cut.
+    data = {"job_id": "x", "final_videos": [{"video_index": 1, "span_ids": ["span_0001"]}]}
+    validated = validate_cuts_response(data)
+    assert validated["job_id"] == "x"
+    assert validated["final_videos"][0]["span_ids"] == ["span_0001"]
+
+
+def test_validate_rejects_final_video_without_a_selection():
+    with pytest.raises(AIResponseValidationError):
+        validate_cuts_response({"job_id": "x", "final_videos": [{"video_index": 1}]})
 
 
 def test_validate_accepts_shorts_content():
     data = {"shorts_content": [{"start": 1, "end": 2}]}
-    assert validate_cuts_response(data) is data
+    validated = validate_cuts_response(data)
+    assert validated["shorts_content"][0]["start"] == 1
+    assert validated["shorts_content"][0]["end"] == 2
 
 
 def test_validate_rejects_empty():

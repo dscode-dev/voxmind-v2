@@ -1,0 +1,9 @@
+{
+  "case_id": "case_001_short_serie_dialogue",
+  "topic": "football",
+  "clip_mode": "short_serie",
+  "video_ratio": "portrait",
+  "job_preset": "short_series",
+  "source_type": "synthetic",
+  "description": "Two-speaker football debate, comfortably inside the prompt budget. Baseline case: diarization available, boundaries and speaker continuity fully measurable."
+}

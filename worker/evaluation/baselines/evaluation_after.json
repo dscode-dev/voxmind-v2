@@ -1,0 +1,338 @@
+{
+  "generated_at": "2026-09-02T17:28:28.816702+00:00",
+  "totals": {
+    "cases": 5,
+    "cuts_evaluated": 27,
+    "invalid_structural_outputs": 0,
+    "valid_structural_outputs": 5,
+    "repair_attempts": 0,
+    "repair_success": 0,
+    "blind_span_references": 0,
+    "spans_offered": 203,
+    "spans_shown": 203,
+    "silent_dropped_cuts": 0,
+    "explained_rejections": 0,
+    "duration_contract_failures": 0,
+    "boundary_start_failures": 24,
+    "boundary_end_failures": 9,
+    "boundary_measurable": 27,
+    "speaker_continuity_failures": 1,
+    "speaker_continuity_measurable": 20,
+    "cases_with_degraded_diarization": 1,
+    "candidate_backed_cuts": 13,
+    "candidate_near_cuts": 0,
+    "candidate_ignored_cuts": 14,
+    "qa_auto_ready": 3,
+    "qa_needs_review": 1,
+    "qa_blocked": 0,
+    "avg_context_chars": 3949.0,
+    "max_context_chars": 6391,
+    "avg_candidates_in_context": 2.0,
+    "avg_spans_in_context": 40.6,
+    "errors": []
+  },
+  "cases": [
+    {
+      "case_id": "case_001_short_serie_dialogue",
+      "ok": true,
+      "source_type": "synthetic",
+      "diarization_status": "available",
+      "candidates_ranked": 2,
+      "candidates_in_prompt": 2,
+      "context": {
+        "transcript_chars": 2968,
+        "shown_segment_count": 30,
+        "total_segment_count": 60,
+        "selectable_span_count": 30,
+        "total_span_count": 60,
+        "candidate_count": 2,
+        "window_count": 2,
+        "coverage_ratio": 0.5,
+        "truncated": false
+      },
+      "blind_span_references": 0,
+      "structurally_valid": true,
+      "final_video_specs": 2,
+      "videos": [
+        {
+          "video_index": 1,
+          "cuts": 4,
+          "renderable": 4,
+          "silent_drop_count": 0,
+          "rejections": [],
+          "duration_failures": 0,
+          "candidate_coverage": {
+            "measurable": true,
+            "backed": 2,
+            "near": 0,
+            "ignored": 2
+          }
+        },
+        {
+          "video_index": 2,
+          "cuts": 2,
+          "renderable": 2,
+          "silent_drop_count": 0,
+          "rejections": [],
+          "duration_failures": 0,
+          "candidate_coverage": {
+            "measurable": true,
+            "backed": 1,
+            "near": 0,
+            "ignored": 1
+          }
+        }
+      ],
+      "qa": {
+        "decision": "approved",
+        "summary": {
+          "total_clips": 4,
+          "approved_clips": 4,
+          "needs_review_clips": 0,
+          "blocked_clips": 0,
+          "average_score": 100
+        },
+        "automation_status": "auto_ready",
+        "readiness_score": 100,
+        "clips": 4
+      }
+    },
+    {
+      "case_id": "case_002_long_video_budget_overflow",
+      "ok": true,
+      "source_type": "synthetic",
+      "diarization_status": "available",
+      "candidates_ranked": 3,
+      "candidates_in_prompt": 3,
+      "context": {
+        "transcript_chars": 4707,
+        "shown_segment_count": 48,
+        "total_segment_count": 900,
+        "selectable_span_count": 48,
+        "total_span_count": 900,
+        "candidate_count": 3,
+        "window_count": 2,
+        "coverage_ratio": 0.0533,
+        "truncated": false
+      },
+      "blind_span_references": 0,
+      "structurally_valid": true,
+      "final_video_specs": 2,
+      "videos": [
+        {
+          "video_index": 1,
+          "cuts": 4,
+          "renderable": 4,
+          "silent_drop_count": 0,
+          "rejections": [],
+          "duration_failures": 0,
+          "candidate_coverage": {
+            "measurable": true,
+            "backed": 3,
+            "near": 0,
+            "ignored": 1
+          }
+        },
+        {
+          "video_index": 2,
+          "cuts": 3,
+          "renderable": 3,
+          "silent_drop_count": 0,
+          "rejections": [],
+          "duration_failures": 0,
+          "candidate_coverage": {
+            "measurable": true,
+            "backed": 1,
+            "near": 0,
+            "ignored": 2
+          }
+        }
+      ],
+      "qa": {
+        "decision": "approved",
+        "summary": {
+          "total_clips": 4,
+          "approved_clips": 4,
+          "needs_review_clips": 0,
+          "blocked_clips": 0,
+          "average_score": 100
+        },
+        "automation_status": "auto_ready",
+        "readiness_score": 100,
+        "clips": 4
+      }
+    },
+    {
+      "case_id": "case_003_degraded_diarization",
+      "ok": true,
+      "source_type": "synthetic",
+      "diarization_status": "degraded",
+      "candidates_ranked": 2,
+      "candidates_in_prompt": 2,
+      "context": {
+        "transcript_chars": 2617,
+        "shown_segment_count": 28,
+        "total_segment_count": 40,
+        "selectable_span_count": 28,
+        "total_span_count": 40,
+        "candidate_count": 2,
+        "window_count": 1,
+        "coverage_ratio": 0.7,
+        "truncated": false
+      },
+      "blind_span_references": 0,
+      "structurally_valid": true,
+      "final_video_specs": 2,
+      "videos": [
+        {
+          "video_index": 1,
+          "cuts": 4,
+          "renderable": 4,
+          "silent_drop_count": 0,
+          "rejections": [],
+          "duration_failures": 0,
+          "candidate_coverage": {
+            "measurable": true,
+            "backed": 3,
+            "near": 0,
+            "ignored": 1
+          }
+        },
+        {
+          "video_index": 2,
+          "cuts": 3,
+          "renderable": 3,
+          "silent_drop_count": 0,
+          "rejections": [],
+          "duration_failures": 0,
+          "candidate_coverage": {
+            "measurable": true,
+            "backed": 1,
+            "near": 0,
+            "ignored": 2
+          }
+        }
+      ],
+      "qa": {
+        "decision": "approved",
+        "summary": {
+          "total_clips": 4,
+          "approved_clips": 4,
+          "needs_review_clips": 0,
+          "blocked_clips": 0,
+          "average_score": 94
+        },
+        "automation_status": "needs_human_review",
+        "readiness_score": 94,
+        "clips": 4
+      }
+    },
+    {
+      "case_id": "case_004_short_form_single_speaker",
+      "ok": true,
+      "source_type": "synthetic",
+      "diarization_status": "available",
+      "candidates_ranked": 2,
+      "candidates_in_prompt": 2,
+      "context": {
+        "transcript_chars": 3062,
+        "shown_segment_count": 31,
+        "total_segment_count": 48,
+        "selectable_span_count": 31,
+        "total_span_count": 48,
+        "candidate_count": 2,
+        "window_count": 2,
+        "coverage_ratio": 0.6458,
+        "truncated": false
+      },
+      "blind_span_references": 0,
+      "structurally_valid": true,
+      "final_video_specs": 2,
+      "videos": [
+        {
+          "video_index": 1,
+          "cuts": 4,
+          "renderable": 4,
+          "silent_drop_count": 0,
+          "rejections": [],
+          "duration_failures": 0,
+          "candidate_coverage": {
+            "measurable": true,
+            "backed": 2,
+            "near": 0,
+            "ignored": 2
+          }
+        },
+        {
+          "video_index": 2,
+          "cuts": 3,
+          "renderable": 3,
+          "silent_drop_count": 0,
+          "rejections": [],
+          "duration_failures": 0,
+          "candidate_coverage": {
+            "measurable": true,
+            "backed": 0,
+            "near": 0,
+            "ignored": 3
+          }
+        }
+      ],
+      "qa": {
+        "decision": "approved",
+        "summary": {
+          "total_clips": 4,
+          "approved_clips": 4,
+          "needs_review_clips": 0,
+          "blocked_clips": 0,
+          "average_score": 100
+        },
+        "automation_status": "auto_ready",
+        "readiness_score": 100,
+        "clips": 4
+      }
+    },
+    {
+      "case_id": "case_005_long_form_landscape",
+      "ok": true,
+      "source_type": "synthetic",
+      "diarization_status": "available",
+      "candidates_ranked": 1,
+      "candidates_in_prompt": 1,
+      "context": {
+        "transcript_chars": 6391,
+        "shown_segment_count": 66,
+        "total_segment_count": 200,
+        "selectable_span_count": 66,
+        "total_span_count": 200,
+        "candidate_count": 1,
+        "window_count": 1,
+        "coverage_ratio": 0.33,
+        "truncated": false
+      },
+      "blind_span_references": 0,
+      "structurally_valid": true,
+      "final_video_specs": 0,
+      "videos": [],
+      "qa": {
+        "decision": null,
+        "automation": null,
+        "clips": 0
+      }
+    }
+  ],
+  "dataset": "voxmind",
+  "dataset_summary": {
+    "cases_total": 5,
+    "real_cases": 0,
+    "synthetic_cases": 5,
+    "labeled_cases": 5,
+    "case_ids": [
+      "case_001_short_serie_dialogue",
+      "case_002_long_video_budget_overflow",
+      "case_003_degraded_diarization",
+      "case_004_short_form_single_speaker",
+      "case_005_long_form_landscape"
+    ]
+  }
+}

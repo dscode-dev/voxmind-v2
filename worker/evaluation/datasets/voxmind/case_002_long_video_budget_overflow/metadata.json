@@ -1,0 +1,9 @@
+{
+  "case_id": "case_002_long_video_budget_overflow",
+  "topic": "football",
+  "clip_mode": "short_serie",
+  "video_ratio": "portrait",
+  "job_preset": "short_series",
+  "source_type": "synthetic",
+  "description": "90 minutes of transcript — far larger than the prompt budget. This is the shape that produced blind span selection: the old builder showed head/middle/tail while offering spans for the whole video."
+}

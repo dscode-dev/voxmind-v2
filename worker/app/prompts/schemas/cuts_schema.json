@@ -1,62 +1,326 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "ClipFlow cuts response",
-  "description": "Structured selection of final videos / cuts returned by the AI provider. The deep editorial normalization happens later in the finalize stage.",
-  "type": "object",
-  "required": ["job_id"],
-  "properties": {
-    "job_id": { "type": "string" },
-    "final_videos": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "video_index": { "type": "integer" },
-          "hook_id": { "type": "string" },
-          "span_ids": { "type": "array", "items": { "type": "string" } },
-          "title": { "type": "string" },
-          "hook": { "type": "string" },
-          "hook_source_cut_index": { "type": "integer" },
-          "hook_start": { "type": "number" },
-          "hook_end": { "type": "number" },
-          "description": { "type": "string" },
-          "hashtags": { "type": "array", "items": { "type": "string" } },
-          "thumbnail": { "type": "string" },
-          "soundtrack_suggestion": { "type": "string" },
-          "speaker_focus": { "type": ["string", "null"] },
-          "shorts_content": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "start": { "type": "number" },
-                "end": { "type": "number" },
-                "safe_start": { "type": "number" },
-                "safe_end": { "type": "number" },
-                "reason": { "type": "string" },
-                "narrative_role": { "type": "string" },
-                "merge_group": { "type": "string" },
-                "continuity_note": { "type": "string" },
-                "speaker_focus": { "type": ["string", "null"] },
-                "transition_after": { "type": "string" }
-              },
-              "required": ["start", "end"]
+  "$defs": {
+    "CutModel": {
+      "additionalProperties": true,
+      "description": "One cut inside a final video.",
+      "properties": {
+        "start": {
+          "title": "Start",
+          "type": "number"
+        },
+        "end": {
+          "title": "End",
+          "type": "number"
+        },
+        "safe_start": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
             }
-          }
+          ],
+          "default": null,
+          "title": "Safe Start"
+        },
+        "safe_end": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Safe End"
+        },
+        "span_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Span Id"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        },
+        "narrative_role": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Narrative Role"
+        },
+        "merge_group": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Merge Group"
+        },
+        "continuity_note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Continuity Note"
+        },
+        "speaker_focus": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Speaker Focus"
+        },
+        "transition_after": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Transition After"
         }
-      }
+      },
+      "required": [
+        "start",
+        "end"
+      ],
+      "title": "CutModel",
+      "type": "object"
+    },
+    "FinalVideoModel": {
+      "additionalProperties": true,
+      "description": "One independently postable final video.",
+      "properties": {
+        "video_index": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Video Index"
+        },
+        "hook_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Hook Id"
+        },
+        "span_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Span Ids",
+          "type": "array"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Title"
+        },
+        "hook": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Hook"
+        },
+        "hook_source_cut_index": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Hook Source Cut Index"
+        },
+        "hook_start": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Hook Start"
+        },
+        "hook_end": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Hook End"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "hashtags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Hashtags",
+          "type": "array"
+        },
+        "thumbnail": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Thumbnail"
+        },
+        "soundtrack_suggestion": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Soundtrack Suggestion"
+        },
+        "speaker_focus": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Speaker Focus"
+        },
+        "shorts_content": {
+          "items": {
+            "$ref": "#/$defs/CutModel"
+          },
+          "title": "Shorts Content",
+          "type": "array"
+        }
+      },
+      "title": "FinalVideoModel",
+      "type": "object"
+    }
+  },
+  "additionalProperties": true,
+  "description": "GENERATED FILE — do not edit by hand. Produced from app/ai/schemas.py, which is the single authority for this contract. Regenerate with: python -c \"import json;from app.ai.schemas import json_schema;print(json.dumps(json_schema()))\". tests/test_ai_schema_contract.py fails if this file drifts from the models.",
+  "properties": {
+    "job_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Job Id"
+    },
+    "final_videos": {
+      "items": {
+        "$ref": "#/$defs/FinalVideoModel"
+      },
+      "title": "Final Videos",
+      "type": "array"
     },
     "shorts_content": {
-      "type": "array",
-      "description": "Flat fallback list when final_videos is not used.",
       "items": {
-        "type": "object",
-        "properties": {
-          "start": { "type": "number" },
-          "end": { "type": "number" }
-        },
-        "required": ["start", "end"]
-      }
+        "$ref": "#/$defs/CutModel"
+      },
+      "title": "Shorts Content",
+      "type": "array"
     }
-  }
+  },
+  "title": "ClipFlow cuts response",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
 }

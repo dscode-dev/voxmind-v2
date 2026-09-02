@@ -41,35 +41,25 @@ class SoundtrackSelector:
             "ducking": "voice_priority",
         }
 
+    SUPPORTED_THEMES = {
+        "finance_tension",
+        "mystery_tension",
+        "political_tension",
+        "generic",
+    }
+
     def _detect_theme(self, cuts: List[Dict], post_payload: Dict | None) -> str:
+        """Honour the model's own suggestion; otherwise use the neutral bed.
+
+        This used to keyword-match the cut text against literals like "blackrock",
+        "deep state", "trump" and "wall street" — a topic map from an old geopolitics job.
+        On football content none of them fire, so the branch was dead weight that could only
+        mis-fire (e.g. "poder" → political_tension). Choosing a mood from content is a
+        semantic judgement: the response schema already asks the model for
+        `soundtrack_suggestion`, so that is the input, and the fallback is neutral rather
+        than guessed.
+        """
         suggested = str((post_payload or {}).get("soundtrack_suggestion") or "").strip().lower()
-        if suggested in {"finance_tension", "mystery_tension", "political_tension", "generic"}:
+        if suggested in self.SUPPORTED_THEMES:
             return suggested
-
-        text_parts: List[str] = []
-        for cut in cuts:
-            text_parts.extend(
-                [
-                    str(cut.get("title") or ""),
-                    str(cut.get("hook") or ""),
-                    str(cut.get("description") or ""),
-                ]
-            )
-
-        if post_payload:
-            text_parts.extend(
-                [
-                    str(post_payload.get("title") or ""),
-                    str(post_payload.get("hook") or ""),
-                    str(post_payload.get("description") or ""),
-                ]
-            )
-
-        text = " ".join(text_parts).lower()
-        if any(token in text for token in {"blackrock", "dinheiro", "trilhões", "economia", "wall street"}):
-            return "finance_tension"
-        if any(token in text for token in {"deep state", "controle", "sombras", "por trás"}):
-            return "mystery_tension"
-        if any(token in text for token in {"trump", "política", "governo", "poder"}):
-            return "political_tension"
         return "generic"
