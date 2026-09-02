@@ -1,15 +1,11 @@
 import hashlib
-import os
 from datetime import datetime, timedelta
 from typing import Any, Dict
 
 import jwt
 from fastapi import Request
 
-
-JWT_SECRET = os.getenv("JWT_SECRET", "clipflow-secret")
-JWT_ALGORITHM = "HS256"
-JWT_EXP_DAYS = 30
+from app.core.settings import settings
 
 
 def _fingerprint(request: Request) -> str:
@@ -30,17 +26,19 @@ def _fingerprint(request: Request) -> str:
 
 def generate_token(user_id: str, token_version: int, fingerprint: str) -> str:
 
+    now = datetime.utcnow()
+
     payload: Dict[str, Any] = {
         "sub": str(user_id),
         "tv": token_version,
         "fp": fingerprint,
-        "iat": datetime.utcnow(),
-        "exp": datetime.utcnow() + timedelta(days=JWT_EXP_DAYS),
+        "iat": now,
+        "exp": now + timedelta(minutes=settings.jwt_expiration_minutes),
     }
 
-    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
 def decode_token(token: str) -> Dict[str, Any]:
 
-    return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+    return jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])

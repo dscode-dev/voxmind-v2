@@ -60,7 +60,8 @@ WORKDIR /app
 COPY --from=builder /usr/local /usr/local
 COPY app /app/app
 
-RUN chown -R appuser:appuser /app
+# /work and /cache are Compose named-volume mountpoints; see Dockerfile.gpu.base.
+RUN mkdir -p /work /cache && chown -R appuser:appuser /app /work /cache
 
 USER appuser
 

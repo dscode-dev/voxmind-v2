@@ -3,7 +3,6 @@ name = "clipflow-api"
 version = "0.1.0"
 description = "Production backend API for ClipFlow"
 authors = ["ClipFlow"]
-readme = "README.md"
 package-mode = false
 
 [tool.poetry.dependencies]

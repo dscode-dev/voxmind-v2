@@ -23,50 +23,55 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 # Enum value lists use the SQLAlchemy convention of persisting the enum member NAME.
-PIPELINE_STATE = sa.Enum(
+#
+# These MUST be postgresql.ENUM, not sa.Enum. `create_type` is a PostgreSQL-dialect option:
+# generic sa.Enum silently discards it, so upgrade() created each type explicitly and then
+# CREATE TABLE tried to create it a second time, aborting the migration with
+# `type "..." already exists` on every fresh database. Fixed in PR-BOOT-01.
+PIPELINE_STATE = postgresql.ENUM(
     "DISCOVERED", "SELECTED", "DOWNLOADING", "DOWNLOADED", "TRANSCRIBING", "TRANSCRIBED",
     "ANALYZING", "PROMPT_BUILDING", "WAITING_AI", "AI_COMPLETED", "RENDERING", "RENDERED",
     "READY_TO_PUBLISH", "PUBLISHING", "PUBLISHED", "FAILED", "CANCELED",
     name="pipeline_state_enum",
     create_type=False,
 )
-PIPELINE_EVENT_TYPE = sa.Enum(
+PIPELINE_EVENT_TYPE = postgresql.ENUM(
     "STATE_CHANGED", "INFO", "WARNING", "ERROR", "RETRY", "HEARTBEAT",
     name="pipeline_event_type_enum",
     create_type=False,
 )
-VIDEO_CANDIDATE_STATUS = sa.Enum(
+VIDEO_CANDIDATE_STATUS = postgresql.ENUM(
     "DISCOVERED", "RANKED", "SELECTED", "REJECTED", "CONSUMED",
     name="video_candidate_status_enum",
     create_type=False,
 )
-DISCOVERY_SOURCE_KIND = sa.Enum(
+DISCOVERY_SOURCE_KIND = postgresql.ENUM(
     "YOUTUBE_TRENDING", "YOUTUBE_SEARCH", "NEWS", "RSS", "MANUAL",
     name="discovery_source_kind_enum",
     create_type=False,
 )
-GENERATED_ASSET_KIND = sa.Enum(
+GENERATED_ASSET_KIND = postgresql.ENUM(
     "CLIP", "FINAL_VIDEO", "THUMBNAIL", "THUMBNAIL_PROMPT", "TITLE", "DESCRIPTION",
     "HASHTAGS", "SUBTITLES", "METADATA",
     name="generated_asset_kind_enum",
     create_type=False,
 )
-PUBLISH_PLATFORM = sa.Enum(
+PUBLISH_PLATFORM = postgresql.ENUM(
     "TELEGRAM", "YOUTUBE", "TIKTOK", "INSTAGRAM",
     name="publish_platform_enum",
     create_type=False,
 )
-PUBLISH_ATTEMPT_STATUS = sa.Enum(
+PUBLISH_ATTEMPT_STATUS = postgresql.ENUM(
     "PENDING", "IN_PROGRESS", "SUCCEEDED", "FAILED", "CANCELED",
     name="publish_attempt_status_enum",
     create_type=False,
 )
-CONNECTED_NODE_STATUS = sa.Enum(
+CONNECTED_NODE_STATUS = postgresql.ENUM(
     "ONLINE", "OFFLINE", "DEGRADED", "UNKNOWN",
     name="connected_node_status_enum",
     create_type=False,
 )
-AI_EXECUTION_STATUS = sa.Enum(
+AI_EXECUTION_STATUS = postgresql.ENUM(
     "PENDING", "RUNNING", "SUCCEEDED", "FAILED",
     name="ai_execution_status_enum",
     create_type=False,

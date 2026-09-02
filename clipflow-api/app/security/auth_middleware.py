@@ -1,3 +1,4 @@
+import secrets
 from datetime import datetime
 
 from fastapi import Depends, Header, HTTPException, Request
@@ -67,8 +68,17 @@ def get_current_admin(
 def require_internal_api_token(
     x_internal_token: str | None = Header(default=None, alias="X-Internal-Token"),
 ) -> None:
-    expected = settings.internal_api_token
+    """Fail-closed guard for /internal/* endpoints.
+
+    A missing or empty INTERNAL_API_TOKEN rejects every call rather than disabling
+    authentication. Settings already refuses to start without one; this is defence in depth
+    for any path that constructs Settings differently.
+    """
+    expected = str(settings.internal_api_token or "").strip()
     if not expected:
-        return
-    if x_internal_token != expected:
+        raise HTTPException(
+            status_code=401,
+            detail="Internal API authentication is not configured",
+        )
+    if not x_internal_token or not secrets.compare_digest(x_internal_token, expected):
         raise HTTPException(status_code=401, detail="Invalid internal token")

@@ -1,5 +1,4 @@
 import hashlib
-import random
 import secrets
 from datetime import datetime, timedelta, timezone
 
@@ -10,7 +9,8 @@ OTP_CHALLENGE_EXP_MINUTES = 10
 
 
 def generate_otp() -> str:
-    return "".join(str(random.randint(0, 9)) for _ in range(OTP_LENGTH))
+    # secrets, not random: this value guards account access.
+    return "".join(str(secrets.randbelow(10)) for _ in range(OTP_LENGTH))
 
 
 def hash_otp(code: str) -> str:

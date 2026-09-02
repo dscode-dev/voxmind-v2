@@ -1,49 +1,182 @@
-# VoxMind / ClipFlow V2
+# ClipFlow / VoxMind
 
-Autonomous, observable AI content factory. Discovers trending videos per theme, generates
-cuts, and publishes — with a frontend that acts as a live **Operations Center**.
+AI content pipeline: it downloads a video, transcribes and analyses it, selects narrative
+cuts with an LLM, renders them, and delivers the finished clips.
 
-> **Deployment: Docker Compose** (single main server). Kubernetes is no longer used; the
-> `k8s/` directory is historical/deprecated. See `docs/ARCHITECTURE_V2.md` for the full
-> architecture and the V2 evolution plan.
+> **Deployment: Docker Compose**, single host. Kubernetes is no longer used.
+> See `docs/ARCHITECTURE_V2.md` for the module map and the V2 evolution plan.
 
 ## Components
 
-- **control-plane** — Telegram bot (`/new`, `/finalize`) that enqueues jobs onto a Redis queue.
-- **worker** — GPU container that runs the pipeline (download → faster-whisper → diarize →
-  chunk → candidates → prompt → LLM → cut/render). One video = one run.
-- **clipflow-api** — FastAPI backend: auth, jobs, pipeline state, artifacts, and the realtime
-  event hub (SSE).
-- **clipflow-studio** — React/Vite dashboard + Operations Center.
-- **redis** (queue + event pub/sub), **minio** (artifacts), **postgres** (state).
+| Service | What it does |
+|---|---|
+| **control-plane** | Telegram bot (`/new`, `/finalize`) that enqueues jobs onto a Redis queue. Deny-by-default: only allowlisted chats/users can run commands. |
+| **worker** | GPU container running the pipeline: download → faster-whisper → diarize → chunk → candidates → prompt → LLM → cut/render. One video = one run. |
+| **clipflow-api** | FastAPI backend: auth, jobs, pipeline state, artifacts, and the realtime event hub (SSE). |
+| **redis** | Job queue (`voxmind_jobs`) and event pub/sub (`clipflow:events`). |
+| **minio** | Artifact storage. |
+| **postgres** | Application state. |
+
+### Frontend
+
+The `clipflow-studio` frontend **is not part of this repository**. It has no git history
+here and is listed in `.gitignore`. Its Compose service was removed in PR-BOOT-01 so that
+`docker compose up` no longer fails on an image that nothing builds. It will be restored in
+a dedicated PR. Until then the API is driven directly (`/docs`) and the operational surface
+is Telegram.
+
+## Requirements
+
+- Docker Engine with Compose v2 (v2.20+ — the worker build uses `additional_contexts`)
+- **NVIDIA Container Toolkit**, for the GPU worker
+- ~30 GB free disk for images (the worker base carries CUDA, torch and preloaded ASR models)
+
+No Python, Poetry or Node installation is needed on the host: everything builds in Docker.
 
 ## Quick start
 
 ```bash
-cp .env.compose.example .env   # edit secrets (Telegram, MinIO, Postgres, JWT, OpenAI...)
+git clone <repo> clipflow
+cd clipflow
+cp .env.compose.example .env
+# Fill in every value marked REQUIRED in .env (see "Configuration" below)
 docker compose up -d --build
 ```
 
-clipflow-api runs `alembic upgrade head` on boot. Default ports: studio `:3000`,
-api `:8010`, control-plane `:8000`, MinIO `:9000/:9001`.
+That single command builds all four images — including the worker's two-stage build — and
+starts the stack.
+
+## Configuration
+
+`.env.compose.example` documents every variable, grouped by area. These have **no defaults**
+and the stack will not start without them:
+
+| Variable | Notes |
+|---|---|
+| `POSTGRES_PASSWORD` | |
+| `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` | |
+| `JWT_SECRET` | Min 16 chars. No fallback secret exists; the API refuses to start without it. |
+| `INTERNAL_API_TOKEN` | Min 16 chars. Shared secret for `/internal/*`. The API refuses to start without it, and internal calls are rejected when it is missing. |
+| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | |
+| `OPENAI_API_KEY` | Required when `AI_MODE=automatic` (the default) and no local LLM is enabled. |
+
+Generate secrets with:
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+### MinIO: internal vs public endpoint
+
+Two endpoints, deliberately separate:
+
+- **internal** (`minio:9000`, set by Compose) — service-to-service traffic.
+- **public** (`MINIO_PUBLIC_ENDPOINT`) — the address a browser can reach.
+
+Presigned asset URLs are signed against the *public* endpoint. SigV4 covers the `Host`
+header, so a URL signed against the internal hostname cannot simply be rewritten later — it
+has to be signed against the host the client will actually call. Set
+`MINIO_PUBLIC_ENDPOINT` to whatever users type (`localhost:9000` locally, your domain in
+production).
+
+### Telegram authorization
+
+The bot is **deny-by-default**. A chat or user that is not allowlisted cannot create jobs,
+finalize jobs, or submit JSON; the attempt is logged and nothing is enqueued.
+
+- `TELEGRAM_ALLOWED_CHAT_IDS` — comma-separated chat ids
+- `TELEGRAM_ALLOWED_USER_IDS` — comma-separated user ids
+
+If both are empty, `TELEGRAM_CHAT_ID` is used as the single authorized chat. If that is
+empty too, nothing is authorized.
+
+### Login codes
+
+There is **no SMS provider integrated yet**. In production the login code is generated
+randomly and written only to the API log:
+
+```bash
+docker compose logs clipflow-api | grep otp_issued_without_sms_provider
+```
+
+For local development you can pin the code, but only with an explicit development
+environment — setting `FIXED_TEST_OTP` while `ENVIRONMENT=production` makes the API refuse
+to start:
+
+```bash
+ENVIRONMENT=development
+FIXED_TEST_OTP=123456
+```
+
+## Build
+
+| Image | Dockerfile | Role |
+|---|---|---|
+| `clipflow-api` | `clipflow-api/Dockerfile` | production |
+| `clipflow-control-plane` | `control-plane/Dockerfile` | production |
+| `clipflow-worker-base` | `worker/Dockerfile.gpu.base` | production — CUDA 12.4 runtime, cu124 torch, preloaded ASR models |
+| `clipflow-worker` | `worker/Dockerfile.gpu` | production — thin app layer, `FROM` the base above |
+| — | `worker/Dockerfile` | **development/CI only.** CPU-only, no CUDA. Not referenced by Compose. |
+
+The worker needs two images: a heavy base and a thin app layer on top. Compose expresses
+that dependency with `additional_contexts: service:`, so `docker compose up -d --build`
+builds them in the right order with no manual step.
+
+To build the two stages separately — pre-warming the base in CI, rebuilding only the app
+layer, or pushing the base to a registry — use the script:
+
+```bash
+scripts/build-worker.sh              # base + worker
+scripts/build-worker.sh --base-only  # just the CUDA/torch/ASR base
+scripts/build-worker.sh --app-only   # just the app layer (base must exist)
+```
+
+Build a CUDA-less worker (slower inference, no GPU required):
+
+```bash
+WORKER_TORCH_FLAVOR=cpu scripts/build-worker.sh
+```
+
+## Health verification
+
+```bash
+docker compose ps                       # every service should be running/healthy
+
+curl -fsS http://localhost:8010/health  # clipflow-api liveness
+curl -fsS http://localhost:8010/ready   # clipflow-api readiness (checks the database)
+curl -fsS http://localhost:8000/health  # control-plane liveness
+curl -fsS http://localhost:8000/ready   # control-plane readiness
+
+docker compose logs -f voxmind-worker   # expect "VOXMIND WORKER READY — waiting for jobs"
+```
+
+`clipflow-api` and `voxmind-control-plane` have Compose healthchecks. The worker waits for
+`clipflow-api` to report **healthy** before starting, so it never comes up mid-migration.
+
+Ports: API `:8010`, control-plane `:8000`, MinIO `:9000` (+ console `:9001`, loopback only).
+Postgres and Redis are bound to `127.0.0.1` — override `POSTGRES_BIND_HOST` /
+`REDIS_BIND_HOST` if you genuinely need them reachable from another machine.
 
 ## Pipeline flows
 
-- **Manual / paid (`ClipJob`)**: `/new <url>` → prepare → operator returns `response.json`
-  (or uses `--build-ia` for the OpenAI path) → `/finalize` → cuts.
-- **Autonomous (`PipelineJob`, V2)**: scheduler discovers a candidate → enqueues → worker
-  runs the same pipeline → publish. Tracked by the `PipelineState` machine and streamed to the
-  Ops Center.
+- **Manual (`--manual`)**: `/new --manual <url>` → prepare → the operator returns a
+  `response.json` → `/finalize` → cuts.
+- **Automatic (default)**: `/new <url>` → prepare → the AI provider router generates the
+  cuts → finalize is enqueued automatically → cuts.
+
+`LOCAL_LLM_ENABLED=false` (the default) contacts no local node. With it enabled but
+unreachable, the router falls back to OpenAI — the platform never requires the local node
+to be online.
 
 ## Development
 
+Tests run in Docker, so no host toolchain is required:
+
 ```bash
-# API
-cd clipflow-api && poetry install && alembic upgrade head && pytest
-# Worker
-cd worker && poetry install && pytest
-# Studio
-cd clipflow-studio && npm install && npm run dev
+docker run --rm -v "$PWD/clipflow-api:/w" -w /w python:3.11-slim \
+  sh -c "pip install -q poetry==2.0.1 && poetry config virtualenvs.create false \
+         && poetry install --no-root -q && python -m pytest -q"
 ```
 
-See `docs/ARCHITECTURE_V2.md` for module map, state machine, and event model.
+Substitute `control-plane` or `worker` for the other suites. The worker suite currently
+needs a reachable MinIO for 6 of its tests.

@@ -68,6 +68,39 @@ class Settings(BaseSettings):
     telegram_bot_token: str = Field(..., alias="TELEGRAM_BOT_TOKEN")
     telegram_chat_id: str = Field(..., alias="TELEGRAM_CHAT_ID")
 
+    # Authorization allowlists. Comma-separated Telegram numeric ids.
+    # When both are empty, TELEGRAM_CHAT_ID is used as the single authorized chat, so an
+    # existing deployment stays operational without new configuration. The bot is
+    # deny-by-default: an id that appears in neither list cannot reach any command.
+    telegram_allowed_chat_ids: str = Field(
+        default="",
+        alias="TELEGRAM_ALLOWED_CHAT_IDS",
+    )
+    telegram_allowed_user_ids: str = Field(
+        default="",
+        alias="TELEGRAM_ALLOWED_USER_IDS",
+    )
+
+    @staticmethod
+    def _parse_id_list(raw: str | None) -> set[str]:
+        return {
+            item.strip()
+            for item in str(raw or "").split(",")
+            if item.strip()
+        }
+
+    @property
+    def allowed_chat_ids(self) -> set[str]:
+        explicit = self._parse_id_list(self.telegram_allowed_chat_ids)
+        if explicit:
+            return explicit
+        # Fall back to the operational chat this bot already reports into.
+        return self._parse_id_list(self.telegram_chat_id)
+
+    @property
+    def allowed_user_ids(self) -> set[str]:
+        return self._parse_id_list(self.telegram_allowed_user_ids)
+
     # =========================
     # Redis Queue
     # =========================

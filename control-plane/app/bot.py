@@ -29,6 +29,45 @@ publisher = QueuePublisher()
 registry = JobRegistry()
 
 
+def is_authorized(update: Update) -> bool:
+    """Deny-by-default authorization for every operational command.
+
+    A chat is authorized when its id is allowlisted, or when the sending user's id is
+    allowlisted. If neither list resolves to anything, nothing is authorized — a missing
+    allowlist must never mean "allow everyone".
+    """
+    allowed_chats = settings.allowed_chat_ids
+    allowed_users = settings.allowed_user_ids
+
+    if not allowed_chats and not allowed_users:
+        return False
+
+    chat = update.effective_chat
+    user = update.effective_user
+
+    if chat is not None and str(chat.id) in allowed_chats:
+        return True
+    if user is not None and str(user.id) in allowed_users:
+        return True
+
+    return False
+
+
+async def deny(update: Update, command: str) -> None:
+    """Log the rejection and stop. No job is created, no state changes, no GPU is used."""
+    chat = update.effective_chat
+    user = update.effective_user
+    logger.warning(
+        "unauthorized_telegram_command command=%s chat_id=%s user_id=%s",
+        command,
+        chat.id if chat is not None else None,
+        user.id if user is not None else None,
+    )
+    if update.message is not None:
+        # Deliberately generic: do not confirm whether the bot or the command exists.
+        await update.message.reply_text("Não autorizado.")
+
+
 class VoxmindBot:
 
     def __init__(self):
@@ -47,6 +86,10 @@ class VoxmindBot:
         )
 
     async def handle_new(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+        if not is_authorized(update):
+            await deny(update, "/new")
+            return
 
         if not context.args:
             await update.message.reply_text(
@@ -149,6 +192,10 @@ Aguarde o processamento.
 
     async def handle_finalize(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
 
+        if not is_authorized(update):
+            await deny(update, "/finalize")
+            return
+
         document = update.message.document
 
         if not document:
@@ -169,6 +216,10 @@ Exemplo:
         await self._process_json_document(update, context, document)
 
     async def handle_document(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+        if not is_authorized(update):
+            await deny(update, "document")
+            return
 
         document = update.message.document
 
@@ -733,6 +784,10 @@ Gerando cortes...
             pass
 
     async def handle_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+        if not is_authorized(update):
+            await deny(update, "text")
+            return
 
         try:
             data = self._parse_json_payload(update.message.text.strip())

@@ -21,6 +21,10 @@ requests = "^2.32.0"
 redis = "^5.0.4"
 huggingface-hub = "0.25.*"
 
+# AI providers. `app.ai.providers.openai_provider` imports `openai` lazily inside
+# generate_json, so this is required for AI_MODE=automatic (the default path).
+openai = "^1.54.0"
+
 yt-dlp = "^2025.3.26"
 faster-whisper = "^1.0.0"
 python-telegram-bot = "^20.7"

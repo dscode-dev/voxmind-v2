@@ -1,5 +1,17 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import Field
+from pydantic import Field, field_validator, model_validator
+
+
+# Secrets that were previously accepted as silent fallbacks. Refusing them here turns a
+# misconfiguration into a startup failure instead of an authentication bypass.
+FORBIDDEN_SECRET_VALUES = {
+    "",
+    "clipflow-secret",
+    "change_me_jwt_secret",
+    "change_me_internal_token",
+}
+
+DEVELOPMENT_ENVIRONMENTS = {"development", "dev", "test", "testing", "local"}
 
 
 class Settings(BaseSettings):
@@ -8,6 +20,21 @@ class Settings(BaseSettings):
         env_file=".env",
         extra="ignore"
     )
+
+    # =====================================
+    # Environment
+    # =====================================
+
+    environment: str = Field(default="production", alias="ENVIRONMENT")
+
+    @property
+    def is_development(self) -> bool:
+        """True only for explicitly non-production environments.
+
+        Anything unrecognised — including an unset ENVIRONMENT — is treated as production,
+        so a missing value can never unlock a development-only affordance.
+        """
+        return str(self.environment or "").strip().lower() in DEVELOPMENT_ENVIRONMENTS
 
     # =====================================
     # Database
@@ -41,7 +68,10 @@ class Settings(BaseSettings):
         default="https://sanninjiraiya.lab,http://sanninjiraiya.lab",
         alias="CORS_ALLOWED_ORIGINS",
     )
-    internal_api_token: str | None = Field(default=None, alias="INTERNAL_API_TOKEN")
+    # Required. Every /internal/* endpoint is authenticated with this token; without it the
+    # worker and control-plane cannot talk to the API, so a missing value is a hard failure
+    # rather than an open door.
+    internal_api_token: str = Field(alias="INTERNAL_API_TOKEN")
     default_admin_phone_number: str = Field(
         default="+5581999912985",
         alias="DEFAULT_ADMIN_PHONE_NUMBER",
@@ -74,10 +104,22 @@ class Settings(BaseSettings):
         default=600,
         alias="OTP_RATE_LIMIT_WINDOW_SEC",
     )
-    fixed_test_otp: str = Field(
-        default="123456",
+    # Development affordance only. There is no default: an unset value must never produce a
+    # guessable code. Honoured exclusively when ENVIRONMENT is a development environment.
+    fixed_test_otp: str | None = Field(
+        default=None,
         alias="FIXED_TEST_OTP",
     )
+
+    def resolve_fixed_otp(self) -> str | None:
+        """Return the configured fixed OTP, or None when one must not be used.
+
+        Requires both an explicit development ENVIRONMENT and an explicit FIXED_TEST_OTP.
+        """
+        if not self.is_development:
+            return None
+        code = str(self.fixed_test_otp or "").strip()
+        return code or None
     internal_default_product_name: str = Field(
         default="Internal Default",
         alias="INTERNAL_DEFAULT_PRODUCT_NAME",
@@ -99,10 +141,30 @@ class Settings(BaseSettings):
     # Storage
     # =====================================
 
+    # Internal endpoint — reachable only inside the Compose network. Used for every
+    # service-to-service call (stat, get, put).
     minio_endpoint: str = Field(alias="MINIO_ENDPOINT")
     minio_access_key: str = Field(alias="MINIO_ACCESS_KEY")
     minio_secret_key: str = Field(alias="MINIO_SECRET_KEY")
     minio_secure: bool = Field(default=False, alias="MINIO_SECURE")
+
+    # Public endpoint — the host:port a browser can actually reach. Presigned URLs must be
+    # signed against this host, because SigV4 covers the Host header: rewriting the host
+    # after signing invalidates the signature. Falls back to the internal endpoint when
+    # unset, which reproduces the previous (browser-unreachable) behaviour.
+    minio_public_endpoint: str | None = Field(default=None, alias="MINIO_PUBLIC_ENDPOINT")
+    minio_public_secure: bool | None = Field(default=None, alias="MINIO_PUBLIC_SECURE")
+
+    @property
+    def resolved_minio_public_endpoint(self) -> str:
+        return (self.minio_public_endpoint or "").strip() or self.minio_endpoint
+
+    @property
+    def resolved_minio_public_secure(self) -> bool:
+        if self.minio_public_secure is None:
+            return self.minio_secure
+        return self.minio_public_secure
+
     minio_bucket: str = Field(default="clipflow")
     worker_artifacts_bucket: str = Field(
         default="voxmind",
@@ -150,6 +212,35 @@ class Settings(BaseSettings):
         default=45,
         alias="SCRIPT_AGENT_TIMEOUT_SEC",
     )
+
+    # =====================================
+    # Validation
+    # =====================================
+
+    @field_validator("jwt_secret", "internal_api_token")
+    @classmethod
+    def _reject_placeholder_secrets(cls, value: str, info) -> str:
+        candidate = str(value or "").strip()
+        if candidate.lower() in FORBIDDEN_SECRET_VALUES:
+            raise ValueError(
+                f"{info.field_name} is unset or still set to a known placeholder. "
+                "Set a unique, non-default value before starting the API."
+            )
+        if len(candidate) < 16:
+            raise ValueError(
+                f"{info.field_name} must be at least 16 characters."
+            )
+        return candidate
+
+    @model_validator(mode="after")
+    def _reject_fixed_otp_outside_development(self) -> "Settings":
+        if self.fixed_test_otp and not self.is_development:
+            raise ValueError(
+                "FIXED_TEST_OTP is set but ENVIRONMENT is not a development environment. "
+                "A fixed OTP must never be reachable in production — unset FIXED_TEST_OTP "
+                f"or set ENVIRONMENT to one of: {sorted(DEVELOPMENT_ENVIRONMENTS)}."
+            )
+        return self
 
 
 settings = Settings()

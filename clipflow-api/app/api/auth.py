@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -24,6 +25,7 @@ from app.services.otp_service import (
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 audit_service = AuditService()
+logger = logging.getLogger(__name__)
 
 
 # ==========================================
@@ -152,7 +154,7 @@ def start_auth(
             detail="Too many attempts. Try again later.",
         )
 
-    code = str(settings.fixed_test_otp or "").strip() or generate_otp()
+    code = settings.resolve_fixed_otp() or generate_otp()
     challenge_id = generate_challenge_id()
 
     user.otp_hash = hash_otp(code)
@@ -177,8 +179,15 @@ def start_auth(
     )
     db.commit()
 
-    # TODO integrar provedor real de SMS
-    print("OTP:", code)
+    # KNOWN LIMITATION: no SMS provider is integrated yet (tracked for a later PR). Until one
+    # exists, the code is written to the server log only, so obtaining it requires access to
+    # the running container. It is never returned in the HTTP response.
+    logger.warning(
+        "otp_issued_without_sms_provider challenge_id=%s user_id=%s code=%s",
+        challenge_id,
+        user.id,
+        code,
+    )
 
     return StartAuthResponse(
         status="code_sent",
