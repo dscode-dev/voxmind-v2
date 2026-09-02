@@ -1,15 +1,16 @@
 import shutil
-import subprocess
 from pathlib import Path
 from typing import Dict, List
 
+from app.runtime.subprocess_runner import run_ffmpeg, run_ffprobe
 from app.settings import settings
 
 
 class FinalVideoRenderer:
 
-    def __init__(self, work_dir: Path, default_video_ratio: str = "portrait"):
+    def __init__(self, work_dir: Path, default_video_ratio: str = "portrait", job_id: str | None = None):
         self.work_dir = work_dir
+        self.job_id = job_id
         self.default_video_ratio = str(default_video_ratio or "portrait").strip().lower()
         self.render_dir = self.work_dir / "rendered_sequence"
         self.render_dir.mkdir(parents=True, exist_ok=True)
@@ -216,13 +217,7 @@ class FinalVideoRenderer:
             "+faststart",
             str(output_path),
         ]
-        subprocess.run(
-            command,
-            check=True,
-            cwd=str(self.render_dir),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        run_ffmpeg(command, step="render_transition", job_id=self.job_id, cwd=str(self.render_dir))
 
     def _transition_fade_seconds(self, transition_plan: Dict | None) -> float:
         transition = str((transition_plan or {}).get("transition_after") or "").strip().lower()
@@ -260,13 +255,7 @@ class FinalVideoRenderer:
             str(output_path),
         ]
 
-        subprocess.run(
-            command,
-            check=True,
-            cwd=str(self.render_dir),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        run_ffmpeg(command, step="concat_sequence", job_id=self.job_id, cwd=str(self.render_dir))
 
     def _render_clip_with_overlay(
         self,
@@ -318,12 +307,7 @@ class FinalVideoRenderer:
                     str(output_path),
                 ]
             )
-            subprocess.run(
-                command,
-                check=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+            run_ffmpeg(command, step="render_clip_overlay", job_id=self.job_id)
             return
 
         on_screen_text = str(clip_plan.get("on_screen_text") or "").strip()
@@ -357,12 +341,7 @@ class FinalVideoRenderer:
                     str(output_path),
                 ]
             )
-            subprocess.run(
-                command,
-                check=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+            run_ffmpeg(command, step="render_clip_overlay", job_id=self.job_id)
             return
 
         caption_style = str(clip_plan.get("caption_style") or "clean_subtitles")
@@ -409,12 +388,7 @@ class FinalVideoRenderer:
                 str(output_path),
             ]
         )
-        subprocess.run(
-            command,
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        run_ffmpeg(command, step="render_clip_overlay", job_id=self.job_id)
 
     def _canvas_filter_chain(self, video_ratio: str) -> List[str]:
         if video_ratio == "landscape":
@@ -539,13 +513,8 @@ class FinalVideoRenderer:
             str(video_path),
         ]
         try:
-            result = subprocess.run(
-                command,
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            return float(result.stdout.strip())
+            result = run_ffprobe(command, step="render_probe_duration", job_id=self.job_id)
+            return float((result.stdout or b"").decode("utf-8", errors="replace").strip())
         except Exception:
             return 0.0
 
@@ -586,13 +555,7 @@ class FinalVideoRenderer:
             "+faststart",
             str(output_path),
         ]
-        subprocess.run(
-            command,
-            check=True,
-            cwd=str(self.render_dir),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        run_ffmpeg(command, step="burn_subtitles", job_id=self.job_id, cwd=str(self.render_dir))
 
     def _prepend_cold_open(
         self,
@@ -670,13 +633,7 @@ class FinalVideoRenderer:
             "+faststart",
             str(teaser_path),
         ]
-        subprocess.run(
-            command,
-            check=True,
-            cwd=str(self.render_dir),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        run_ffmpeg(command, step="cold_open_teaser", job_id=self.job_id, cwd=str(self.render_dir))
 
         # In V3 assembly the hook is an independent opening asset.
         # After the hook, the original cut sequence must play from its
@@ -766,10 +723,4 @@ class FinalVideoRenderer:
             "+faststart",
             str(output_path),
         ]
-        subprocess.run(
-            command,
-            check=True,
-            cwd=str(self.render_dir),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        run_ffmpeg(command, step="mix_soundtrack", job_id=self.job_id, cwd=str(self.render_dir))

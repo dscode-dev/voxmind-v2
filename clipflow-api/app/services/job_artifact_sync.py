@@ -17,17 +17,25 @@ from app.models.job_event import JobEvent
 from app.services.asset_url_service import AssetUrlService
 
 
+# Each field maps to the candidate object names to probe, in priority order. Multiple
+# candidates exist only where a key was renamed: the canonical name is tried first and the
+# legacy name second, so artifacts written before the rename still resolve.
 JOB_ARTIFACT_FIELDS = {
-    "transcript_storage_key": "jobs/{job_id}/transcript.json",
-    "transcript_with_speakers_storage_key": "jobs/{job_id}/transcript_with_speakers.json",
-    "speaker_turns_storage_key": "jobs/{job_id}/speaker_turns.json",
-    "candidates_storage_key": "jobs/{job_id}/candidates.json",
-    "prompt_storage_key": "jobs/{job_id}/prompt.txt",
-    "ai_response_storage_key": "jobs/{job_id}/ai_output.json",
-    "qa_report_storage_key": "jobs/{job_id}/qa_report.json",
-    "delivery_package_storage_key": "jobs/{job_id}/delivery_package.json",
-    "artifacts_manifest_storage_key": "jobs/{job_id}/artifacts_manifest.json",
-    "runtime_status_storage_key": "jobs/{job_id}/runtime_status.json",
+    "transcript_storage_key": ("jobs/{job_id}/transcript.json",),
+    "transcript_with_speakers_storage_key": ("jobs/{job_id}/transcript_with_speakers.json",),
+    "speaker_turns_storage_key": ("jobs/{job_id}/speaker_turns.json",),
+    "candidates_storage_key": ("jobs/{job_id}/candidates.json",),
+    "prompt_storage_key": ("jobs/{job_id}/prompt.txt",),
+    # Canonical: ai_response.json (written by the automatic pipeline at prepare time and by
+    # finalize). Legacy: ai_output.json, the only name written before PR-RUNTIME-01.
+    "ai_response_storage_key": (
+        "jobs/{job_id}/ai_response.json",
+        "jobs/{job_id}/ai_output.json",
+    ),
+    "qa_report_storage_key": ("jobs/{job_id}/qa_report.json",),
+    "delivery_package_storage_key": ("jobs/{job_id}/delivery_package.json",),
+    "artifacts_manifest_storage_key": ("jobs/{job_id}/artifacts_manifest.json",),
+    "runtime_status_storage_key": ("jobs/{job_id}/runtime_status.json",),
 }
 
 SINGLE_ASSET_TYPES = {
@@ -80,11 +88,13 @@ class JobArtifactSyncService:
         runtime_status: dict[str, Any] | None = None
         artifacts_manifest: dict[str, Any] | None = None
 
-        for field_name, template in JOB_ARTIFACT_FIELDS.items():
-            object_name = template.format(job_id=job.id)
-            if self._object_exists(object_name):
-                setattr(job, field_name, object_name)
-                found_artifacts[field_name] = object_name
+        for field_name, templates in JOB_ARTIFACT_FIELDS.items():
+            for template in templates:
+                object_name = template.format(job_id=job.id)
+                if self._object_exists(object_name):
+                    setattr(job, field_name, object_name)
+                    found_artifacts[field_name] = object_name
+                    break
 
         runtime_status = self._load_json(job.runtime_status_storage_key)
         artifacts_manifest = self._load_json(job.artifacts_manifest_storage_key)
@@ -200,11 +210,17 @@ class JobArtifactSyncService:
         }
 
         for clip in delivery_package.get("clips", []):
-            file_name = clip.get("file_name")
-            if not file_name:
+            # `file_name` is the intermediate cut (cut_01.mp4). The worker never uploads it;
+            # only the rendered `final_file_name` reaches MinIO, under jobs/{id}/final_clips/.
+            # Recording `cuts/{file_name}` produced ClipAsset rows whose storage key resolved
+            # to no object and whose signed URL 404'd. The QA report is still keyed by the
+            # raw cut name, so that lookup keeps using it.
+            raw_file_name = clip.get("file_name")
+            final_file_name = clip.get("final_file_name") or raw_file_name
+            if not final_file_name:
                 continue
 
-            storage_key = f"jobs/{job.id}/cuts/{file_name}"
+            storage_key = f"jobs/{job.id}/final_clips/{final_file_name}"
             asset = (
                 db.query(ClipAsset)
                 .filter(
@@ -213,6 +229,17 @@ class JobArtifactSyncService:
                 )
                 .first()
             )
+
+            if asset is None and raw_file_name:
+                # Repair rows written before this fix instead of duplicating them.
+                asset = (
+                    db.query(ClipAsset)
+                    .filter(
+                        ClipAsset.job_id == job.id,
+                        ClipAsset.storage_key == f"jobs/{job.id}/cuts/{raw_file_name}",
+                    )
+                    .first()
+                )
 
             if asset is None:
                 asset = ClipAsset(
@@ -242,7 +269,7 @@ class JobArtifactSyncService:
             asset.extra_json = {
                 **previous_extra,
                 "hook": clip.get("hook"),
-                "qa": qa_by_file.get(file_name),
+                "qa": qa_by_file.get(raw_file_name),
                 "automation": clip.get("automation"),
             }
             if review_payload is not None:

@@ -1,17 +1,22 @@
-import subprocess
 from pathlib import Path
+
+from app.runtime.subprocess_runner import SubprocessError, run_download
 
 
 class VideoDownloader:
 
-    def __init__(self, work_dir: Path):
+    def __init__(self, work_dir: Path, job_id: str | None = None):
         self.work_dir = work_dir
+        self.job_id = job_id
+        self.last_error: SubprocessError | None = None
 
     def _run(self, cmd: list[str]) -> bool:
         try:
-            subprocess.run(cmd, check=True)
+            run_download(cmd, step="download_video", job_id=self.job_id)
             return True
-        except subprocess.CalledProcessError:
+        except SubprocessError as exc:
+            # Each strategy is allowed to fail; the last failure is reported if all do.
+            self.last_error = exc
             return False
 
     def _find_video(self) -> Path | None:
@@ -82,4 +87,10 @@ class VideoDownloader:
                 if video:
                     return video
 
-        raise RuntimeError("All yt-dlp download strategies failed")
+        detail = ""
+        if self.last_error is not None:
+            detail = f" Last error: {self.last_error}"
+            if self.last_error.stderr:
+                detail += f" | stderr: {self.last_error.stderr}"
+
+        raise RuntimeError(f"All yt-dlp download strategies failed.{detail}")

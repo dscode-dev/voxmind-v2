@@ -14,4 +14,23 @@ def get_logger(name: str):
     return _get_logger(name)
 
 
-__all__ = ["ArtifactTracker", "RuntimeTracker", "configure_logging", "get_logger"]
+def bind_context(**fields):
+    from app.observability.logging import bind_context as _bind_context
+
+    return _bind_context(**fields)
+
+
+def log_context(**fields):
+    from app.observability.logging import log_context as _log_context
+
+    return _log_context(**fields)
+
+
+__all__ = [
+    "ArtifactTracker",
+    "RuntimeTracker",
+    "bind_context",
+    "configure_logging",
+    "get_logger",
+    "log_context",
+]

@@ -1,13 +1,15 @@
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 from typing import Any
 
+from app.runtime.subprocess_runner import run_ffmpeg
+
 
 class RawEditRenderer:
-    def __init__(self, work_dir: Path):
+    def __init__(self, work_dir: Path, job_id: str | None = None):
         self.work_dir = work_dir
+        self.job_id = job_id
         self.render_dir = work_dir / "raw_edit_render"
         self.render_dir.mkdir(parents=True, exist_ok=True)
 
@@ -104,7 +106,7 @@ class RawEditRenderer:
             "make_zero",
             str(output_path),
         ]
-        subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        run_ffmpeg(command, step="raw_edit_segment", job_id=self.job_id)
 
     def _video_filter(self, role: str) -> str:
         base = [
@@ -142,4 +144,4 @@ class RawEditRenderer:
             "+faststart",
             str(output_path),
         ]
-        subprocess.run(command, check=True, cwd=str(self.render_dir), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        run_ffmpeg(command, step="raw_edit_concat", job_id=self.job_id, cwd=str(self.render_dir))

@@ -60,7 +60,7 @@ def job_state(
                 "hook_candidates": f"jobs/{job.id}/hook_candidates.json",
                 "language_detection": f"jobs/{job.id}/language_detection.json",
                 "prompt": job.prompt_storage_key or f"jobs/{job.id}/prompt.txt",
-                "ai_response": job.ai_response_storage_key or f"jobs/{job.id}/ai_output.json",
+                "ai_response": job.ai_response_storage_key or f"jobs/{job.id}/ai_response.json",
                 "qa_report": job.qa_report_storage_key or f"jobs/{job.id}/qa_report.json",
                 "delivery_package": job.delivery_package_storage_key or f"jobs/{job.id}/delivery_package.json",
                 "artifacts_manifest": job.artifacts_manifest_storage_key or f"jobs/{job.id}/artifacts_manifest.json",

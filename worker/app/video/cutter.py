@@ -1,13 +1,15 @@
-import subprocess
 from pathlib import Path
 from typing import List, Dict
+
+from app.runtime.subprocess_runner import run_ffmpeg
 
 
 class VideoCutter:
 
-    def __init__(self, work_dir: Path, min_clip_duration_sec: int = 25):
+    def __init__(self, work_dir: Path, min_clip_duration_sec: int = 25, job_id: str | None = None):
         self.work_dir = work_dir
         self.min_clip_duration_sec = min_clip_duration_sec
+        self.job_id = job_id
 
     def cut(self, video_path: Path, cuts: List[Dict]) -> List[Path]:
 
@@ -40,12 +42,7 @@ class VideoCutter:
                 str(output_path),
             ]
 
-            subprocess.run(
-                command,
-                check=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
-            )
+            run_ffmpeg(command, step="cut_clip", job_id=self.job_id)
 
             output_files.append(output_path)
 

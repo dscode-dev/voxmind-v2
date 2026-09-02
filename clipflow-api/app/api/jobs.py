@@ -78,7 +78,9 @@ def _expected_artifact_keys(job_id: str) -> dict[str, str]:
         "hook_candidates": f"jobs/{job_id}/hook_candidates.json",
         "language_detection": f"jobs/{job_id}/language_detection.json",
         "prompt": f"jobs/{job_id}/prompt.txt",
-        "ai_response": f"jobs/{job_id}/ai_output.json",
+        # Canonical since PR-RUNTIME-01; the legacy ai_output.json is still
+        # resolved by JobArtifactSyncService for jobs written before it.
+        "ai_response": f"jobs/{job_id}/ai_response.json",
         "qa_report": f"jobs/{job_id}/qa_report.json",
         "delivery_package": f"jobs/{job_id}/delivery_package.json",
         "artifacts_manifest": f"jobs/{job_id}/artifacts_manifest.json",

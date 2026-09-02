@@ -1,7 +1,9 @@
-import subprocess
 from pathlib import Path
 from typing import List, Dict
 import numpy as np
+
+from app.runtime.subprocess_runner import run_command
+from app.settings import settings
 
 
 class AudioPeakDetector:
@@ -10,9 +12,10 @@ class AudioPeakDetector:
     e anexa um score simples de pico emocional aos chunks.
     """
 
-    def __init__(self, sample_rate: int = 16000, window_sec: float = 0.5):
+    def __init__(self, sample_rate: int = 16000, window_sec: float = 0.5, job_id: str | None = None):
         self.sample_rate = sample_rate
         self.window_sec = window_sec
+        self.job_id = job_id
 
     def _extract_audio(self, video_path: Path) -> np.ndarray:
         cmd = [
@@ -25,13 +28,19 @@ class AudioPeakDetector:
             "-"
         ]
 
-        process = subprocess.Popen(
+        # Previously a Popen whose stdout was read without ever reaping the process, with
+        # stderr discarded: a stalled ffmpeg blocked here forever and a failed one silently
+        # produced an empty buffer, making every peak score 0. Same command, now bounded and
+        # diagnosable.
+        completed = run_command(
             cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL
+            timeout=settings.ffmpeg_timeout_sec,
+            step="audio_peak_extract",
+            job_id=self.job_id,
+            capture_stdout=True,
         )
 
-        audio = np.frombuffer(process.stdout.read(), np.int16).astype(np.float32)
+        audio = np.frombuffer(completed.stdout or b"", np.int16).astype(np.float32)
         audio /= 32768.0
 
         return audio

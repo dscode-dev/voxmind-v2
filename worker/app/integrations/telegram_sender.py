@@ -157,6 +157,46 @@ class TelegramSender:
                 pass
             return False
 
+    # =========================
+    # Best-effort variants
+    # =========================
+    # Telegram is a notification surface, not part of the job result. A rendered video must
+    # not be reported as failed because a chat message could not be delivered.
+
+    def send_message_safe(self, text: str) -> bool:
+        try:
+            self.send_message(text)
+            return True
+        except Exception as exc:
+            self.logger.warning(
+                "Telegram sendMessage failed; continuing (notification is best-effort)",
+                extra={
+                    "step": "telegram_send_message",
+                    "status": "failed",
+                    "error": self._safe_error(exc)
+                    if isinstance(exc, requests.RequestException)
+                    else str(exc)[:300],
+                },
+            )
+            return False
+
+    def send_document_safe(self, file_path: str, caption: str | None = None) -> bool:
+        try:
+            self.send_document(file_path, caption=caption)
+            return True
+        except Exception as exc:
+            self.logger.warning(
+                "Telegram sendDocument failed; continuing (notification is best-effort)",
+                extra={
+                    "step": "telegram_send_document",
+                    "status": "failed",
+                    "error": self._safe_error(exc)
+                    if isinstance(exc, requests.RequestException)
+                    else str(exc)[:300],
+                },
+            )
+            return False
+
     def _safe_error(self, exc: requests.RequestException) -> str:
         response = getattr(exc, "response", None)
         if response is not None:

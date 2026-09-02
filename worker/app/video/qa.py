@@ -1,6 +1,7 @@
-import subprocess
 from pathlib import Path
 from typing import Dict, List
+
+from app.runtime.subprocess_runner import run_ffprobe
 
 
 class ClipQA:
@@ -217,17 +218,13 @@ class ClipQA:
         ]
 
         try:
-            result = subprocess.run(
-                command,
-                check=True,
-                capture_output=True,
-                text=True,
-            )
+            result = run_ffprobe(command, step="qa_probe_duration")
         except Exception:
+            # QA is advisory: an unreadable clip scores 0 rather than failing the job.
             return 0.0
 
         try:
-            return float(result.stdout.strip())
+            return float((result.stdout or b"").decode("utf-8", errors="replace").strip())
         except Exception:
             return 0.0
 

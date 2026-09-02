@@ -1,4 +1,5 @@
 import json
+import shutil
 import time
 import uuid
 import redis
@@ -6,14 +7,63 @@ import redis
 from pathlib import Path
 
 from app.integrations.clipflow_api_client import ClipFlowApiClient
-from app.observability import configure_logging, get_logger
+from app.observability import bind_context, configure_logging, get_logger, log_context
 from app.pipeline.pipeline import Pipeline
 from app.pipeline.presets import resolve_job_preset
+from app.runtime.failures import classify, is_retryable
+from app.runtime.heartbeat import WorkerHeartbeat
+from app.runtime.identity import WORKER_ID
+from app.runtime.reliable_queue import ClaimedJob, ReliableQueue
 from app.settings import settings
 from app.storage.minio_client import MinioStorage
 
 configure_logging()
 logger = get_logger(__name__)
+
+# Every log record from this process is attributable to the worker that produced it.
+bind_context(worker_id=WORKER_ID)
+
+
+class PipelineExecutionError(RuntimeError):
+    """Raised so the queue runner can distinguish success from failure.
+
+    ``run_pipeline`` still performs all of its existing side effects (API status sync,
+    Telegram error notification); this only propagates the outcome to the caller.
+    """
+
+    def __init__(self, message: str, cause: BaseException | None = None) -> None:
+        super().__init__(message)
+        self.cause = cause
+
+
+def _cleanup_workdir(work_dir: Path | None, *, succeeded: bool, job_id: str | None) -> None:
+    """Delete the per-job scratch directory.
+
+    Artifacts that matter were already uploaded to MinIO; /work only holds intermediates
+    (source video, cut files, prepared/transitioned renders). On failure the directory is
+    preserved when KEEP_WORKDIR_ON_FAILURE is true so a run can be inspected.
+    """
+    if work_dir is None:
+        return
+
+    if not succeeded and settings.keep_workdir_on_failure:
+        logger.info(
+            "Preserving workdir for diagnosis",
+            extra={"job_id": job_id, "step": "workdir_cleanup", "status": "skipped"},
+        )
+        return
+
+    try:
+        shutil.rmtree(work_dir, ignore_errors=True)
+        logger.info(
+            "Workdir removed",
+            extra={"job_id": job_id, "step": "workdir_cleanup", "status": "completed"},
+        )
+    except Exception:
+        logger.warning(
+            "Failed to remove workdir",
+            extra={"job_id": job_id, "step": "workdir_cleanup", "status": "failed"},
+        )
 
 
 def _sync_clipflow_api(
@@ -57,7 +107,7 @@ def _upload_if_exists(
     return True
 
 
-def run_pipeline(job: dict):
+def run_pipeline(job: dict, queue: ReliableQueue | None = None):
 
     video_url = job.get("video_url")
     job_id = job.get("job_id") or str(uuid.uuid4())
@@ -80,7 +130,7 @@ def run_pipeline(job: dict):
                 "Prepare job received without video_url or source_storage_key",
                 extra={"job_id": job_id, "pipeline_stage": pipeline_stage, "step": "validate_job", "status": "failed"},
             )
-            return
+            raise ValueError("Prepare job received without video_url or source_storage_key")
 
     if pipeline_stage == "finalize":
         if not manual_response:
@@ -88,7 +138,7 @@ def run_pipeline(job: dict):
                 "Finalize job received without manual_response",
                 extra={"job_id": job_id, "pipeline_stage": pipeline_stage, "step": "validate_job", "status": "failed"},
             )
-            return
+            raise ValueError("Finalize job received without manual_response")
 
         if (
             not preset.is_raw_edit
@@ -99,14 +149,14 @@ def run_pipeline(job: dict):
                 "Finalize job received invalid manual_response",
                 extra={"job_id": job_id, "pipeline_stage": pipeline_stage, "step": "validate_job", "status": "failed"},
             )
-            return
+            raise ValueError("Finalize job received invalid manual_response")
 
         if not video_url and not source_storage_key:
             logger.error(
                 "Finalize job received without video_url or source_storage_key",
                 extra={"job_id": job_id, "pipeline_stage": pipeline_stage, "step": "validate_job", "status": "failed"},
             )
-            return
+            raise ValueError("Finalize job received without video_url or source_storage_key")
 
     # ==========================================
     # força o stage atual no settings global
@@ -149,6 +199,7 @@ def run_pipeline(job: dict):
     storage = MinioStorage()
     api_client = ClipFlowApiClient()
 
+    succeeded = False
     stage_status = "preparing" if pipeline_stage == "prepare" else "finalizing"
     _sync_clipflow_api(
         api_client,
@@ -298,17 +349,23 @@ def run_pipeline(job: dict):
                 pipeline_stage="prepare",
                 status="awaiting_manual_llm",
             )
+            succeeded = True
 
             # Automatic mode attached a follow-up finalize job. Prepare artifacts are now in
             # storage, so it is safe to enqueue finalize for the next worker pickup.
             auto_finalize_job = result.get("auto_finalize_job")
             if auto_finalize_job:
                 try:
-                    redis.Redis(
-                        host=settings.redis_host,
-                        port=settings.redis_port,
-                        decode_responses=True,
-                    ).lpush(settings.redis_queue_name, json.dumps(auto_finalize_job))
+                    # Published through the reliable queue so the follow-up job carries the
+                    # same attempt/max_attempts envelope as any other job.
+                    if queue is not None:
+                        queue.enqueue(auto_finalize_job)
+                    else:
+                        redis.Redis(
+                            host=settings.redis_host,
+                            port=settings.redis_port,
+                            decode_responses=True,
+                        ).lpush(settings.redis_queue_name, json.dumps(auto_finalize_job))
                     logger.info(
                         "Auto-enqueued finalize job",
                         extra={
@@ -337,6 +394,10 @@ def run_pipeline(job: dict):
         if result["status"] == "success":
 
             # salva resposta da IA
+            #
+            # Canonical key is ai_response.json — the name the automatic pipeline already
+            # writes at prepare time. ai_output.json is still written as a legacy alias so
+            # readers (and jobs) that predate this PR keep working.
             if manual_response:
                 ai_output_path = Path(f"/tmp/{job_id}_ai_output.json")
 
@@ -344,16 +405,17 @@ def run_pipeline(job: dict):
                     json.dump(manual_response, f, ensure_ascii=False, indent=2)
 
                 if ai_output_path.exists():
-                    storage.upload(
-                        str(ai_output_path),
-                        f"jobs/{job_id}/ai_output.json",
-                    )
-                    pipeline.artifacts.mark_remote(
-                        "ai_output",
-                        pipeline_stage,
-                        f"jobs/{job_id}/ai_output.json",
-                        ai_output_path,
-                    )
+                    for object_name, artifact_name in (
+                        (f"jobs/{job_id}/ai_response.json", "ai_response"),
+                        (f"jobs/{job_id}/ai_output.json", "ai_output"),
+                    ):
+                        storage.upload(str(ai_output_path), object_name)
+                        pipeline.artifacts.mark_remote(
+                            artifact_name,
+                            pipeline_stage,
+                            object_name,
+                            ai_output_path,
+                        )
 
                 try:
                     ai_output_path.unlink()
@@ -492,6 +554,7 @@ def run_pipeline(job: dict):
                 pipeline_stage="finalize",
                 status="completed",
             )
+            succeeded = True
             return
 
         # ==========================================
@@ -513,13 +576,18 @@ def run_pipeline(job: dict):
             result.get("artifacts_manifest_path"),
             f"jobs/{job_id}/artifacts_manifest.json",
         )
+        error_message = result.get("error") or "Unexpected pipeline result"
         _sync_clipflow_api(
             api_client,
             job_id=job_id,
             pipeline_stage=pipeline_stage,
             status="failed",
-            error_message=result.get("error") or "Unexpected pipeline result",
+            error_message=error_message,
         )
+        raise PipelineExecutionError(error_message)
+
+    except PipelineExecutionError:
+        raise
 
     except Exception as e:
         logger.exception(
@@ -533,6 +601,93 @@ def run_pipeline(job: dict):
             status="failed",
             error_message=str(e),
         )
+        # Propagate so the queue runner can retry or dead-letter this payload.
+        raise PipelineExecutionError(str(e), cause=e) from e
+
+    finally:
+        _cleanup_workdir(
+            getattr(pipeline, "work_dir", None),
+            succeeded=succeeded,
+            job_id=job_id,
+        )
+
+
+def process_claimed_job(
+    job: ClaimedJob,
+    queue: ReliableQueue,
+    heartbeat: WorkerHeartbeat | None = None,
+) -> str:
+    """Run one claimed job and settle it on the queue.
+
+    Returns the outcome: "acknowledged", "retried" or "dead_lettered".
+
+    The job stays in the processing list for the whole of this function. It leaves only
+    through acknowledge/retry/dead_letter, so a crash anywhere in here leaves the payload
+    in-flight with an expiring lease, ready for recover_stale.
+    """
+    if heartbeat is not None:
+        heartbeat.mark_busy(job)
+
+    logger.info(
+        "Job claimed",
+        extra={
+            "job_id": job.job_id,
+            "pipeline_stage": job.payload.get("pipeline_stage"),
+            "step": "queue_claim",
+            "status": "claimed",
+            "attempt": job.attempt,
+        },
+    )
+
+    try:
+        run_pipeline(job.payload, queue=queue)
+    except Exception as exc:
+        cause = getattr(exc, "cause", None) or exc
+        retryable = is_retryable(cause)
+
+        if retryable and not job.is_last_attempt:
+            delay = queue.retry(job, cause)
+            logger.warning(
+                "Job failed; scheduled for retry",
+                extra={
+                    "job_id": job.job_id,
+                    "step": "queue_retry",
+                    "status": "retry_scheduled",
+                    "attempt": job.attempt,
+                    "retry_in_sec": delay,
+                    "error_class": classify(cause),
+                },
+            )
+            return "retried"
+
+        reason = (
+            "attempts_exhausted" if retryable else "non_retryable_failure"
+        )
+        queue.dead_letter(job, cause, reason=reason)
+        logger.error(
+            "Job moved to the dead-letter queue",
+            extra={
+                "job_id": job.job_id,
+                "step": "queue_dead_letter",
+                "status": "dead_lettered",
+                "attempt": job.attempt,
+                "reason": reason,
+            },
+        )
+        return "dead_lettered"
+
+    # ACK point: the pipeline finished, artifacts were uploaded and the API sync ran.
+    queue.acknowledge(job)
+    logger.info(
+        "Job acknowledged",
+        extra={
+            "job_id": job.job_id,
+            "step": "queue_ack",
+            "status": "acknowledged",
+            "attempt": job.attempt,
+        },
+    )
+    return "acknowledged"
 
 
 def main():
@@ -546,25 +701,46 @@ def main():
         decode_responses=True,
     )
 
+    queue = ReliableQueue(redis_client, worker_id=WORKER_ID)
+    heartbeat = WorkerHeartbeat(redis_client, WORKER_ID, queue=queue)
+    heartbeat.start()
+
+    # A worker that died mid-job left its payload in the processing list. Sweep on boot so
+    # those jobs are recovered rather than stranded.
+    recovered = queue.recover_stale()
+    if recovered["recovered"] or recovered["dead_lettered"]:
+        logger.warning(
+            "Recovered in-flight jobs left behind by a previous worker",
+            extra={"step": "queue_recover", "status": "completed", **recovered},
+        )
+
     logger.info(
         "VOXMIND WORKER READY — waiting for jobs",
-        extra={"step": "worker_boot", "status": "ready"},
+        extra={"step": "worker_boot", "status": "ready", **queue.depths()},
     )
 
-    while True:
+    try:
+        while True:
+            job = queue.claim()
 
-        _, payload = redis_client.brpop(settings.redis_queue_name)
+            if job is None:
+                # Idle tick: also the moment to reclaim anything whose lease expired.
+                queue.recover_stale()
+                continue
 
-        try:
-            job = json.loads(payload)
-        except Exception:
-            logger.error(
-                "Invalid job payload",
-                extra={"step": "parse_job", "status": "failed"},
-            )
-            continue
-
-        run_pipeline(job)
+            with log_context(
+                job_id=job.job_id,
+                attempt=job.attempt,
+                worker_id=WORKER_ID,
+            ):
+                try:
+                    process_claimed_job(job, queue, heartbeat)
+                finally:
+                    if heartbeat is not None:
+                        heartbeat.mark_idle()
+    finally:
+        heartbeat.stop()
+        heartbeat.clear()
 
 
 def run_private_scheduler():
@@ -574,7 +750,8 @@ def run_private_scheduler():
         decode_responses=True,
     )
     api_client = ClipFlowApiClient()
-    worker_id = f"private-scheduler-{uuid.uuid4()}"
+    worker_id = f"private-scheduler-{WORKER_ID}"
+    queue = ReliableQueue(redis_client, worker_id=worker_id)
 
     logger.info(
         "VOXMIND PRIVATE SCHEDULER READY",
@@ -591,7 +768,7 @@ def run_private_scheduler():
             payload = item.get("job_payload")
             if not payload:
                 continue
-            redis_client.lpush(settings.redis_queue_name, json.dumps(payload))
+            queue.enqueue(payload)
             logger.info(
                 "Queued private scheduler job",
                 extra={

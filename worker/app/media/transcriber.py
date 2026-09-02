@@ -1,12 +1,13 @@
 import json
 import math
 import re
-import subprocess
 import gc
 from pathlib import Path
 from typing import List, Dict, Tuple
 
 from faster_whisper import WhisperModel
+
+from app.runtime.subprocess_runner import run_ffmpeg, run_ffprobe
 
 
 class Transcriber:
@@ -26,7 +27,9 @@ class Transcriber:
         fallback_to_cpu_on_oom: bool = True,
         fallback_model_sizes: list[str] | None = None,
         preloaded_models_dir: str | None = None,
+        job_id: str | None = None,
     ):
+        self.job_id = job_id
         self.model_size = model_size
         self._requested_model_size = model_size
         self.device = device
@@ -290,14 +293,9 @@ class Transcriber:
             str(video_path),
         ]
 
-        result = subprocess.run(
-            command,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+        result = run_ffprobe(command, step="probe_duration", job_id=self.job_id)
 
-        return float(result.stdout.strip())
+        return float((result.stdout or b"").decode("utf-8", errors="replace").strip())
 
     def _build_windows(self, duration: float) -> List[Tuple[float, float]]:
 
@@ -351,12 +349,7 @@ class Transcriber:
                 str(chunk_file),
             ]
 
-            subprocess.run(
-                command,
-                check=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+            run_ffmpeg(command, step="extract_audio_chunk", job_id=self.job_id)
 
             results.append((chunk_file, start_offset))
 

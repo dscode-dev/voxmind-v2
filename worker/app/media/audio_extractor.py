@@ -1,9 +1,12 @@
 from pathlib import Path
-import subprocess
+
+from app.runtime.subprocess_runner import run_ffmpeg
+
 
 class AudioExtractor:
-    def __init__(self, output_dir: Path):
+    def __init__(self, output_dir: Path, job_id: str | None = None):
         self.output_dir = output_dir
+        self.job_id = job_id
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
     def extract_wav_16k_mono(self, video_path: Path) -> Path:
@@ -19,5 +22,5 @@ class AudioExtractor:
             str(out),
             "-y",
         ]
-        subprocess.run(cmd, check=True)
+        run_ffmpeg(cmd, step="extract_audio", job_id=self.job_id)
         return out

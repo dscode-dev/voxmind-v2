@@ -438,5 +438,66 @@ class Settings(BaseSettings):
         alias="VOXMIND_REDIS_QUEUE"
     )
 
+    # ======================================
+    # Reliable queue / worker runtime
+    # ======================================
+
+    worker_id: str | None = Field(
+        default=None,
+        alias="WORKER_ID",
+    )
+    worker_max_attempts: int = Field(
+        default=3,
+        alias="WORKER_MAX_ATTEMPTS",
+    )
+    # How long a claimed job may go without a lease renewal before another worker may
+    # reclaim it. The heartbeat thread renews well inside this window, so it only elapses
+    # when the worker actually died.
+    worker_visibility_timeout_sec: int = Field(
+        default=900,
+        alias="WORKER_VISIBILITY_TIMEOUT_SEC",
+    )
+    worker_heartbeat_interval_sec: int = Field(
+        default=15,
+        alias="WORKER_HEARTBEAT_INTERVAL_SEC",
+    )
+    worker_heartbeat_ttl_sec: int = Field(
+        default=60,
+        alias="WORKER_HEARTBEAT_TTL_SEC",
+    )
+    worker_retry_backoff_base_sec: int = Field(
+        default=30,
+        alias="WORKER_RETRY_BACKOFF_BASE_SEC",
+    )
+    worker_retry_backoff_max_sec: int = Field(
+        default=600,
+        alias="WORKER_RETRY_BACKOFF_MAX_SEC",
+    )
+    worker_claim_block_sec: int = Field(
+        default=5,
+        alias="WORKER_CLAIM_BLOCK_SEC",
+    )
+
+    # ======================================
+    # Subprocess timeouts
+    # ======================================
+
+    download_timeout_sec: int = Field(
+        default=3600,
+        alias="DOWNLOAD_TIMEOUT_SEC",
+    )
+    ffmpeg_timeout_sec: int = Field(
+        default=3600,
+        alias="FFMPEG_TIMEOUT_SEC",
+    )
+    ffprobe_timeout_sec: int = Field(
+        default=120,
+        alias="FFPROBE_TIMEOUT_SEC",
+    )
+    subprocess_stderr_capture_chars: int = Field(
+        default=4000,
+        alias="SUBPROCESS_STDERR_CAPTURE_CHARS",
+    )
+
 
 settings = Settings()

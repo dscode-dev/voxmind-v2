@@ -157,6 +157,66 @@ Ports: API `:8010`, control-plane `:8000`, MinIO `:9000` (+ console `:9001`, loo
 Postgres and Redis are bound to `127.0.0.1` — override `POSTGRES_BIND_HOST` /
 `REDIS_BIND_HOST` if you genuinely need them reachable from another machine.
 
+## Worker runtime
+
+Jobs are claimed from Redis with a reliable-queue pattern, so a crashed worker never
+destroys a job.
+
+```
+voxmind_jobs                pending work
+      │ BLMOVE (atomic claim) + lease
+      ▼
+voxmind_jobs:processing     in-flight, one entry per claimed job
+      │
+      ├── success ──────────▶ removed (ACK) + workdir deleted
+      ├── retryable failure ─▶ voxmind_jobs:delayed  (backoff, attempt+1) ─▶ pending
+      └── exhausted /
+          non-retryable ────▶ voxmind_jobs:dead      (payload + failure metadata)
+```
+
+**Invariant:** a payload leaves `processing` only through an explicit acknowledge, retry or
+dead-letter. If a worker dies mid-job the payload stays in `processing`; its lease expires
+because nothing renews it, and the next worker's sweep requeues it.
+
+Inspecting the queue:
+
+```bash
+docker exec voxmind-redis redis-cli LLEN voxmind_jobs             # waiting
+docker exec voxmind-redis redis-cli LLEN voxmind_jobs:processing  # in flight
+docker exec voxmind-redis redis-cli ZCARD voxmind_jobs:delayed    # waiting to retry
+docker exec voxmind-redis redis-cli LLEN voxmind_jobs:dead        # dead-lettered
+docker exec voxmind-redis redis-cli LRANGE voxmind_jobs:dead 0 -1 # why they failed
+```
+
+Which workers are alive, and what they are doing:
+
+```bash
+docker exec voxmind-redis redis-cli KEYS 'clipflow:workers:*'
+docker exec voxmind-redis redis-cli GET clipflow:workers:<worker_id>
+```
+
+Each worker refreshes that key on `WORKER_HEARTBEAT_INTERVAL_SEC` and it expires after
+`WORKER_HEARTBEAT_TTL_SEC`, so a dead worker disappears on its own. The same loop renews the
+lease of the job it is running.
+
+### Logs
+
+Every log line carries `job_id`, `pipeline_stage`, `step`, `status`, `attempt` and
+`worker_id`, so one run is reconstructible:
+
+```bash
+docker compose logs voxmind-worker | grep '"job_id": "<id>"'
+```
+
+```json
+{"levelname": "INFO", "message": "Job claimed",     "job_id": "abc", "step": "queue_claim",  "status": "claimed",   "attempt": 1, "worker_id": "worker-1"}
+{"levelname": "INFO", "message": "transcribe:completed", "job_id": "abc", "step": "transcribe", "status": "completed", "attempt": 1, "worker_id": "worker-1"}
+{"levelname": "INFO", "message": "Job acknowledged","job_id": "abc", "step": "queue_ack",    "status": "acknowledged","attempt": 1, "worker_id": "worker-1"}
+```
+
+External tools (yt-dlp, ffmpeg, ffprobe) run under per-tool timeouts. A successful run logs
+nothing extra; a failed one logs the captured, truncated stderr against the same `job_id`.
+
 ## Pipeline flows
 
 - **Manual (`--manual`)**: `/new --manual <url>` → prepare → the operator returns a

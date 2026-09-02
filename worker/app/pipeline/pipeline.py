@@ -523,7 +523,7 @@ ERROR:
         self._log("📤 Sending prompt to Telegram...")
         self._mark_step("send_prompt", "started")
 
-        self.telegram.send_document(
+        self.telegram.send_document_safe(
             str(prompt_path),
             caption=f"""
 🧠 VOXMIND — PROMPT GERADO
@@ -545,7 +545,7 @@ response.json
         )
         self._mark_step("send_prompt", "completed")
 
-        self.telegram.send_message(
+        self.telegram.send_message_safe(
             f"""
 📊 PIPELINE PRONTO
 
@@ -815,7 +815,7 @@ para continuar o processamento.
             "prompt",
         )
 
-        self.telegram.send_document(
+        self.telegram.send_document_safe(
             str(prompt_path),
             caption=f"""
 🎬 VOXMIND — PROMPT DE EDIÇÃO AUTORAL
@@ -825,7 +825,7 @@ JOB_ID: {self.job_id}
 Use este prompt para gerar o JSON com roteiro e plano de edição do vídeo bruto.
 """,
         )
-        self.telegram.send_message(
+        self.telegram.send_message_safe(
             f"""
 📊 ANÁLISE DO VÍDEO BRUTO PRONTA
 
@@ -1200,7 +1200,7 @@ Envie o JSON de roteiro/plano de edição para registrar a decisão editorial.
                 subtitle_path,
                 artifact_type="text",
             )
-        self.telegram.send_message(
+        self.telegram.send_message_safe(
             self._build_publish_message(publish_package)
         )
         self._mark_step("send_cuts", "completed")

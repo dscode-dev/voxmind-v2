@@ -36,6 +36,9 @@ onnxruntime = "^1.17.0"
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.2.0"
 ruff = "^0.6.0"
+# In-memory Redis for the reliable-queue and heartbeat tests: BLMOVE, key TTLs and sorted
+# sets behave as in the real server, so the tests stay hermetic.
+fakeredis = "^2.26"
 
 [tool.ruff]
 line-length = 100
