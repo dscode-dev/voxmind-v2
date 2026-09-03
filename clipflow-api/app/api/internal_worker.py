@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.core.settings import settings
 from app.db.session import get_db
 from app.models.clip_job import ClipJob
 from app.models.enums import JobStatus
@@ -240,6 +241,28 @@ def claim_due_private_scheduler_runs(
     _: None = Depends(require_internal_api_token),
     db: Session = Depends(get_db),
 ):
+    """DEPRECATED (PR-SCHEDULER-01): the legacy seed-URL scheduler.
+
+    This is the pre-discovery autonomous producer: it rotates a cursor over a profile's
+    ``seed_urls_json`` and dispatches whichever URL comes next. It predates ContentTopic,
+    VideoCandidate, ranking and admission, and it has no locking at all — its due-check is a
+    SELECT-then-INSERT, so two scheduler workers would both dispatch the same slot.
+
+    It is **not deployed**: compose runs the worker with ``WORKER_MODE=queue``, and only
+    ``WORKER_MODE=scheduler`` polls this endpoint.
+
+    Two autonomous producers competing for the same worker slots — one respecting admission's
+    capacity limits and one ignoring them entirely — would make those limits meaningless. So
+    this path is now gated behind the same global kill switch as the new loop. It is left in
+    place rather than deleted because the manual admin trigger
+    (``POST /admin/private-schedulers/{id}/trigger``) still uses the same service and remains
+    a legitimate operator action; only the *automatic* dispatch is disabled.
+    """
+    if not settings.autonomous_pipeline_enabled:
+        # The legacy path answers empty rather than erroring: a worker still running in
+        # scheduler mode should idle quietly, not crash-loop.
+        return {"runs": [], "status": "disabled", "reason": "autonomous_pipeline_disabled"}
+
     admin = db.query(User).filter(User.role == UserRole.ADMIN).order_by(User.created_at.asc()).first()
     if not admin:
         return {"runs": []}

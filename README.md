@@ -483,6 +483,90 @@ curl -X POST localhost:8010/admin/video-candidates/{id}/admit
 curl -X POST localhost:8010/admin/admission/retry-pending
 ```
 
+## Autonomous loop
+
+Discovery, selection and admission each work on their own. The scheduler is what makes them a
+system: a deterministic coordinator that decides *when* a topic runs, *which* stages run, and
+*whether to continue* — and nothing else. It owns no scoring rule, no capacity rule and no
+admission rule; every one of those still lives in the service that always owned it.
+
+```
+AutomationRunner   every AUTOMATION_POLL_INTERVAL_SEC, in the API process
+        |
+     tick()        recover pending enqueues -> pick the topics that are due
+        |
+   advisory lock   pg_try_advisory_lock per topic; unavailable -> skip, never wait
+        |
+  discovery -> selection -> admission        each attempted, none able to abort the rest
+        |
+   PipelineJob QUEUED -> Redis               the same handoff a manual admission makes
+```
+
+**It stops at the queue.** The loop can decide to produce; it cannot decide to publish.
+
+### Scheduling
+
+One `automation_states` row per topic holds `next_due_at`, so the schedule survives a restart:
+a process that comes back up does not re-run everything, it reads what was already due. The
+interval is per topic (`ContentTopic.metadata_json["automation"]`), floored at 5 minutes, and
+each topic gets a deterministic jitter derived from `sha256(topic_id)` — stable across
+restarts, but enough to keep ten topics from hitting the same provider in the same second.
+
+A tick runs at most 5 topics; the rest stay due and are picked up by the next pass, so one
+tick cannot monopolise the process.
+
+### Three kill switches, and what each one stops
+
+| Switch | Scope | Effect |
+|---|---|---|
+| `AUTONOMOUS_PIPELINE_ENABLED` | global, **default `false`** | no topic runs; the loop keeps ticking so it can be turned back on without a restart |
+| `automation.enabled` | one topic | that topic stops starting new cycles |
+| `automation.{discovery,selection,admission}_enabled` | one stage | that stage is skipped; the others still run |
+
+The global switch defaults to off because the defensible default for a system that spends GPU
+time on its own is that a fresh deployment does not. It also gates the legacy `seed_urls_json`
+scheduler in `/internal/*`, so the two autonomous producers can never compete for worker slots.
+
+Pausing is reversible and destroys nothing: statuses are untouched, running jobs keep running.
+
+### Not running twice
+
+Three independent guards, because they fail in different ways:
+
+1. **`pg_try_advisory_lock` per topic** — across replicas. Non-blocking: an unavailable lock
+   is a skip, never a wait, because the work will still be due on the next tick.
+2. **`running_since`** — across ticks of the same process, for a run that outlived its own
+   interval. Cleared after 60 minutes so a crashed run cannot wedge a topic forever.
+3. **Idempotency in the services below** — the fallback that makes a duplicate harmless
+   rather than merely unlikely.
+
+The manual trigger goes through the scheduler too, so it takes the same lock as an automatic
+run. It bypasses only the due check.
+
+### Failure isolation
+
+A stage that raises is recorded and the run continues: a discovery provider timing out must
+not cost the candidates already selected their admission. The run's status says what happened
+— `completed`, `partial`, `failed`, or `noop` — and **an empty run is not a failure**: a tick
+that finds nothing new is the normal state of a working system.
+
+Only the exception *type* is recorded, never its message, because a provider that interpolates
+its own request into an error would put an API key in the event log.
+
+**Backpressure.** Selection is capped by how many candidates are already SELECTED and waiting,
+so the backlog cannot grow without bound while admission is at capacity. Capacity blocking is
+temporary and does not fail a run.
+
+```bash
+curl localhost:8010/admin/automation/status        -H "Authorization: Bearer $ADMIN_JWT"
+curl -X POST localhost:8010/admin/automation/tick  -H "Authorization: Bearer $ADMIN_JWT"
+curl -X POST localhost:8010/admin/automation/topics/{id}/run
+curl -X PUT  localhost:8010/admin/automation/topics/{id} -d '{"enabled": true, "interval_minutes": 60}'
+```
+
+All four are admin-only, on the same RBAC as every other `/admin/*` route. Configuration
+changes are audited; ticks are not — they are events and logs, not human decisions.
+
 ## Job state
 
 A run's state is the result of a validated transition, never an inference from which objects

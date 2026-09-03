@@ -249,6 +249,42 @@ class Settings(BaseSettings):
     selection_timeout_sec: float = Field(default=20.0, alias="SELECTION_TIMEOUT_SEC")
 
     # =====================================
+    # Autonomous pipeline (PR-SCHEDULER-01)
+    # -------------------------------------------------------------------------------
+    # The global kill switch. Default OFF: this is the flag that lets the system start
+    # production on its own, and a deployment that has not deliberately enabled it should
+    # not begin doing so because a new image shipped.
+    #
+    # Turning it off stops the WORK, not the scheduler — the loop keeps ticking and the API
+    # stays healthy, so re-enabling needs no restart.
+    #
+    # Per-topic policy (interval, stage switches, limits) is NOT here: it belongs to the
+    # editorial intention and lives in ContentTopic.metadata_json["automation"].
+    # =====================================
+
+    autonomous_pipeline_enabled: bool = Field(
+        default=False, alias="AUTONOMOUS_PIPELINE_ENABLED"
+    )
+    # How often the loop looks for due topics. Not the run interval — that is per topic and
+    # persisted, so this only bounds how late a due topic can be noticed.
+    automation_poll_interval_sec: int = Field(
+        default=60, alias="AUTOMATION_POLL_INTERVAL_SEC"
+    )
+    # A pause before the first tick so a restart does not fire mid-bootstrap.
+    automation_startup_delay_sec: int = Field(
+        default=15, alias="AUTOMATION_STARTUP_DELAY_SEC"
+    )
+    # Lets the in-process loop be turned off entirely (to run it elsewhere) without changing
+    # the kill switch, which governs whether automation may act at all.
+    # Application logs are dropped without a handler on the root logger: uvicorn configures
+    # only its own loggers, so everything the scheduler reports would go nowhere. INFO is the
+    # level at which a tick that did something is visible and an idle one is not.
+    log_level: str = Field(default="INFO", alias="LOG_LEVEL")
+    automation_runner_enabled: bool = Field(
+        default=True, alias="AUTOMATION_RUNNER_ENABLED"
+    )
+
+    # =====================================
     # Validation
     # =====================================
 
