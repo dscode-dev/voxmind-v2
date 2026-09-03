@@ -1824,59 +1824,27 @@ def test_the_provider_reason_parser_drops_the_description():
 # ===========================================================================
 
 
-def test_the_scheduler_does_not_reach_the_publisher():
-    """PR-SCHEDULER-01's loop must remain discovery -> selection -> admission.
+def test_nothing_publishes_without_an_explicit_decision():
+    """Publishing is never a side effect of production finishing.
 
-    Checks imports and names, not prose. Those modules legitimately talk about publishing in
-    their docstrings and call ``event_bus.publish_event``, so a substring match on the source
-    flags the very comments that document the boundary.
+    PR-PUBLISH-02 connected the scheduler to a publication policy, so the old assertion -
+    "the scheduler knows nothing about publishing" - is no longer the invariant. This one is:
+    a run reaching READY_TO_PUBLISH publishes only when a policy that is off by default says
+    so, or when an admin asks. The scheduler still calls no provider; that boundary is
+    checked in test_publish_queue.
     """
-    import ast
-    import inspect
+    from app.core.settings import Settings
 
-    from app.services import automation_scheduler, automation_service
+    defaults = Settings.model_fields
+    assert defaults["publishing_enabled"].default is False
+    assert defaults["autopublish_enabled"].default is False
+    assert defaults["autopublish_public_enabled"].default is False
 
-    forbidden_names = {
-        "PublishingService",
-        "PublishResolutionService",
-        "PublishTargetService",
-        "YouTubePublisher",
-        "YouTubeOAuthClient",
-    }
+    # And the per-topic switch, which is what a fresh topic gets.
+    from app.services.automation_service import AutomationConfig
 
-    for module in (automation_service, automation_scheduler):
-        tree = ast.parse(inspect.getsource(module))
-
-        modules_imported: set[str] = set()
-        names_imported: set[str] = set()
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom) and node.module:
-                modules_imported.add(node.module)
-                names_imported.update(alias.name for alias in node.names)
-            elif isinstance(node, ast.Import):
-                modules_imported.update(alias.name for alias in node.names)
-
-        offending_modules = {
-            name
-            for name in modules_imported
-            if name.startswith("app.publishing") or "publish" in name.rsplit(".", 1)[-1]
-        }
-        assert offending_modules == set(), (
-            f"{module.__name__} imports publishing modules: {sorted(offending_modules)}"
-        )
-        assert names_imported & forbidden_names == set(), (
-            f"{module.__name__} imports a publisher: "
-            f"{sorted(names_imported & forbidden_names)}"
-        )
-
-        referenced = {
-            node.id for node in ast.walk(tree) if isinstance(node, ast.Name)
-        } | {
-            node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)
-        }
-        assert referenced & forbidden_names == set(), (
-            f"{module.__name__} references {sorted(referenced & forbidden_names)}"
-        )
+    assert AutomationConfig().autopublish_enabled is False
+    assert AutomationConfig().publish_target_id is None
 
 
 def test_the_worker_pipeline_has_no_upload_call():

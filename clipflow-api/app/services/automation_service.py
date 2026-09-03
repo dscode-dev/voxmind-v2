@@ -65,6 +65,11 @@ STAGE_SKIPPED = "skipped"
 HARD_MAX_SELECTION_LIMIT = 25
 HARD_MAX_ADMISSION_LIMIT = 10
 HARD_MAX_PENDING_SWEEP = 10
+# One topic cannot start more publications in a tick than this, whatever it asks for.
+HARD_MAX_AUTOPUBLISH_LIMIT = 5
+
+# Config keys that are text, not numbers. Everything else is coerced to bool or int.
+_TEXT_FIELDS = frozenset({"publish_target_id", "autopublish_enabled_at"})
 MIN_INTERVAL_MINUTES = 5
 
 
@@ -84,6 +89,14 @@ class AutomationConfig:
     selection_enabled: bool = True
     admission_enabled: bool = True
 
+    # Off by default, and off for every topic that already exists. Enabling automation for a
+    # topic is a separate editorial decision from enabling it globally: a channel may be
+    # discovering and producing happily for weeks before anyone is ready to let it publish.
+    autopublish_enabled: bool = False
+    # How many publications this topic may start in one tick. Independent of the global
+    # per-tick cap, which bounds the whole system rather than one topic.
+    autopublish_limit: int = 1
+
     selection_limit: int = 3
     admission_limit: int = 1
 
@@ -96,6 +109,17 @@ class AutomationConfig:
     failure_backoff_minutes: int = 30
     max_consecutive_failures: int = 5
 
+    # Which channel this topic publishes to, as a PublishTarget id.
+    #
+    # Required for automation and deliberately not inferred. "The first active YouTube
+    # target" would be a rule that silently changes meaning the day a second channel is
+    # connected - and the failure mode is a video on the wrong channel, which cannot be
+    # taken back. No target configured means no automatic publication.
+    publish_target_id: str | None = None
+    # ISO-8601. Set when a topic's automation is switched on, and compared against when a
+    # run first became publishable, so turning this on does not publish the backlog.
+    autopublish_enabled_at: str | None = None
+
     @classmethod
     def from_topic(cls, topic: ContentTopic) -> "AutomationConfig":
         raw = ((topic.metadata_json or {}).get("automation")) or {}
@@ -106,6 +130,12 @@ class AutomationConfig:
         fields: dict[str, Any] = {name: getattr(config, name) for name in cls.__dataclass_fields__}
         for key, value in raw.items():
             if key not in fields or value is None:
+                continue
+            if key in _TEXT_FIELDS:
+                # Kept as text rather than pushed through the int coercion below, which
+                # would silently drop a target id and leave automation pointing nowhere.
+                text = str(value).strip()
+                fields[key] = text or None
                 continue
             current = fields[key]
             try:
@@ -119,6 +149,9 @@ class AutomationConfig:
         fields["selection_limit"] = max(0, min(fields["selection_limit"], HARD_MAX_SELECTION_LIMIT))
         fields["admission_limit"] = max(0, min(fields["admission_limit"], HARD_MAX_ADMISSION_LIMIT))
         fields["max_selected_backlog"] = max(0, fields["max_selected_backlog"])
+        fields["autopublish_limit"] = max(
+            0, min(fields["autopublish_limit"], HARD_MAX_AUTOPUBLISH_LIMIT)
+        )
         return cls(**fields)
 
     def as_dict(self) -> dict[str, Any]:
@@ -153,6 +186,7 @@ class AutomationRunReport:
     discovery: StageResult = field(default_factory=lambda: StageResult("discovery"))
     selection: StageResult = field(default_factory=lambda: StageResult("selection"))
     admission: StageResult = field(default_factory=lambda: StageResult("admission"))
+    publication: StageResult = field(default_factory=lambda: StageResult("publication"))
     pending_enqueue_recovered: int = 0
     duration_ms: int = 0
 
@@ -167,6 +201,7 @@ class AutomationRunReport:
             "discovery": self.discovery.as_dict(),
             "selection": self.selection.as_dict(),
             "admission": self.admission.as_dict(),
+            "publication": self.publication.as_dict(),
             "pending_enqueue_recovered": self.pending_enqueue_recovered,
             "duration_ms": self.duration_ms,
         }
@@ -181,6 +216,7 @@ class AutonomousPipelineService:
         discovery=None,
         selection: SelectionService | None = None,
         admission: ProductionAdmissionService | None = None,
+        publication=None,
     ) -> None:
         self.discovery = discovery or build_default_service(
             settings.youtube_api_key,
@@ -198,6 +234,10 @@ class AutonomousPipelineService:
             )
         )
         self.admission = admission or ProductionAdmissionService()
+        # Built lazily: importing the publication policy at module scope would make the
+        # scheduler depend on the publishing package at import time, and the boundary this
+        # PR is careful about is exactly that one.
+        self._publication = publication
 
     def run_topic(
         self,
@@ -229,6 +269,10 @@ class AutonomousPipelineService:
         self._discovery_stage(db, topic, config, report)
         self._selection_stage(db, topic, config, report)
         self._admission_stage(db, topic, config, report, actor)
+        # Last, and working on a different set of runs: whatever admission just produced is
+        # minutes of GPU time away from being publishable, so this stage acts on the backlog
+        # of runs that finished in earlier ticks. It never waits for a publication.
+        self._publication_stage(db, topic, config, report, actor)
 
         report.finished_at = datetime.now(timezone.utc)
         report.duration_ms = int((time.monotonic() - started) * 1000)
@@ -400,9 +444,69 @@ class AutonomousPipelineService:
             or 0
         )
 
+    def _publication_stage(
+        self,
+        db: Session,
+        topic: ContentTopic,
+        config: AutomationConfig,
+        report: AutomationRunReport,
+        actor: str | None,
+    ) -> None:
+        """Ask the publication policy whether anything of this topic may publish itself.
+
+        The scheduler does not publish. It does not know what YouTube is, holds no
+        credential, and calls no adapter - it calls one application service that evaluates
+        policy and, at most, queues a command. The upload happens later, in the publisher
+        process, and this tick does not wait for it.
+        """
+        if not config.autopublish_enabled:
+            report.publication.status = DISABLED
+            return
+
+        try:
+            result = self.publication.run(
+                db,
+                topic=topic,
+                dry_run=False,
+                limit=config.autopublish_limit,
+                automation_run_id=report.automation_run_id,
+                actor=actor or "scheduler",
+            )
+        except Exception as exc:  # noqa: BLE001
+            # Isolated like every other stage: a publication problem must not cost this tick
+            # the discovery and selection it already did. The message is dropped and only the
+            # type kept, for the same reason as the stages above.
+            report.publication.status = STAGE_FAILED
+            report.publication.reasons = [type(exc).__name__]
+            logger.exception(
+                "automation_publication_crashed",
+                extra={"automation_run_id": report.automation_run_id,
+                       "topic_id": str(topic.id)},
+            )
+            return
+
+        report.publication.status = OK
+        report.publication.run_id = result.autopublish_run_id
+        report.publication.counts = {
+            "considered": result.considered,
+            "queued": result.queued,
+            "blocked": result.blocked,
+            "daily_remaining": result.daily_remaining,
+            "publisher_workers_alive": result.publisher_workers_alive,
+        }
+        report.publication.reasons = sorted(result.blocked_reasons)
+
+    @property
+    def publication(self):
+        if self._publication is None:
+            from app.services.autopublish_service import AutonomousPublicationService
+
+            self._publication = AutonomousPublicationService()
+        return self._publication
+
     @staticmethod
     def _resolve_status(report: AutomationRunReport) -> str:
-        stages = [report.discovery, report.selection, report.admission]
+        stages = [report.discovery, report.selection, report.admission, report.publication]
         attempted = [s for s in stages if s.status in (OK, STAGE_FAILED)]
         failed = [s for s in stages if s.status == STAGE_FAILED]
 
@@ -420,6 +524,7 @@ class AutonomousPipelineService:
             report.discovery.counts.get("new_candidates", 0)
             or report.selection.counts.get("selected", 0)
             or report.admission.counts.get("admitted", 0)
+            or report.publication.counts.get("queued", 0)
             or report.pending_enqueue_recovered
         )
         return COMPLETED if produced else NOOP

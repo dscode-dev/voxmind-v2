@@ -644,6 +644,19 @@ class PipelineStateMachine:
         if to_state in TERMINAL_STATES or to_state in COMPLETION_STATES or to_state == PipelineState.FAILED:
             job.finished_at = now
 
+        if to_state == PipelineState.READY_TO_PUBLISH:
+            # The FIRST time this run became publishable, recorded once and never moved.
+            #
+            # ``finished_at`` cannot answer this: a publication that fails releases the run
+            # back to READY_TO_PUBLISH and refreshes it, so a run that has been sitting
+            # around for a month would look brand new to anything comparing against a
+            # cutoff. PR-PUBLISH-02's backlog protection compares against exactly such a
+            # cutoff, and a value that resets would quietly let historical runs through.
+            metadata = dict(job.metadata_json or {})
+            if not metadata.get("first_ready_at"):
+                metadata["first_ready_at"] = now.isoformat()
+                job.metadata_json = metadata
+
 
 def _sanitize_error(message: str) -> str:
     """Keep the failure legible without turning the column into a log sink."""

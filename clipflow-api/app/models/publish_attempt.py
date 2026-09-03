@@ -56,6 +56,9 @@ class PublishAttempt(Base, UUIDPrimaryKeyMixin, TimestampMixin):
             "enqueued_at",
             postgresql_where=text("enqueued_at IS NULL"),
         ),
+        # The daily autopublish cap counts rows here; without an index it would scan every
+        # publication ever made, on every tick.
+        Index("ix_publish_attempts_initiator_created", "initiator", "created_at"),
     )
 
     pipeline_job_id: Mapped[uuid.UUID] = mapped_column(
@@ -69,6 +72,15 @@ class PublishAttempt(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         ForeignKey("publish_targets.id", ondelete="RESTRICT"),
         nullable=False,
         index=True,
+    )
+
+    # -------------------------------------------------------------- provenance
+    # Who decided this publication: "manual" or "automatic". A column rather than something
+    # to reconstruct from the audit log, because "was this video published by a person?" is a
+    # question about the publication itself, and answering it by correlating timestamps in
+    # another table is the kind of answer nobody trusts at the moment they need it.
+    initiator: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="manual", server_default="manual"
     )
 
     # ---------------------------------------------------------------- identity

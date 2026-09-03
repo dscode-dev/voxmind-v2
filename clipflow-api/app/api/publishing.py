@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -24,6 +25,7 @@ from sqlalchemy.orm import Session
 from app.core.settings import settings
 from app.db.session import get_db
 from app.models.enums import PublishAttemptStatus, PublishPlatform
+from app.models.content_topic import ContentTopic
 from app.models.pipeline_job import PipelineJob
 from app.models.publish_attempt import PublishAttempt
 from app.models.publish_target import PublishTarget
@@ -32,6 +34,7 @@ from app.publishing.contracts import ProviderNotConfiguredError
 from app.security.auth_middleware import get_current_admin
 from app.security.secret_box import secret_box
 from app.services.audit_service import AuditService
+from app.services.autopublish_service import AutonomousPublicationService
 from app.services.publish_resolution_service import (
     PublishResolutionService,
     ResolutionError,
@@ -59,6 +62,10 @@ def _resolution() -> PublishResolutionService:
     return PublishResolutionService()
 
 
+def _autopublish() -> AutonomousPublicationService:
+    return AutonomousPublicationService()
+
+
 # =============================================================================
 # Targets
 # =============================================================================
@@ -77,6 +84,10 @@ class TargetUpdateInput(BaseModel):
     default_category_id: str | None = Field(default=None, pattern=r"^\d{1,3}$")
     default_language: str | None = Field(default=None, max_length=16)
     made_for_kids: bool | None = None
+
+    # Consent for this channel to be published to without a human deciding each time.
+    # Separate from is_active, which only says the channel may be published to at all.
+    autopublish_enabled: bool | None = None
 
 
 @router.get("/admin/publish-targets")
@@ -201,6 +212,23 @@ def update_target(
         target.name = changes["name"]
     if "is_active" in changes:
         target.is_active = bool(changes["is_active"])
+
+    if "autopublish_enabled" in changes:
+        enabling = bool(changes["autopublish_enabled"])
+        if enabling and not target.is_publishable:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "target is not publishable (inactive or disconnected); it cannot be "
+                    "enabled for automatic publication"
+                ),
+            )
+        if enabling and not target.autopublish_enabled:
+            # Stamped on the transition from off to on, and never moved afterwards. This is
+            # the cutoff that stops enabling automation from publishing everything that was
+            # already waiting: only runs that become ready after this moment are automatic.
+            target.autopublish_enabled_at = datetime.now(timezone.utc)
+        target.autopublish_enabled = enabling
 
     defaults = dict(target.config_json or {})
     for field_name, config_key in (
@@ -357,6 +385,70 @@ def publish_job(
     )
     db.commit()
     return report.as_dict()
+
+
+class AutopublishRunInput(BaseModel):
+    """One manual invocation of the publication policy.
+
+    ``dry_run`` defaults to True, like the publish command and for the same reason: this
+    endpoint can put videos on a channel, so the safe operation is the one you get by
+    accident. It exists mainly to prove the policy before the scheduler is allowed to run it.
+    """
+
+    dry_run: bool = True
+    topic_id: uuid.UUID | None = None
+    limit: int | None = Field(default=None, ge=0, le=10)
+
+
+@router.post("/admin/autopublish/run")
+def autopublish_run(
+    payload: AutopublishRunInput,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    """Evaluate the autopublish policy now, and optionally act on it."""
+    topic = None
+    if payload.topic_id is not None:
+        topic = db.query(ContentTopic).filter(ContentTopic.id == payload.topic_id).first()
+        if topic is None:
+            raise HTTPException(status_code=404, detail="unknown topic")
+
+    report = _autopublish().run(
+        db,
+        topic=topic,
+        dry_run=payload.dry_run,
+        limit=payload.limit,
+        actor=str(admin.id),
+    )
+
+    if not payload.dry_run:
+        # A human choosing to let the policy act is a decision worth recording. A dry run is
+        # not: it changes nothing.
+        audit_service.log(
+            db,
+            action="admin.autopublish.run",
+            outcome=report.status,
+            actor_user=admin,
+            target_type="content_topic",
+            target_id=str(topic.id) if topic else None,
+            metadata={
+                "autopublish_run_id": report.autopublish_run_id,
+                "queued": report.queued,
+                "blocked": report.blocked,
+                "blocked_reasons": report.blocked_reasons,
+            },
+        )
+        db.commit()
+    return report.as_dict()
+
+
+@router.get("/admin/autopublish/status")
+def autopublish_status(
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    """Whether the system may publish on its own, and what is standing in the way."""
+    return _autopublish().status(db)
 
 
 @router.get("/admin/publishing/runtime")

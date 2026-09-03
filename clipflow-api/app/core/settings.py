@@ -378,6 +378,51 @@ class Settings(BaseSettings):
     )
 
     # =====================================
+    # Autonomous publication (PR-PUBLISH-02)
+    # -------------------------------------------------------------------------------
+    # A switch of its own, separate from PUBLISHING_ENABLED, and this separation is the
+    # point: a deployment that has deliberately turned on *manual* publishing must not start
+    # publishing by itself because a new image shipped. Enabling automation is a second,
+    # explicit decision.
+    #
+    # Every one of these is a ceiling, not a target. The policy is fail-closed: any gate that
+    # cannot be evaluated is a gate that did not pass.
+    # =====================================
+
+    autopublish_enabled: bool = Field(default=False, alias="AUTOPUBLISH_ENABLED")
+
+    # A third switch, because "publish automatically" and "publish automatically to the whole
+    # internet" are different risks. Automatic + private is a rollout stage that can be
+    # validated for days before anything becomes visible; collapsing the two would remove
+    # that stage entirely.
+    autopublish_public_enabled: bool = Field(
+        default=False, alias="AUTOPUBLISH_PUBLIC_ENABLED"
+    )
+
+    # What automatic publications are published as when nothing more specific is configured.
+    # `private` because the safe value is the one you get by not thinking about it.
+    autopublish_default_privacy: str = Field(
+        default="private", alias="AUTOPUBLISH_DEFAULT_PRIVACY"
+    )
+
+    # Deliberately tiny. One per tick means a mistake surfaces after one video rather than
+    # after a channel full of them, and the loop runs often enough that a real backlog still
+    # drains steadily.
+    autopublish_max_per_tick: int = Field(default=1, alias="AUTOPUBLISH_MAX_PER_TICK")
+    autopublish_max_per_day: int = Field(default=3, alias="AUTOPUBLISH_MAX_PER_DAY")
+
+    # Operational backpressure, not domain policy: if publications are already piling up
+    # unexecuted, creating more only makes the pile bigger.
+    autopublish_max_queue_backlog: int = Field(
+        default=20, alias="AUTOPUBLISH_MAX_QUEUE_BACKLOG"
+    )
+    # Not zero-tolerance: one ancient dead-lettered command must not be able to stop
+    # publishing forever. It takes a real pile to pause automation.
+    autopublish_max_dead_letter: int = Field(
+        default=10, alias="AUTOPUBLISH_MAX_DEAD_LETTER"
+    )
+
+    # =====================================
     # Validation
     # =====================================
 
@@ -405,6 +450,16 @@ class Settings(BaseSettings):
                 f"or set ENVIRONMENT to one of: {sorted(DEVELOPMENT_ENVIRONMENTS)}."
             )
         return self
+
+
+# Server-side ceilings for the autopublish caps. Configuration is an operator's intent, not
+# a licence: AUTOPUBLISH_MAX_PER_DAY=100000 is a typo, and the clamp is what makes it a small
+# number instead of a channel full of videos.
+AUTOPUBLISH_CEILING_PER_TICK = 10
+AUTOPUBLISH_CEILING_PER_DAY = 50
+AUTOPUBLISH_CEILING_QUEUE_BACKLOG = 500
+
+VALID_AUTOPUBLISH_PRIVACY = ("private", "unlisted", "public")
 
 
 settings = Settings()

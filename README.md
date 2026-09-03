@@ -807,6 +807,148 @@ Every route is admin-only on the existing RBAC. The OAuth callback is the one ex
 cannot be otherwise — the browser arriving from Google carries Google's session, not ours;
 its authorisation is the single-use `state`.
 
+## Autonomous publication
+
+The loop can now close without a person in it — but only when every gate says so. Autopublish
+does not mean "a run in `READY_TO_PUBLISH` should be published". It means "a run may be
+published without a human *only* when all of these hold, and each one can actually be
+checked". A gate that cannot be evaluated has not passed.
+
+```
+READY_TO_PUBLISH
+      |
+AutonomousPublicationService     policy only: it uploads nothing and knows no provider
+      |
+the SAME publish command an admin issues    (initiator = automatic)
+      |
+publish queue  ->  clipflow-publisher  ->  YouTube  ->  PUBLISHED
+```
+
+It is not a second publisher. Reusing the manual path is the point: the QA gate, the
+idempotency key, the atomic claim and the UNKNOWN rule are what make publishing safe, and a
+parallel implementation would be a parallel set of ways to get them wrong. The scheduler calls
+one application service; it holds no credential and imports no adapter.
+
+### Every gate
+
+| Gate | If it fails |
+|---|---|
+| `PUBLISHING_ENABLED` | nothing publishes, manual or automatic |
+| `AUTOPUBLISH_ENABLED` | manual publishing still works; automatic stops |
+| topic `automation.enabled` | that topic runs nothing |
+| topic `automation.autopublish_enabled` | that topic never publishes itself |
+| topic `automation.publish_target_id` | `publish_target_not_configured` — no implicit channel |
+| target `is_active` / connected | `target_inactive` / `target_disconnected` |
+| target `autopublish_enabled` | `target_autopublish_disabled` |
+| state is `READY_TO_PUBLISH` | `REVIEW_REQUIRED`, `FAILED`, `CANCELED` are never candidates |
+| `publication_eligibility.eligible` | `publication_ineligible`; **missing** → `publication_eligibility_missing` |
+| no unresolved attempt | `unresolved_attempt` — never publish over an UNKNOWN |
+| no `FAILED_FINAL` / `CANCELED` attempt | `previous_final_failure` / `operator_canceled` |
+| ready after the cutoff | `historical_before_autopublish_cutoff` |
+| privacy allowed | `public_autopublish_disabled` |
+| daily and per-tick caps | `daily_limit_reached` / `per_run_limit_reached` |
+| a publisher is alive | `publisher_unavailable` |
+| queue not saturated | `publish_queue_backpressure` / `publish_dead_letter_backpressure` |
+
+No decision here consults an LLM. Every gate is a comparison against persisted state.
+
+**A pause is not a refusal.** Reasons split in two, and the distinction is reported per
+candidate as `manual_publish_still_allowed`. `daily_limit_reached` or
+`historical_before_autopublish_cutoff` mean the system is declining to act on its own — a
+human may still publish. `publication_ineligible` or `unresolved_attempt` mean the output is
+not fit to publish, and publishing it by hand would be overriding a safety gate.
+
+### Three switches, not one
+
+```
+PUBLISHING_ENABLED=false                                    nothing publishes
+PUBLISHING_ENABLED=true  AUTOPUBLISH_ENABLED=false          manual only
+PUBLISHING_ENABLED=true  AUTOPUBLISH_ENABLED=true           automatic, private
+                         AUTOPUBLISH_PUBLIC_ENABLED=true    automatic, public
+```
+
+All three default to **false**. Separating them is what makes a careful rollout possible:
+"publish automatically" and "publish automatically to the whole internet" are different risks,
+and collapsing them would remove the stage where automation runs for days without anything
+becoming visible.
+
+Privacy comes from the target's `default_privacy`, else `AUTOPUBLISH_DEFAULT_PRIVACY`
+(`private`). It is never inferred from content and never read from `publish_package.json` — a
+distribution decision is not editorial metadata, and letting the render pipeline choose it
+would put "who can see this" downstream of an LLM. The public guard is checked on the
+*resolved* value, so a target default of `public` cannot route around it.
+
+### Which channel
+
+`ContentTopic.metadata_json.automation.publish_target_id`, explicitly. Never "the first active
+YouTube target": that rule silently changes meaning the day a second channel is connected, and
+the failure is a video on the wrong audience, which cannot be taken back.
+
+### The backlog that is not published
+
+Enabling autopublish on a channel with fifty finished runs waiting must not publish fifty
+videos. Switching it on stamps `autopublish_enabled_at`, and only runs that became publishable
+after that moment are automatic. The older ones stay publishable by hand.
+
+The comparison uses `first_ready_at`, recorded once by the state machine — `finished_at` is
+refreshed when a failed publication releases a run back to `READY_TO_PUBLISH`, so a month-old
+run would otherwise look brand new.
+
+### Caps
+
+| Cap | Default | Ceiling |
+|---|---:|---:|
+| `AUTOPUBLISH_MAX_PER_TICK` | 1 | 10 |
+| `AUTOPUBLISH_MAX_PER_DAY` | 3 | 50 |
+| topic `automation.autopublish_limit` | 1 | 5 |
+
+Clamped server-side, because configuration is an operator's intent and not a licence: a
+mistyped `100000` becomes a small number rather than a channel full of videos. The daily cap
+counts **logical publications** — one attempt row per job/target/media — so a retry, a queue
+redelivery or a provider call does not spend it again, and a run producing three clips counts
+as three. Manual publications do not consume the automatic cap.
+
+Candidates are ordered by `first_ready_at` ascending: deterministic, from persisted state, and
+the run that has waited longest goes first.
+
+### Backpressure
+
+Automation checks the publisher fleet's heartbeat before creating anything. With no publisher
+alive it queues nothing — otherwise a dead fleet accumulates a day of uploads that all arrive
+at once when one starts. It also pauses when the queue is saturated or the dead letter has a
+real pile in it (not on a single old entry, which must not be able to stop publishing forever).
+
+Manual publishing is deliberately unaffected by these: a human watching a request is a
+different situation from a loop firing unattended.
+
+### Provenance
+
+```json
+{"initiator": "automatic",
+ "provenance": {"policy_version": "autopublish-v1",
+                "autopublish_run_id": "...", "automation_run_id": "...", "topic_id": "..."}}
+```
+
+On the attempt row, not reconstructed from the audit log later: "was this video published by a
+person?" is a question about the publication itself.
+
+```bash
+curl -X POST localhost:8010/admin/autopublish/run -d '{}'                 # dry run, the default
+curl -X POST localhost:8010/admin/autopublish/run -d '{"dry_run": false}'
+curl localhost:8010/admin/autopublish/status
+curl -X PUT localhost:8010/admin/publish-targets/{id} -d '{"autopublish_enabled": true}'
+```
+
+### Rollout
+
+1. `PUBLISHING_ENABLED=true`, `AUTOPUBLISH_ENABLED=false` — publish by hand, confirm the
+   channel and the metadata are right.
+2. Enable the target and the topic, then `AUTOPUBLISH_ENABLED=true` with
+   `AUTOPUBLISH_PUBLIC_ENABLED=false`. The system publishes privately, unattended. Watch
+   `/admin/autopublish/status` and the private uploads for as long as it takes to trust them.
+3. Only then `AUTOPUBLISH_PUBLIC_ENABLED=true`, and set `default_privacy` on the specific
+   targets that should go public.
+
 ## Job state
 
 A run's state is the result of a validated transition, never an inference from which objects

@@ -78,6 +78,23 @@ class PublishTarget(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     # a message body.
     last_error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
+    # ------------------------------------------------------------- autopublish
+    # A third switch, and not a duplicate of ``is_active``. Active means "this target may be
+    # published to"; this means "this target may be published to *without a human deciding
+    # each time*". A channel can reasonably allow the first and not the second - that is the
+    # whole shape of a careful rollout - so collapsing them would remove the safe middle.
+    autopublish_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+
+    # When automation was switched on for this target. The cutoff that stops a backlog
+    # surprise: enabling autopublish on a channel with fifty finished runs waiting must not
+    # publish fifty videos. Only runs that became ready *after* this moment are automatic;
+    # the older ones stay publishable by hand, which is where that decision belongs.
+    autopublish_enabled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     # ---------------------------------------------------------------- defaults
     # Publishing defaults for this target. Non-secret by construction: everything secret has
     # its own column above, so this may be returned by the API in full.
@@ -93,3 +110,8 @@ class PublishTarget(Base, UUIDPrimaryKeyMixin, TimestampMixin):
             and self.connection_status == PublishTargetConnectionStatus.CONNECTED
             and bool(self.refresh_token_encrypted)
         )
+
+    @property
+    def is_autopublishable(self) -> bool:
+        """Everything ``is_publishable`` requires, plus consent to act without a human."""
+        return self.is_publishable and self.autopublish_enabled

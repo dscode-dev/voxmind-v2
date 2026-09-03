@@ -198,8 +198,16 @@ class PublishingService:
         overrides: dict[str, Any] | None = None,
         media_selection: list[int] | None = None,
         actor: str | None = None,
+        initiator: str = "manual",
+        provenance: dict[str, Any] | None = None,
     ) -> PublishReport:
-        """Validate, then (unless this is a dry run) upload each selected media item."""
+        """Accept a publication, or validate that one could be accepted.
+
+        ``initiator`` and ``provenance`` are the ONLY difference between an admin publishing
+        and automation publishing. Everything else - preflight, eligibility, idempotency, the
+        atomic claim, the UNKNOWN rule - is identical, deliberately: a second code path for
+        automatic publication would be a second set of ways to get those wrong.
+        """
         started = time.monotonic()
         report = PublishReport(
             pipeline_job_id=str(job.id),
@@ -244,6 +252,7 @@ class PublishingService:
                 self._publish_item(
                     db, job=job, target=target, item=item, package=package,
                     overrides=overrides, dry_run=dry_run, actor=actor,
+                    initiator=initiator, provenance=provenance,
                 )
             )
 
@@ -446,6 +455,8 @@ class PublishingService:
         overrides: dict[str, Any] | None,
         dry_run: bool,
         actor: str | None,
+        initiator: str = "manual",
+        provenance: dict[str, Any] | None = None,
     ) -> ItemOutcome:
         key = idempotency_key(job.id, target.id, item.identity)
 
@@ -495,7 +506,8 @@ class PublishingService:
             )
 
         attempt = existing or self._create_attempt(
-            db, job=job, target=target, item=item, key=key, size=size, resolved=resolved
+            db, job=job, target=target, item=item, key=key, size=size, resolved=resolved,
+            initiator=initiator, provenance=provenance,
         )
 
         # Re-checked here and not only above: _create_attempt can return a row this request
@@ -738,6 +750,8 @@ class PublishingService:
         key: str,
         size: int,
         resolved: ResolvedMetadata,
+        initiator: str = "manual",
+        provenance: dict[str, Any] | None = None,
     ) -> PublishAttempt:
         """Commit the attempt before anything is sent.
 
@@ -755,9 +769,15 @@ class PublishingService:
             status=PublishAttemptStatus.PENDING,
             attempt_no=0,
             max_attempts=DEFAULT_MAX_ATTEMPTS,
+            # Recorded on the row, not reconstructed from an audit log later: "was this
+            # video published by a person?" is a question about the publication itself.
+            initiator=initiator,
             payload_json={
                 "metadata": resolved.as_snapshot(),
                 "video_index": item.video_index,
+                # Which policy decided, and under which run. Empty for a manual publication,
+                # because there was no policy - a person decided.
+                "provenance": provenance or {},
                 # So a later reader knows which contract produced this snapshot without
                 # having to date it against the git history.
                 "publish_contract_version": "publish-01",

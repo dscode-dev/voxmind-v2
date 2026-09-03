@@ -1114,22 +1114,78 @@ def test_queued_commands_survive_a_publisher_restart(db, queue, no_event_fanout)
     assert db.query(PublishAttempt).count() == 1
 
 
-def test_no_autopublish_was_introduced():
-    """The scheduler still stops at READY_TO_PUBLISH."""
+def _module_dependencies(module):
+    """Imported module names and referenced identifiers, code only."""
     import ast
     import inspect
 
+    tree = ast.parse(inspect.getsource(module))
+    modules: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            modules.add(node.module)
+        elif isinstance(node, ast.Import):
+            modules.update(alias.name for alias in node.names)
+
+    referenced = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)} | {
+        n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)
+    }
+    return modules, referenced
+
+
+# The scheduler may depend on the publication POLICY. It may not depend on anything that can
+# talk to a provider. PR-PUBLISH-02 moved this line deliberately: before it, the scheduler
+# knew nothing about publishing at all; now it calls one application service that decides and
+# at most queues a command.
+FORBIDDEN_IN_SCHEDULER = {
+    "YouTubePublisher",
+    "YouTubeOAuthClient",
+    "PublishQueue",
+    "PublishingService",
+    "PublishResolutionService",
+    "PublishTargetService",
+    "MinioMediaSource",
+}
+FORBIDDEN_MODULES_IN_SCHEDULER = (
+    "app.publishing",
+    "app.services.publishing_service",
+    "app.services.publish_runtime",
+    "app.services.publish_recovery_service",
+    "app.services.publish_target_service",
+)
+
+
+def test_the_scheduler_depends_on_the_policy_and_never_on_a_publisher():
+    """§5/§78: the scheduler calls AutonomousPublicationService, not a provider adapter."""
     from app.services import automation_scheduler, automation_service
 
     for module in (automation_service, automation_scheduler):
-        tree = ast.parse(inspect.getsource(module))
-        modules = set()
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom) and node.module:
-                modules.add(node.module)
-            elif isinstance(node, ast.Import):
-                modules.update(alias.name for alias in node.names)
-        assert not any("publish" in name for name in modules), module.__name__
+        modules, referenced = _module_dependencies(module)
+
+        offending = {
+            name for name in modules
+            if any(name.startswith(prefix) for prefix in FORBIDDEN_MODULES_IN_SCHEDULER)
+        }
+        assert offending == set(), (
+            f"{module.__name__} imports a publishing implementation: {sorted(offending)}"
+        )
+        assert referenced & FORBIDDEN_IN_SCHEDULER == set(), (
+            f"{module.__name__} references {sorted(referenced & FORBIDDEN_IN_SCHEDULER)}"
+        )
+
+
+def test_the_policy_service_never_talks_to_a_provider():
+    """The policy decides and delegates. It does not upload, and it holds no credential."""
+    from app.services import autopublish_service
+
+    modules, referenced = _module_dependencies(autopublish_service)
+
+    assert not any(name.startswith("app.publishing.youtube") for name in modules), (
+        "the policy must not import a provider adapter"
+    )
+    for forbidden in ("YouTubePublisher", "YouTubeOAuthClient", "PublishCredential",
+                      "secret_box", "SecretBox"):
+        assert forbidden not in referenced, f"the policy must not reference {forbidden}"
 
 
 def test_the_publisher_runtime_never_looks_at_pipeline_jobs_to_start_work():
