@@ -38,6 +38,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 
 @compiles(UUID, "sqlite")
@@ -56,7 +57,15 @@ def db():
     from app.db.base import Base
     import app.models  # noqa: F401  — registers every mapper
 
-    engine = create_engine("sqlite://", future=True)
+    # StaticPool + check_same_thread=False: an in-memory database lives in its connection,
+    # and FastAPI's TestClient runs endpoints on a worker thread. Without both, the schema
+    # created here is invisible to the request and SQLite refuses the cross-thread handle.
+    engine = create_engine(
+        "sqlite://",
+        future=True,
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
     Base.metadata.create_all(engine)
     session = sessionmaker(bind=engine, future=True, expire_on_commit=False)()
     try:

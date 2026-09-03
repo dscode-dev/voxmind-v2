@@ -271,6 +271,73 @@ Run the seam evaluation:
 python -m evaluation --asr
 ```
 
+## Content discovery
+
+ClipFlow can find candidate videos instead of waiting for someone to paste a URL. Discovery
+answers *"what content exists?"* — **not** *"what should we produce?"*. That second question
+is selection, and it does not exist yet.
+
+```
+ContentTopic ─ queries, language, freshness
+     └─> DiscoverySource ─ kind + config
+              └─> Provider ──> DiscoveredVideo[]
+                                    └─> dedup ──> VideoCandidate (DISCOVERED)
+```
+
+A discovery run **never** creates a PipelineJob and never writes a score. Candidates come to
+rest in `DISCOVERED`; promoting one is a deliberate human action
+(`POST /admin/video-candidates/{id}/select`), which exists so the boundary can be exercised
+end to end and goes through the same service a future selector will use.
+
+**Providers.** Two, so the interface is proven rather than assumed — with a single
+implementation an abstraction is just that implementation with extra steps.
+
+| Provider | Needs a credential | Notes |
+|---|---|---|
+| YouTube Data API v3 search | `YOUTUBE_API_KEY` | `search.list` → ids, then one batched `videos.list` for metadata |
+| RSS / Atom | no | Covers YouTube channel feeds, which cost no quota |
+
+Nothing is scraped: no HTML parsing, no headless browser, no quota circumvention. With no
+key the YouTube provider reports itself **unavailable** and the API still boots — a missing
+credential is never substituted with fake data.
+
+**Quota.** A YouTube search costs 100 units of a 10,000/day allowance, so roughly 100
+searches a day exist in total. Metadata for 50 videos costs 1 unit in a single batched call,
+not 50. Repeated queries are deduplicated before they are sent, and a spent allowance is
+classified non-retryable — it resets on a clock, not on a backoff, so retrying only spends
+tomorrow's.
+
+**Identity and dedup.** YouTube serves the same video under at least five URL shapes:
+
+```
+youtube.com/watch?v=ABC   youtu.be/ABC   youtube.com/shorts/ABC   .../embed/ABC   m.youtube.com/...
+```
+
+Five strings, one video. Identity is therefore `provider:external_id`, hashed into
+`dedup_hash` under a **unique** partial index — two runs finding the same video at the same
+moment are collapsed by the database, not by a read-then-write that races. Titles are never
+part of identity: they collide both ways, since two channels title the same match alike and
+one channel re-uploads under a new name.
+
+**Idempotency.** Running the same discovery twice updates rather than duplicates.
+`created_at` is never rewritten — a video rediscovered on its fifth day is not new — while
+`last_seen_at` moves each time. A rediscovery never resets a status: a rejected candidate
+stays rejected.
+
+**Unknown is not zero.** A field a source does not publish is stored as `NULL`. An unknown
+view count and a view count of zero are different facts.
+
+Run it:
+
+```bash
+curl -X POST localhost:8010/admin/discovery/run      -H "Authorization: Bearer $ADMIN_JWT"      -d '{"topic_id": "..."}'
+
+curl "localhost:8010/admin/video-candidates?status=discovered&limit=50"
+```
+
+Candidates are listed newest first (`published_at DESC`, `created_at` as tiebreaker) and
+paginated. That is recency, not ranking — there is no scoring in this phase.
+
 ## Job state
 
 A run's state is the result of a validated transition, never an inference from which objects

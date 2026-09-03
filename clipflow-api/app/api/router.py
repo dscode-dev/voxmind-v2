@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from app.api import auth
 from app.api import admin
+from app.api import discovery
 from app.api import internal_worker
 from app.api import job_events
 from app.api import jobs
@@ -29,6 +30,13 @@ api_router.include_router(auth.router)
 # ==========================================
 
 api_router.include_router(admin.router)
+
+
+# ==========================================
+# Discovery (topics, sources, candidates)
+# ==========================================
+
+api_router.include_router(discovery.router)
 
 
 # ==========================================

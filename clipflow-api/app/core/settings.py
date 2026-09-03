@@ -214,6 +214,24 @@ class Settings(BaseSettings):
     )
 
     # =====================================
+    # Discovery (PR-DISCOVERY-01)
+    # -------------------------------------------------------------------------------
+    # Optional. With no key the YouTube provider reports itself unavailable and the API
+    # still boots — an optional integration must not be able to stop the stack, and a
+    # missing credential must never be replaced by fabricated results.
+    # =====================================
+
+    youtube_api_key: str | None = Field(default=None, alias="YOUTUBE_API_KEY")
+    discovery_http_timeout_sec: float = Field(
+        default=15.0, alias="DISCOVERY_HTTP_TIMEOUT_SEC"
+    )
+    # Per query. YouTube's own ceiling is 50; a search costs 100 quota units of a 10,000
+    # daily allowance, so this is the main lever on how much of it one run spends.
+    discovery_max_results: int = Field(default=25, alias="DISCOVERY_MAX_RESULTS")
+    # How far back a run looks when the topic does not say.
+    discovery_freshness_days: int = Field(default=7, alias="DISCOVERY_FRESHNESS_DAYS")
+
+    # =====================================
     # Validation
     # =====================================
 
