@@ -416,6 +416,73 @@ python -m evaluation.selection --ranking          # offline, against fixtures
 curl -X POST localhost:8010/admin/selection/run      -H "Authorization: Bearer $ADMIN_JWT"      -d '{"topic_id": "...", "dry_run": true}'     # dry run is the default
 ```
 
+## Production admission
+
+Selection decided *what* is worth producing. Admission decides *whether we can start it now*
+— a different question with different inputs, and the last gate before the system spends GPU
+time on its own.
+
+```
+VideoCandidate SELECTED
+        ↓  status · availability · capacity · idempotency
+        ↓  PipelineJob QUEUED        ← committed, carrying a frozen snapshot
+        ↓  enqueue                   ← the payload reaches Redis
+VideoCandidate CONSUMED              ← only after the handoff is real
+```
+
+**Ordering is the design.** The row commits *before* the enqueue and the candidate is marked
+CONSUMED *after* it, so every crash point leaves something recoverable:
+
+| Crash point | State left behind | Recovery |
+|---|---|---|
+| before commit | nothing happened | candidate still SELECTED |
+| between commit and enqueue | run with `enqueued_at IS NULL` | `POST /admin/admission/retry-pending` |
+| after enqueue, before status update | run live, candidate SELECTED | re-admitting returns `already_admitted` and repairs the status |
+
+Enqueueing first would have no recoverable middle: a message would be in flight for a run
+that does not exist. This is not exactly-once — it is at-least-once with a database-enforced
+identity that makes the duplicate harmless.
+
+**Idempotency.** Every admission carries `admit:<candidate_id>:v1` — deterministic, never
+time-based, under a unique partial index. A retried request, two operators clicking at once
+or two overlapping scheduled runs all resolve to one run, because the constraint settles it
+rather than a `SELECT` that races. Bumping the profile suffix is how a *deliberate*
+re-production of the same source is requested.
+
+**Capacity** is a separate budget from the selection caps: selection limits what is chosen,
+admission limits what is started. Active runs are counted from the state machine's own happy
+path minus its resting states, so a state added there cannot silently stop counting.
+
+| Limit | Default | Ceiling |
+|---|---:|---:|
+| `max_active_jobs` | 3 | 20 |
+| `max_admissions_per_run` | 3 | 10 |
+| `max_admissions_per_day` | 12 | — |
+
+Configured per topic (`ContentTopic.metadata_json["admission"]`) and clamped server-side, so
+a mistyped `10000` cannot become a runaway. Committed runs take a PostgreSQL advisory lock on
+the topic, so two concurrent runs cannot both see the same free slot.
+
+**Blocked is not rejected.** Capacity, the daily cap and the run limit are temporary — the
+candidate stays SELECTED and is admissible later. Only a candidate that is unavailable or has
+no URL is permanently blocked, and even then admission never changes its status: that is
+selection's decision to make.
+
+**Inputs are frozen at admission.** Clip mode, ratio, and the source URL are snapshotted onto
+the run, so editing the topic an hour later cannot reshape a job already in flight. The run
+also records its provenance — which candidate, which selection run, which score and score
+version — and the candidate records where it went.
+
+**Admission ends at the queue.** Nothing here publishes; a run reaching `READY_TO_PUBLISH`
+still goes nowhere.
+
+```bash
+curl -X POST localhost:8010/admin/admission/run      -H "Authorization: Bearer $ADMIN_JWT"      -d '{"topic_id": "...", "dry_run": true}'      # dry run is the default
+
+curl -X POST localhost:8010/admin/video-candidates/{id}/admit
+curl -X POST localhost:8010/admin/admission/retry-pending
+```
+
 ## Job state
 
 A run's state is the result of a validated transition, never an inference from which objects

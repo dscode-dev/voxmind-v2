@@ -31,16 +31,18 @@ from app.services.audit_service import AuditService
 from app.services.discovery_service import build_default_service
 from app.selection.engine import SelectionEngine
 from app.selection.semantic import build_evaluator
+from app.services.admission_service import (
+    HARD_MAX_ADMISSIONS_PER_RUN,
+    ProductionAdmissionService,
+)
 from app.services.selection_service import (
     HARD_MAX_SELECTED_PER_RUN,
     METHOD_MANUAL,
     SelectionService,
 )
-from app.services.pipeline_job_service import PipelineJobService
 
 router = APIRouter()
 audit_service = AuditService()
-pipeline_job_service = PipelineJobService()
 
 MAX_PAGE_SIZE = 100
 
@@ -65,6 +67,21 @@ def _selection_service() -> SelectionService:
         timeout_sec=settings.selection_timeout_sec,
     )
     return SelectionService(engine=SelectionEngine(evaluator=evaluator))
+
+
+def _admission_service() -> ProductionAdmissionService:
+    """One service for every admission caller — the run endpoint, the direct endpoint and any
+    future scheduler. A second implementation would be a second place for the capacity check
+    and the idempotency key to drift apart."""
+    return ProductionAdmissionService()
+
+
+class AdmissionRunInput(BaseModel):
+    # Optional: omitting it admits across every topic, which is what a global scheduler wants.
+    topic_id: uuid.UUID | None = None
+    limit: int | None = Field(default=None, ge=1, le=HARD_MAX_ADMISSIONS_PER_RUN)
+    # Committing starts real production and spends GPU time, so it has to be asked for.
+    dry_run: bool = True
 
 
 class SelectionRunInput(BaseModel):
@@ -139,6 +156,10 @@ def serialize_candidate(candidate: VideoCandidate, *, detail: bool = False) -> d
         payload["seen_via"] = metadata.get("seen_via")
         payload["raw_metadata"] = metadata.get("raw")
         payload["selected_at"] = candidate.selected_at
+        payload["selection_method"] = (metadata.get("selection") or {}).get("method")
+        payload["selection_score"] = (candidate.scores_json or {}).get("final_score")
+        # Where this candidate ended up, once it was admitted. Added, not replacing anything.
+        payload["production"] = metadata.get("production")
     return payload
 
 
@@ -356,6 +377,115 @@ def run_selection(
     return report.as_dict(verbose=payload.verbose)
 
 
+# ---------------------------------------------------------------- admission
+
+
+@router.post("/admin/admission/run")
+def run_admission(
+    payload: AdmissionRunInput,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    """Admit selected candidates into production.
+
+    Selection decided *what* is worth producing; this decides *whether we can start now* —
+    capacity, the day's budget, and whether the run already exists. Defaults to a dry run:
+    committing creates PipelineJobs and puts real work on the queue.
+    """
+    topic = None
+    if payload.topic_id:
+        topic = db.query(ContentTopic).filter(ContentTopic.id == payload.topic_id).first()
+        if topic is None:
+            raise HTTPException(status_code=404, detail="unknown topic")
+
+    report = _admission_service().run(
+        db,
+        topic=topic,
+        limit=payload.limit,
+        dry_run=payload.dry_run,
+        actor=str(admin.id),
+    )
+
+    audit_service.log(
+        db,
+        action="admin.admission.run",
+        outcome="success",
+        actor_user=admin,
+        target_type="content_topic",
+        target_id=str(topic.id) if topic else None,
+        metadata={
+            "admission_run_id": report.run_id,
+            "dry_run": payload.dry_run,
+            "admitted": report.as_dict()["counts"]["admitted"],
+            "active_jobs": report.active_jobs,
+        },
+    )
+    db.commit()
+    return report.as_dict()
+
+
+@router.post("/admin/video-candidates/{candidate_id}/admit")
+def admit_candidate(
+    candidate_id: uuid.UUID,
+    dry_run: bool = False,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    """Admit one named candidate.
+
+    Calls the same service as the run endpoint, with the same idempotency key and the same
+    capacity check — an operator shortcut, not a second code path around the limits.
+    """
+    candidate = db.query(VideoCandidate).filter(VideoCandidate.id == candidate_id).first()
+    if candidate is None:
+        raise HTTPException(status_code=404, detail="unknown candidate")
+
+    decision = _admission_service().admit_candidate(
+        db, candidate=candidate, dry_run=dry_run, actor=str(admin.id)
+    )
+
+    audit_service.log(
+        db,
+        action="admin.admission.candidate",
+        outcome="success" if decision.outcome in ("admitted", "already_admitted") else "failed",
+        actor_user=admin,
+        target_type="video_candidate",
+        target_id=str(candidate.id),
+        metadata=decision.as_dict(),
+    )
+    db.commit()
+    db.refresh(candidate)
+    return {**decision.as_dict(), "candidate": serialize_candidate(candidate, detail=True)}
+
+
+@router.post("/admin/admission/retry-pending")
+def retry_pending_enqueue(
+    limit: int = Query(default=10, ge=1, le=HARD_MAX_ADMISSIONS_PER_RUN),
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    """Re-dispatch admissions that persisted but never reached the queue.
+
+    The recovery for a Redis outage during admission: the runs exist, their payloads do not,
+    and this republishes them. Idempotent — the admission key prevents a duplicate run — and
+    bounded, because an unattended retry loop against a broken queue is a republish storm.
+    """
+    decisions = _admission_service().retry_pending_enqueue(db, limit=limit)
+    audit_service.log(
+        db,
+        action="admin.admission.retry_pending",
+        outcome="success",
+        actor_user=admin,
+        target_type="pipeline_job",
+        metadata={"recovered": sum(1 for d in decisions if d.outcome == "admitted")},
+    )
+    db.commit()
+    return {
+        "recovered": [d.as_dict() for d in decisions if d.outcome == "admitted"],
+        "still_failing": [d.as_dict() for d in decisions if d.outcome != "admitted"],
+    }
+
+
 # ---------------------------------------------------------------- candidates
 
 
@@ -448,57 +578,37 @@ def select_candidate(
     db: Session = Depends(get_db),
     admin: User = Depends(get_current_admin),
 ):
-    """Promote a candidate into a real run. **Explicitly a human action.**
+    """Mark a candidate SELECTED by hand. **Selection only.**
 
-    This is not a selection engine and does not pretend to be one: it applies no policy, no
-    scoring and no ranking. It exists so the discovery-to-production boundary can be
-    exercised end to end before an automatic selector exists, and it creates the PipelineJob
-    through the same service that selector will use — so there stays exactly one way a run
-    begins.
+    Until PR-ADMISSION-01 this route also created a PipelineJob — and never enqueued it, so
+    every manual selection left a run that no worker would ever claim. Selection and admission
+    are separate decisions, and mixing them produced exactly the orphaned job the admission
+    service now exists to prevent. Starting production is
+    ``POST /admin/video-candidates/{id}/admit``.
 
-    Discovery itself never calls this.
+    A human may bypass the selection *policy* — caps, cooldown, score thresholds — but not the
+    eligibility invariants, which is why the checks below stay in front of it.
     """
     candidate = db.query(VideoCandidate).filter(VideoCandidate.id == candidate_id).first()
     if candidate is None:
         raise HTTPException(status_code=404, detail="unknown candidate")
     if candidate.status == VideoCandidateStatus.SELECTED:
         raise HTTPException(status_code=409, detail="candidate already selected")
+    if candidate.status == VideoCandidateStatus.CONSUMED:
+        raise HTTPException(status_code=409, detail="candidate already admitted to production")
     if candidate.status == VideoCandidateStatus.REJECTED:
         raise HTTPException(status_code=409, detail="candidate was rejected")
 
-    topic = db.query(ContentTopic).filter(ContentTopic.id == candidate.topic_id).first()
-    worker_job_id = str(uuid.uuid4())
-
-    run = pipeline_job_service.create_for_enqueue(
-        db,
-        worker_job_id=worker_job_id,
-        source_url=candidate.url,
-        pipeline_stage="prepare",
-        clip_mode=(topic.default_clip_mode if topic else "short_serie"),
-        video_ratio=(topic.default_video_ratio if topic else "portrait"),
-        origin="manual_selection",
-        metadata={
-            "video_candidate_id": str(candidate.id),
-            "topic_id": str(candidate.topic_id),
-            "selected_by": str(admin.id),
-        },
-        commit=False,
-    )
-    run.topic_id = candidate.topic_id
-    run.candidate_id = candidate.id
-
+    now = datetime.now(timezone.utc)
     candidate.status = VideoCandidateStatus.SELECTED
-    candidate.selected_at = run.queued_at
-    # Recorded so an audit can tell a human decision from an engine one. Manual selection is
-    # a bypass of the *policy* (caps, cooldown, score thresholds) — not of the eligibility
-    # invariants above, which is why the unavailable/rejected checks stay in front of it.
-    manual_metadata = dict(candidate.metadata_json or {})
-    manual_metadata["selection"] = {
+    candidate.selected_at = now
+    metadata = dict(candidate.metadata_json or {})
+    metadata["selection"] = {
         "method": METHOD_MANUAL,
         "selected_by": str(admin.id),
-        "selected_at": (run.queued_at or datetime.now(timezone.utc)).isoformat(),
+        "selected_at": now.isoformat(),
     }
-    candidate.metadata_json = manual_metadata
+    candidate.metadata_json = metadata
 
     audit_service.log(
         db,
@@ -507,19 +617,15 @@ def select_candidate(
         actor_user=admin,
         target_type="video_candidate",
         target_id=str(candidate.id),
-        metadata={"pipeline_job_id": str(run.id), "worker_job_id": worker_job_id},
+        metadata={"method": METHOD_MANUAL},
     )
     db.commit()
     db.refresh(candidate)
 
-    # The run is created and QUEUED in the state machine, but NOT pushed to Redis here: this
-    # endpoint proves the boundary, it is not the production entry point.
     return {
         "candidate": serialize_candidate(candidate, detail=True),
-        "pipeline_job_id": str(run.id),
-        "worker_job_id": worker_job_id,
-        "enqueued": False,
-        "note": "run created in QUEUED; dispatch is the selector's job, not discovery's",
+        "admitted": False,
+        "note": "selected only; admission is POST /admin/video-candidates/{id}/admit",
     }
 
 

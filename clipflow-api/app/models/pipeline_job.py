@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import DateTime, Enum, ForeignKey, Index, Integer, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -20,6 +20,21 @@ class PipelineJob(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __table_args__ = (
         Index("ix_pipeline_jobs_state", "state"),
         Index("ix_pipeline_jobs_topic_state", "topic_id", "state"),
+        # UNIQUE, enforced by the database rather than by a read-then-write in the service:
+        # a retried admission request would otherwise pass its own existence check and insert
+        # a second run. Partial, because runs that did not come from a candidate have no key
+        # and must not collide with each other on NULL.
+        Index(
+            "uq_pipeline_jobs_admission_key",
+            "admission_key",
+            unique=True,
+            postgresql_where=text("admission_key IS NOT NULL"),
+        ),
+        Index(
+            "ix_pipeline_jobs_pending_enqueue",
+            "enqueued_at",
+            postgresql_where=text("enqueued_at IS NULL"),
+        ),
     )
 
     topic_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -55,7 +70,15 @@ class PipelineJob(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     max_retries: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
     cooldown_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # Deterministic identity of the admission that created this run: "admit:<candidate>:<v>".
+    # NULL for runs started by the API, Telegram or the scheduler — those have no candidate.
+    admission_key: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
     queued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # When the payload actually reached Redis. Distinct from queued_at, which is when the run
+    # entered QUEUED in the database: a row with the second and not the first is an admission
+    # that persisted but never dispatched, and only that difference makes it findable.
+    enqueued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

@@ -189,6 +189,12 @@ class PipelineJobService:
             "error_message": job.error_message,
             "publication_eligibility": metadata.get("publication_eligibility"),
             "origin": metadata.get("origin"),
+            # Where this run came from. Present only for admission-created runs; a job
+            # started from the API or Telegram has no candidate behind it.
+            "admission_key": job.admission_key,
+            "enqueued_at": job.enqueued_at.isoformat() if job.enqueued_at else None,
+            "video_candidate_id": str(job.candidate_id) if job.candidate_id else None,
+            "provenance": metadata.get("provenance"),
         }
 
 

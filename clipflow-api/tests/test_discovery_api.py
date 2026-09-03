@@ -352,8 +352,14 @@ def test_discovery_alone_creates_no_pipeline_job(client, db, populated):
     assert db.query(PipelineJob).count() == 0
 
 
-def test_a_human_can_promote_a_candidate(client, db, populated):
-    from app.models.enums import PipelineState
+def test_a_human_can_select_a_candidate(client, db, populated):
+    """PR-ADMISSION-01 split this route.
+
+    It used to mark the candidate SELECTED *and* create a PipelineJob — which it then never
+    enqueued, so every manual selection left a run no worker would ever claim. Selection and
+    admission are separate decisions; starting production is now
+    POST /admin/video-candidates/{id}/admit.
+    """
     from app.models.pipeline_job import PipelineJob
 
     candidate_id = db.query(VideoCandidate).first().id
@@ -363,22 +369,15 @@ def test_a_human_can_promote_a_candidate(client, db, populated):
     assert response.status_code == 200
     body = response.json()
     assert body["candidate"]["status"] == "selected"
-    assert body["pipeline_job_id"]
-
-    run = db.query(PipelineJob).one()
-    assert run.state == PipelineState.QUEUED
-    assert str(run.candidate_id) == str(candidate_id)
-    assert run.metadata_json["origin"] == "manual_selection"
+    assert body["admitted"] is False
+    assert db.query(PipelineJob).count() == 0, "selecting is not starting production"
 
 
-def test_promotion_is_not_a_selection_engine(client, db, populated):
-    """It applies no policy: nothing is promoted unless a person asks for that row."""
-    from app.models.pipeline_job import PipelineJob
-
+def test_selection_is_not_a_selection_engine(client, db, populated):
+    """It applies no policy: nothing is selected unless a person asks for that row."""
     candidate_id = db.query(VideoCandidate).first().id
     client.post(f"/admin/video-candidates/{candidate_id}/select")
 
-    assert db.query(PipelineJob).count() == 1, "only the named candidate is promoted"
     remaining = db.query(VideoCandidate).filter(VideoCandidate.id != candidate_id).all()
     assert all(row.status == VideoCandidateStatus.DISCOVERED for row in remaining)
 
