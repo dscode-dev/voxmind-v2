@@ -232,6 +232,23 @@ class Settings(BaseSettings):
     discovery_freshness_days: int = Field(default=7, alias="DISCOVERY_FRESHNESS_DAYS")
 
     # =====================================
+    # Selection (PR-SELECTION-01)
+    # -------------------------------------------------------------------------------
+    # Optional. With no key the semantic evaluator reports itself unavailable and selection
+    # continues on deterministic signals alone — with a raised score threshold, because less
+    # evidence should mean more caution, not a fabricated relevance number.
+    #
+    # Policy (weights, caps, thresholds) is NOT here: it belongs to the editorial intention
+    # and lives in ContentTopic.metadata_json["selection"].
+    # =====================================
+
+    selection_openai_api_key: str | None = Field(
+        default=None, alias="SELECTION_OPENAI_API_KEY"
+    )
+    selection_model: str = Field(default="gpt-4o-mini", alias="SELECTION_MODEL")
+    selection_timeout_sec: float = Field(default=20.0, alias="SELECTION_TIMEOUT_SEC")
+
+    # =====================================
     # Validation
     # =====================================
 

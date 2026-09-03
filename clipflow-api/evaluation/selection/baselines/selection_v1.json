@@ -1,0 +1,424 @@
+{
+  "generated_at": "2026-09-03T01:34:35.101113+00:00",
+  "source_type": "synthetic",
+  "note": "No human labels exist for this dataset. These are behaviour metrics, not quality metrics; no precision or NDCG is reported.",
+  "dataset": {
+    "cases": 22,
+    "evaluated_at": "2026-09-03T12:00:00+00:00",
+    "topic": "Futebol brasileiro"
+  },
+  "config": {
+    "freshness_hours": 72.0,
+    "min_duration_sec": 60,
+    "max_duration_sec": 14400,
+    "freshness_half_life_hours": 24.0,
+    "semantic_top_k": 20,
+    "weight_relevance": 0.35,
+    "weight_trend": 0.3,
+    "weight_freshness": 0.2,
+    "weight_interest": 0.15,
+    "weight_source": 0.05,
+    "minimum_score": 0.45,
+    "minimum_relevance": 0.25,
+    "minimum_score_without_semantic": 0.55,
+    "max_selected_per_run": 3,
+    "max_per_channel": 1,
+    "max_per_source": 5,
+    "max_selections_per_day": 12,
+    "channel_cooldown_hours": 24.0
+  },
+  "baseline": {
+    "arm": "recency_only",
+    "selected": 3,
+    "eligibility_violations": 2,
+    "violation_detail": [
+      "upcoming_premiere:upcoming_live",
+      "unavailable_but_hot:unavailable"
+    ],
+    "distinct_channels": 3,
+    "distinct_sources": 1,
+    "max_per_channel": 1,
+    "average_selected_age_hours": 0.89,
+    "oldest_selected_age_hours": 1.0,
+    "selected_with_view_counts": 2,
+    "selected_without_view_counts": 1,
+    "selected_ids": [
+      "new_low_initial_views",
+      "upcoming_premiere",
+      "unavailable_but_hot"
+    ]
+  },
+  "selection_v1": {
+    "arm": "selection_v1",
+    "selected": 3,
+    "eligibility_violations": 0,
+    "violation_detail": [],
+    "distinct_channels": 3,
+    "distinct_sources": 1,
+    "max_per_channel": 1,
+    "average_selected_age_hours": 5.67,
+    "oldest_selected_age_hours": 8.0,
+    "selected_with_view_counts": 3,
+    "selected_without_view_counts": 0,
+    "selected_ids": [
+      "same_channel_1",
+      "cross_source_youtube",
+      "long_interview"
+    ],
+    "score_spread": 0.4187,
+    "score_max": 0.9717,
+    "score_min": 0.553,
+    "distinct_scores": 12
+  },
+  "engine": {
+    "considered": 22,
+    "eligible": 12,
+    "ineligible": 10,
+    "semantic_evaluated": 0,
+    "semantic_failures": 0,
+    "semantic_provider": "none",
+    "duration_ms": 0
+  },
+  "ranking": [
+    {
+      "rank": 1,
+      "candidate_id": "same_channel_1",
+      "score": 0.9717,
+      "decision": "selected",
+      "reasons": [
+        "fresh_content",
+        "high_observed_velocity",
+        "strong_topic_relevance",
+        "strong_engagement",
+        "deterministic_only"
+      ],
+      "blocked_by": []
+    },
+    {
+      "rank": 2,
+      "candidate_id": "same_channel_2",
+      "score": 0.965,
+      "decision": "blocked",
+      "reasons": [
+        "fresh_content",
+        "high_observed_velocity",
+        "strong_topic_relevance",
+        "strong_engagement",
+        "deterministic_only"
+      ],
+      "blocked_by": [
+        "channel_cap_reached",
+        "channel_cooldown"
+      ]
+    },
+    {
+      "rank": 3,
+      "candidate_id": "same_channel_3",
+      "score": 0.9043,
+      "decision": "blocked",
+      "reasons": [
+        "fresh_content",
+        "high_observed_velocity",
+        "strong_topic_relevance",
+        "strong_engagement",
+        "deterministic_only"
+      ],
+      "blocked_by": [
+        "channel_cap_reached",
+        "channel_cooldown"
+      ]
+    },
+    {
+      "rank": 4,
+      "candidate_id": "cross_source_youtube",
+      "score": 0.883,
+      "decision": "selected",
+      "reasons": [
+        "fresh_content",
+        "high_observed_velocity",
+        "strong_topic_relevance",
+        "strong_engagement",
+        "deterministic_only"
+      ],
+      "blocked_by": []
+    },
+    {
+      "rank": 5,
+      "candidate_id": "long_interview",
+      "score": 0.8695,
+      "decision": "selected",
+      "reasons": [
+        "fresh_content",
+        "high_observed_velocity",
+        "strong_topic_relevance",
+        "strong_engagement",
+        "deterministic_only"
+      ],
+      "blocked_by": []
+    },
+    {
+      "rank": 6,
+      "candidate_id": "rss_no_metrics",
+      "score": 0.8684,
+      "decision": "blocked",
+      "reasons": [
+        "fresh_content",
+        "strong_topic_relevance",
+        "deterministic_only"
+      ],
+      "blocked_by": [
+        "run_limit_reached"
+      ]
+    },
+    {
+      "rank": 7,
+      "candidate_id": "prioritised_source",
+      "score": 0.8013,
+      "decision": "blocked",
+      "reasons": [
+        "fresh_content",
+        "high_observed_velocity",
+        "strong_topic_relevance",
+        "deterministic_only"
+      ],
+      "blocked_by": [
+        "run_limit_reached"
+      ]
+    },
+    {
+      "rank": 8,
+      "candidate_id": "fresh_high_engagement",
+      "score": 0.7869,
+      "decision": "blocked",
+      "reasons": [
+        "fresh_content",
+        "high_observed_velocity",
+        "strong_engagement",
+        "deterministic_only"
+      ],
+      "blocked_by": [
+        "run_limit_reached"
+      ]
+    },
+    {
+      "rank": 9,
+      "candidate_id": "cross_source_rss",
+      "score": 0.7553,
+      "decision": "blocked",
+      "reasons": [
+        "fresh_content",
+        "strong_topic_relevance",
+        "deterministic_only"
+      ],
+      "blocked_by": [
+        "run_limit_reached"
+      ]
+    },
+    {
+      "rank": 10,
+      "candidate_id": "new_low_initial_views",
+      "score": 0.71,
+      "decision": "blocked",
+      "reasons": [
+        "fresh_content",
+        "high_observed_velocity",
+        "strong_engagement",
+        "deterministic_only"
+      ],
+      "blocked_by": [
+        "run_limit_reached"
+      ]
+    },
+    {
+      "rank": 11,
+      "candidate_id": "viral_off_topic",
+      "score": 0.5724,
+      "decision": "blocked",
+      "reasons": [
+        "fresh_content",
+        "high_observed_velocity",
+        "strong_engagement",
+        "deterministic_only"
+      ],
+      "blocked_by": [
+        "insufficient_topic_relevance",
+        "run_limit_reached"
+      ]
+    },
+    {
+      "rank": 12,
+      "candidate_id": "fresh_low_engagement",
+      "score": 0.553,
+      "decision": "blocked",
+      "reasons": [
+        "fresh_content",
+        "deterministic_only"
+      ],
+      "blocked_by": [
+        "run_limit_reached"
+      ]
+    }
+  ],
+  "ineligible": [
+    {
+      "candidate_id": "old_viral",
+      "reasons": [
+        "outside_freshness_window"
+      ],
+      "permanent": false
+    },
+    {
+      "candidate_id": "unavailable_but_hot",
+      "reasons": [
+        "unavailable"
+      ],
+      "permanent": true
+    },
+    {
+      "candidate_id": "upcoming_premiere",
+      "reasons": [
+        "upcoming_live"
+      ],
+      "permanent": false
+    },
+    {
+      "candidate_id": "currently_live",
+      "reasons": [
+        "currently_live"
+      ],
+      "permanent": false
+    },
+    {
+      "candidate_id": "too_short",
+      "reasons": [
+        "duration_too_short"
+      ],
+      "permanent": true
+    },
+    {
+      "candidate_id": "stream_archive",
+      "reasons": [
+        "duration_too_long"
+      ],
+      "permanent": true
+    },
+    {
+      "candidate_id": "no_published_at",
+      "reasons": [
+        "missing_required_metadata"
+      ],
+      "permanent": false
+    },
+    {
+      "candidate_id": "already_selected",
+      "reasons": [
+        "already_selected"
+      ],
+      "permanent": false
+    },
+    {
+      "candidate_id": "already_consumed",
+      "reasons": [
+        "already_consumed"
+      ],
+      "permanent": false
+    },
+    {
+      "candidate_id": "previously_rejected",
+      "reasons": [
+        "previously_rejected"
+      ],
+      "permanent": false
+    }
+  ],
+  "expectations": [
+    {
+      "case_id": "fresh_high_engagement",
+      "expectation": "ranks at or near the top"
+    },
+    {
+      "case_id": "fresh_low_engagement",
+      "expectation": "ranks below the fresh high-engagement case"
+    },
+    {
+      "case_id": "old_viral",
+      "expectation": "ineligible on freshness; raw view count must not rescue it"
+    },
+    {
+      "case_id": "new_low_initial_views",
+      "expectation": "not buried for having few views yet"
+    },
+    {
+      "case_id": "rss_no_metrics",
+      "expectation": "scores on the signals it has; not zeroed for missing metrics"
+    },
+    {
+      "case_id": "viral_off_topic",
+      "expectation": "must not outrank on-topic candidates on virality alone"
+    },
+    {
+      "case_id": "unavailable_but_hot",
+      "expectation": "never selected, at any score"
+    },
+    {
+      "case_id": "upcoming_premiere",
+      "expectation": "ineligible: there is nothing to cut yet"
+    },
+    {
+      "case_id": "currently_live",
+      "expectation": "ineligible: PR-ASR-01 explicitly does not process live streams"
+    },
+    {
+      "case_id": "too_short",
+      "expectation": "ineligible: nothing to recut"
+    },
+    {
+      "case_id": "long_interview",
+      "expectation": "eligible: long form is what the cutter is for"
+    },
+    {
+      "case_id": "stream_archive",
+      "expectation": "ineligible: beyond the usable source length"
+    },
+    {
+      "case_id": "no_published_at",
+      "expectation": "ineligible: freshness cannot be established"
+    },
+    {
+      "case_id": "already_selected",
+      "expectation": "never re-selected"
+    },
+    {
+      "case_id": "already_consumed",
+      "expectation": "never re-selected"
+    },
+    {
+      "case_id": "previously_rejected",
+      "expectation": "a rediscovery does not resurrect it"
+    },
+    {
+      "case_id": "same_channel_1",
+      "expectation": "one of these is selected, not all"
+    },
+    {
+      "case_id": "same_channel_2",
+      "expectation": "blocked by the channel cap, not rejected"
+    },
+    {
+      "case_id": "same_channel_3",
+      "expectation": "blocked by the channel cap, not rejected"
+    },
+    {
+      "case_id": "cross_source_rss",
+      "expectation": "both remain distinct candidates; near-duplicate detection is out of scope"
+    },
+    {
+      "case_id": "cross_source_youtube",
+      "expectation": "ranked on its own merits"
+    },
+    {
+      "case_id": "prioritised_source",
+      "expectation": "a small nudge only; the preference must not decide the ranking"
+    }
+  ]
+}

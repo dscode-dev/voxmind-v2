@@ -12,7 +12,7 @@ existence.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -29,6 +29,13 @@ from app.models.video_candidate import VideoCandidate
 from app.security.auth_middleware import get_current_admin
 from app.services.audit_service import AuditService
 from app.services.discovery_service import build_default_service
+from app.selection.engine import SelectionEngine
+from app.selection.semantic import build_evaluator
+from app.services.selection_service import (
+    HARD_MAX_SELECTED_PER_RUN,
+    METHOD_MANUAL,
+    SelectionService,
+)
 from app.services.pipeline_job_service import PipelineJobService
 
 router = APIRouter()
@@ -47,6 +54,28 @@ def _service():
         max_results=settings.discovery_max_results,
         freshness_days=settings.discovery_freshness_days,
     )
+
+
+def _selection_service() -> SelectionService:
+    """Built per request so tests can substitute the evaluator, and so a key rotated in the
+    environment takes effect on restart rather than being captured at import time."""
+    evaluator = build_evaluator(
+        settings.selection_openai_api_key,
+        model=settings.selection_model,
+        timeout_sec=settings.selection_timeout_sec,
+    )
+    return SelectionService(engine=SelectionEngine(evaluator=evaluator))
+
+
+class SelectionRunInput(BaseModel):
+    topic_id: uuid.UUID
+    # None means "use the topic's configured cap". Whatever arrives is clamped server-side:
+    # this is the last line before automation can act at scale.
+    limit: int | None = Field(default=None, ge=1, le=HARD_MAX_SELECTED_PER_RUN)
+    # Ranking and reasons with no state change — the way to calibrate the engine against real
+    # data without committing to anything.
+    dry_run: bool = True
+    verbose: bool = False
 
 
 class TopicInput(BaseModel):
@@ -282,6 +311,51 @@ def run_discovery(
     }
 
 
+# ---------------------------------------------------------------- selection
+
+
+@router.post("/admin/selection/run")
+def run_selection(
+    payload: SelectionRunInput,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    """Rank a topic's candidates and, unless this is a dry run, mark the winners SELECTED.
+
+    Defaults to ``dry_run=true``. Committing is the exception that has to be asked for, not
+    the default a mistyped request falls into.
+
+    **No PipelineJob is created and nothing is enqueued.** Selection is an editorial decision;
+    admitting it into production is the next PR's boundary, so enabling automatic selection
+    cannot by itself start spending GPU time.
+    """
+    topic = db.query(ContentTopic).filter(ContentTopic.id == payload.topic_id).first()
+    if topic is None:
+        raise HTTPException(status_code=404, detail="unknown topic")
+
+    report = _selection_service().run(
+        db, topic=topic, limit=payload.limit, dry_run=payload.dry_run
+    )
+
+    audit_service.log(
+        db,
+        action="admin.selection.run",
+        outcome="success",
+        actor_user=admin,
+        target_type="content_topic",
+        target_id=str(topic.id),
+        metadata={
+            "selection_run_id": report.run_id,
+            "dry_run": payload.dry_run,
+            "selected": len(report.outcome.selected),
+            "committed": report.committed,
+        },
+    )
+    db.commit()
+
+    return report.as_dict(verbose=payload.verbose)
+
+
 # ---------------------------------------------------------------- candidates
 
 
@@ -290,6 +364,8 @@ def list_candidates(
     topic_id: uuid.UUID | None = None,
     source_id: uuid.UUID | None = None,
     status: VideoCandidateStatus | None = None,
+    min_score: float | None = Query(default=None, ge=0.0, le=1.0),
+    selection_method: str | None = None,
     published_after: datetime | None = None,
     published_before: datetime | None = None,
     discovered_after: datetime | None = None,
@@ -312,6 +388,10 @@ def list_candidates(
         query = query.filter(VideoCandidate.source_id == source_id)
     if status:
         query = query.filter(VideoCandidate.status == status)
+    if min_score is not None:
+        # relevance_score is a real column, so this filters in the database rather than
+        # loading every row to compare a JSON field in Python.
+        query = query.filter(VideoCandidate.relevance_score >= min_score)
     if published_after:
         query = query.filter(VideoCandidate.published_at >= published_after)
     if published_before:
@@ -320,6 +400,16 @@ def list_candidates(
         query = query.filter(VideoCandidate.created_at >= discovered_after)
     if discovered_before:
         query = query.filter(VideoCandidate.created_at <= discovered_before)
+
+    if selection_method:
+        candidates_all = query.all()
+        matching = [
+            row.id
+            for row in candidates_all
+            if ((row.metadata_json or {}).get("selection") or {}).get("method")
+            == selection_method
+        ]
+        query = query.filter(VideoCandidate.id.in_(matching or [uuid.uuid4()]))
 
     total = query.count()
     candidates = (
@@ -399,6 +489,16 @@ def select_candidate(
 
     candidate.status = VideoCandidateStatus.SELECTED
     candidate.selected_at = run.queued_at
+    # Recorded so an audit can tell a human decision from an engine one. Manual selection is
+    # a bypass of the *policy* (caps, cooldown, score thresholds) — not of the eligibility
+    # invariants above, which is why the unavailable/rejected checks stay in front of it.
+    manual_metadata = dict(candidate.metadata_json or {})
+    manual_metadata["selection"] = {
+        "method": METHOD_MANUAL,
+        "selected_by": str(admin.id),
+        "selected_at": (run.queued_at or datetime.now(timezone.utc)).isoformat(),
+    }
+    candidate.metadata_json = manual_metadata
 
     audit_service.log(
         db,

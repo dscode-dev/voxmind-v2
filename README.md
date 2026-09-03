@@ -338,6 +338,84 @@ curl "localhost:8010/admin/video-candidates?status=discovered&limit=50"
 Candidates are listed newest first (`published_at DESC`, `created_at` as tiebreaker) and
 paginated. That is recency, not ranking — there is no scoring in this phase.
 
+## Candidate selection
+
+Discovery answers *"what content exists?"*. Selection answers *"what should we produce?"* —
+and stops there. A selected candidate is an **editorial decision**, not an admission to
+production: no `PipelineJob` is created and nothing is enqueued.
+
+```
+DISCOVERED
+    ↓  eligibility      ← a gate with reason codes, never a penalty score
+    ↓  pre-rank         ← cheap, deterministic; decides who is worth a model call
+    ↓  semantic         ← top-K only, metadata only, optional
+    ↓  composition      ← weighted mean over the signals that could be measured
+    ↓  policy           ← thresholds, caps, diversity, cooldown
+  RANKED → SELECTED
+```
+
+**Three questions, kept apart.** Eligibility asks whether a candidate may take part at all;
+ranking asks which looks best; policy asks whether to act now. Collapsing them into one
+number makes "why was this rejected?" unanswerable.
+
+**Signals.** Freshness decays exponentially (24h half-life) rather than stepping, so a 23-hour
+video does not beat a 25-hour one by the whole weight of the signal. Engagement is
+age-normalised into `observed_average_views_per_hour` and log-compressed — 1M views over five
+years is not 100k views in three hours. The name is literal: there are no engagement
+snapshots yet, so this is a lifetime average, not current velocity and not acceleration.
+
+**Unknown is not zero.** RSS feeds publish no view counts. Scoring those as 0 would bury every
+RSS candidate beneath every YouTube one for a reason unrelated to the content, so an
+unmeasurable signal has its weight removed from the denominator instead. That is fair, not
+free: a candidate with less evidence must clear a higher bar
+(`minimum_score_without_semantic`).
+
+**The semantic leg is optional and cannot dominate.** It sees metadata only — there is no
+transcript at this stage, and downloading one per candidate to decide whether to select it
+would cost more than producing the video. Its output is a validated Pydantic contract. With no
+provider configured it reports `unavailable` and the engine continues deterministically; there
+is no local stand-in generating plausible numbers. Eligibility and policy are applied before
+and after it, so a confident model cannot select an unavailable video or break a channel cap.
+
+**Scores are versioned** (`selection-v1`). A 0.82 from a different formula is not the same
+0.82, and `scores_json` records every signal, the weights actually used and what could not be
+measured.
+
+| Weight | V1 heuristic |
+|---|---|
+| relevance | 0.35 |
+| trend | 0.30 |
+| freshness | 0.20 |
+| editorial interest | 0.15 |
+| source priority | 0.05 |
+
+These were chosen against the evaluation fixtures and rounded to two decimals. There are no
+human labels to fit against, so anything more precise would be false precision.
+
+**Policy** lives on the topic (`ContentTopic.metadata_json["selection"]`), not in environment
+variables — it belongs next to the editorial intention:
+
+```json
+{"selection": {"freshness_hours": 72, "minimum_score": 0.45,
+               "max_selected_per_run": 3, "max_per_channel": 1}}
+```
+
+A per-channel cap plus a cross-run cooldown stops one prolific channel filling the feed, and a
+daily cap plus a server-side ceiling (25) bounds what automation can do. Committed runs take a
+PostgreSQL advisory lock on the topic, so two concurrent runs cannot both spend the same cap.
+
+**Only permanently unusable candidates are rejected.** A cap, a cooldown or today's freshness
+window are temporary — rejecting on those would burn a candidate tomorrow's run should still
+consider.
+
+Run it, without changing anything:
+
+```bash
+python -m evaluation.selection --ranking          # offline, against fixtures
+
+curl -X POST localhost:8010/admin/selection/run      -H "Authorization: Bearer $ADMIN_JWT"      -d '{"topic_id": "...", "dry_run": true}'     # dry run is the default
+```
+
 ## Job state
 
 A run's state is the result of a validated transition, never an inference from which objects
