@@ -138,6 +138,18 @@ def _build_allowed_transitions() -> dict[PipelineState, frozenset[PipelineState]
         PipelineState.CANCELED,
     }
 
+    # An upload that did not confirm returns the run to where it was before anyone tried.
+    # PR-PUBLISH-01: the table had no edge out of PUBLISHING except forward or FAILED, and
+    # neither is right for a failed publish. FAILED means the *production* failed, and its
+    # only recovery is FAILED -> QUEUED, which would re-run the entire render for what was a
+    # network error at the last step. A run whose media is fine and whose upload did not
+    # land is still ready to publish, so that is where it goes.
+    #
+    # Backwards on the happy path, so it is reachable only through the `publish_failed()`
+    # command - never through `report()`, whose stale-report guard exists precisely to stop
+    # a late message walking a run backwards.
+    transitions[PipelineState.PUBLISHING].add(PipelineState.READY_TO_PUBLISH)
+
     transitions[PipelineState.PUBLISHED] = set()
     transitions[PipelineState.CANCELED] = set()
     # A failed run is retried by re-queueing it, which is what the reliable queue does with
@@ -463,6 +475,120 @@ class PipelineStateMachine:
             commit=commit,
         )
         return TransitionOutcome(APPLIED, from_state, PipelineState.FAILED, event=event)
+
+    # ------------------------------------------------------------------ publishing
+    #
+    # Three commands rather than `report()` calls, for the same reason `requeue` is a
+    # command: publishing is driven by an operator and a provider, not by a worker reporting
+    # progress, and one of the three legitimately moves the run backwards.
+
+    def start_publishing(
+        self,
+        db: Session,
+        job: PipelineJob,
+        *,
+        service: str = "publisher",
+        actor: str | None = None,
+        commit: bool = False,
+    ) -> TransitionOutcome:
+        """Claim a run for publication.
+
+        Only from READY_TO_PUBLISH: the transition table refuses REVIEW_REQUIRED, which is
+        what stops a run that failed the technical gate from being published by a caller who
+        checked eligibility carelessly. Claiming is also how two concurrent publish requests
+        are separated - the second finds the run already in PUBLISHING.
+        """
+        from_state = job.state
+        if from_state == PipelineState.PUBLISHING:
+            return TransitionOutcome(
+                DUPLICATE, from_state, PipelineState.PUBLISHING, detail="already publishing"
+            )
+        if not can_transition(from_state, PipelineState.PUBLISHING):
+            return TransitionOutcome(
+                INVALID, from_state, PipelineState.PUBLISHING,
+                detail=f"{from_state.value} cannot begin publishing",
+            )
+
+        event = self.transition(
+            db, job, PipelineState.PUBLISHING,
+            service=service,
+            message="publishing started",
+            payload={"actor": actor},
+            commit=commit,
+        )
+        return TransitionOutcome(APPLIED, from_state, PipelineState.PUBLISHING, event=event)
+
+    def publish_failed(
+        self,
+        db: Session,
+        job: PipelineJob,
+        *,
+        reason: str,
+        service: str = "publisher",
+        commit: bool = False,
+    ) -> TransitionOutcome:
+        """Release a run whose publication did not confirm.
+
+        Back to READY_TO_PUBLISH, not FAILED: the render is intact and the technical gate
+        still passed. FAILED would describe the production as broken and its only recovery
+        would re-run the whole pipeline.
+
+        An UNKNOWN outcome deliberately does NOT come here - see `publishing_service`. A run
+        whose upload may have succeeded must not be returned to a state whose name invites
+        someone to publish it again.
+        """
+        from_state = job.state
+        if from_state != PipelineState.PUBLISHING:
+            return TransitionOutcome(
+                INVALID, from_state, PipelineState.READY_TO_PUBLISH,
+                detail=f"{from_state.value} is not publishing",
+            )
+
+        event = self.transition(
+            db, job, PipelineState.READY_TO_PUBLISH,
+            service=service,
+            message=f"publishing released: {reason}",
+            payload={"reason": reason},
+            commit=commit,
+        )
+        return TransitionOutcome(
+            APPLIED, from_state, PipelineState.READY_TO_PUBLISH, event=event
+        )
+
+    def mark_published(
+        self,
+        db: Session,
+        job: PipelineJob,
+        *,
+        external_ids: list[str],
+        service: str = "publisher",
+        commit: bool = False,
+    ) -> TransitionOutcome:
+        """Record that every required publication of this run is confirmed.
+
+        The caller establishes "every required" - this refuses to move a run that is not
+        currently publishing, and records the external ids that justify the transition, so a
+        PUBLISHED run always names the videos that make it so.
+        """
+        from_state = job.state
+        if from_state == PipelineState.PUBLISHED:
+            return TransitionOutcome(
+                DUPLICATE, from_state, PipelineState.PUBLISHED, detail="already published"
+            )
+        if not can_transition(from_state, PipelineState.PUBLISHED):
+            return TransitionOutcome(
+                INVALID, from_state, PipelineState.PUBLISHED,
+                detail=f"{from_state.value} -> published is not an allowed edge",
+            )
+
+        event = self.transition(
+            db, job, PipelineState.PUBLISHED,
+            service=service,
+            message="published",
+            payload={"external_ids": list(external_ids)},
+            commit=commit,
+        )
+        return TransitionOutcome(APPLIED, from_state, PipelineState.PUBLISHED, event=event)
 
     def complete(
         self,

@@ -15,6 +15,7 @@ from app.models.script_job import ScriptJob
 
 # V2 — autonomous pipeline lineage
 from app.models.automation_state import AutomationState
+from app.models.oauth_state import OAuthState
 from app.models.content_topic import ContentTopic
 from app.models.discovery_source import DiscoverySource
 from app.models.video_candidate import VideoCandidate
@@ -42,6 +43,7 @@ __all__ = [
     "PrivateSchedulerRun",
     "ScriptJob",
     "AutomationState",
+    "OAuthState",
     "ContentTopic",
     "DiscoverySource",
     "VideoCandidate",

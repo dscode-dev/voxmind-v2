@@ -567,6 +567,132 @@ curl -X PUT  localhost:8010/admin/automation/topics/{id} -d '{"enabled": true, "
 All four are admin-only, on the same RBAC as every other `/admin/*` route. Configuration
 changes are audited; ticks are not — they are events and logs, not human decisions.
 
+## Publishing
+
+The autonomous loop stops at `READY_TO_PUBLISH`. Getting past that line takes a named admin
+and an explicit command — nothing in this system publishes on its own.
+
+```
+READY_TO_PUBLISH
+      |
+POST /admin/pipeline-jobs/{id}/publish        ← an admin, deliberately, dry_run=false
+      |
+  preflight        kill switches · target · QA eligibility · media · metadata
+      |
+ PublishAttempt    committed BEFORE any byte leaves, and claimed atomically
+      |
+ YouTube Data API v3, resumable upload, streamed in 256 KiB chunks
+      |
+  external_id → PUBLISHED
+```
+
+**Why the ordering is the reverse of admission's.** Admission commits a row then enqueues,
+because a lost message is recoverable. Publishing commits the attempt *before* the first byte
+and writes the external id *after* the provider confirms, because the thing that must never
+happen is a video existing that this system has no record of.
+
+### The outcome vocabulary
+
+Most integrations model an upload as success-or-failure. That is exactly the model that
+duplicates videos.
+
+| Outcome | Means | What may happen next |
+|---|---|---|
+| `SUCCEEDED` | the provider returned a video id | nothing |
+| `FAILED_RETRYABLE` | nothing was accepted (503, 429, quota, a drop mid-upload) | bounded retry on the same row |
+| `FAILED_FINAL` | would fail identically (bad metadata, revoked credentials) | a human changes something |
+| `UNKNOWN` | **bytes were sent and the response was lost** | reconcile, or a human — *never* an automatic retry |
+
+`UNKNOWN` is the reason this PR exists. There is no idempotency key for `videos.insert`, so a
+retry after a lost response uploads a second video. The adapter decides by *where* a request
+died, not which exception it raised: a timeout opening the session created nothing; a timeout
+on a middle chunk is resumable; a timeout on the **final** chunk may mean the video already
+exists.
+
+### Safety invariants
+
+```
+technical QA failure          → never publish
+publication_eligibility false → never publish
+PUBLISHING_ENABLED=false      → never publish
+target disabled or unconnected→ never publish
+unknown outcome               → never blind retry
+same logical publication      → at most one confirmed external video
+```
+
+Eligibility is re-read from the run at publish time, not inferred from its state: a manual
+endpoint must not be able to bypass the gate by arriving at a run whose state was set some
+other way. A run with no eligibility record is refused — an unmeasured gate is not a passed
+gate.
+
+### Idempotency
+
+Every publication carries `publish:<job_id>:<target_id>:<media_identity>:v1`, deterministic
+and never time-based, under a unique index. Two protections, because they stop different
+things:
+
+- the **unique index** deduplicates the *row* — two concurrent requests, one attempt;
+- an atomic **conditional claim** (`UPDATE ... WHERE status IN (claimable)`) deduplicates the
+  *upload* — the request that loses reports `in_progress` and sends nothing.
+
+A retry does not create a second row; it increments `attempt_no` on the existing one.
+
+### Media and metadata
+
+One PipelineJob can render several final clips, and `publish_package.json` gives each its own
+title, description and hashtags — so **each generated final clip is one publication**.
+`final_reel.mp4` is the review artifact and is not published. The run reaches `PUBLISHED` only
+when every required publication is confirmed; anything less is reported as `partial` or
+`unresolved` and the successes are kept.
+
+Metadata precedence, recorded on every attempt so "why this title" is answerable from the row:
+
+```
+explicit request  >  publish_package.json  >  target defaults  >  system defaults
+```
+
+Values are validated rather than silently repaired. An over-long title **blocks** the
+publication (a person wrote it to be read whole); a description over the API limit is
+truncated at a word boundary and the fact is recorded. Privacy defaults to `private`. No
+category is invented — there is no YouTube category meaning "football highlights", and
+guessing one mis-files every video on the channel. `made_for_kids` is configuration, never
+inferred from content. The metadata sent is frozen on the attempt, so a re-render cannot
+change what a retry uploads.
+
+### OAuth and secrets
+
+Scopes are the minimum that works: `youtube.upload` to upload and `youtube.readonly` to
+resolve which channel the token actually reaches — not `youtube.force-ssl`, which would also
+grant deleting playlists, comments and captions. The `state` parameter is 32 CSPRNG bytes,
+single-use, expiring, and bound to the admin who started the flow; it lives in `oauth_states`
+rather than a cookie because the callback can land on a different replica.
+
+Refresh tokens are encrypted at rest with Fernet (`PUBLISH_SECRET_KEY`), and so is the
+resumable session URI — it is a bearer credential that looks like an ordinary URL. Neither is
+in any API response, any log line, or any stored error message: only a provider *error code*
+is kept, because Google echoes request parameters into some error descriptions. A refresh that
+returns `invalid_grant` marks the target `reconnect_required` and drops the dead ciphertext.
+
+A freshly connected target is **disabled**. Consent proves the credential works, not that it
+is the channel the operator meant.
+
+```bash
+curl -X POST localhost:8010/admin/publish-targets/youtube/connect   # → authorization_url
+curl -X PUT  localhost:8010/admin/publish-targets/{id} -d '{"is_active": true}'
+
+# dry run is the default
+curl -X POST localhost:8010/admin/pipeline-jobs/{id}/publish -d '{"target_id": "..."}'
+curl -X POST localhost:8010/admin/pipeline-jobs/{id}/publish      -d '{"target_id": "...", "dry_run": false, "privacy": "private"}'
+
+curl localhost:8010/admin/publish-attempts/unresolved                # the operator's queue
+curl -X POST localhost:8010/admin/publish-attempts/{id}/reconcile    # ask the session
+curl -X POST localhost:8010/admin/publish-attempts/{id}/resolve -d '{"external_id": "..."}'
+```
+
+Every route is admin-only on the existing RBAC. The OAuth callback is the one exception and
+cannot be otherwise — the browser arriving from Google carries Google's session, not ours;
+its authorisation is the single-use `state`.
+
 ## Job state
 
 A run's state is the result of a validated transition, never an inference from which objects

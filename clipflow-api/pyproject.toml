@@ -20,6 +20,9 @@ redis = "^5.1.1"
 minio = "^7.2.8"
 httpx = "^0.27.2"
 tenacity = "^9.0.0"
+# Encrypts publish credentials at rest (app/security/secret_box.py). Present transitively
+# before PR-PUBLISH-01; declared explicitly now that application code imports it directly.
+cryptography = "^43.0.1"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3.3"

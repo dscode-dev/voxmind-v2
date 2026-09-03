@@ -202,11 +202,58 @@ class PublishPlatform(str, enum.Enum):
 
 
 class PublishAttemptStatus(str, enum.Enum):
+    """The outcome of one logical publication.
+
+    Extended by PR-PUBLISH-01. The original PENDING/SUCCEEDED/FAILED could not express the
+    distinction publishing actually turns on: a 503 and a connection dropped after the last
+    byte was sent both looked like "failed", and retrying the second one duplicates a public
+    video. Failure is now split by what may safely happen next.
+    """
+
     PENDING = "pending"
     IN_PROGRESS = "in_progress"
     SUCCEEDED = "succeeded"
-    FAILED = "failed"
+    # Safe to try again: nothing was accepted by the provider, or the provider explicitly
+    # told us to come back later.
+    FAILED_RETRYABLE = "failed_retryable"
+    # Trying again would fail identically - bad metadata, revoked credentials, rejected
+    # media. Needs a human to change something first.
+    FAILED_FINAL = "failed_final"
+    # The upload may or may not have succeeded: bytes were sent and the response was lost.
+    # This is the state that must never be retried automatically.
+    UNKNOWN = "unknown"
+    # An UNKNOWN an operator has taken ownership of. Distinct from UNKNOWN so a queue of
+    # "someone is looking at this" does not hide inside a queue of "nobody has yet".
+    NEEDS_MANUAL_RESOLUTION = "needs_manual_resolution"
     CANCELED = "canceled"
+    # Kept only so the enum can still read rows written before PR-PUBLISH-01. Nothing
+    # writes it: there were no writers, so in practice there are no such rows either.
+    FAILED = "failed"
+
+
+class PublishRetryability(str, enum.Enum):
+    """What the caller is allowed to do next. Deliberately separate from the attempt status.
+
+    Status says where the attempt ended; retryability says what may happen to it. Keeping
+    them apart is what stops "failed" from being read as "try again" by the next person to
+    touch this code.
+    """
+
+    RETRYABLE = "retryable"
+    NOT_RETRYABLE = "not_retryable"
+    # Neither. Requires a human decision before anything else happens.
+    REQUIRES_MANUAL_RESOLUTION = "requires_manual_resolution"
+
+
+class PublishTargetConnectionStatus(str, enum.Enum):
+    """Whether the stored credential can still be used."""
+
+    # Never connected, or explicitly disconnected. No refresh token is held.
+    DISCONNECTED = "disconnected"
+    CONNECTED = "connected"
+    # The refresh token was rejected (revoked, expired, invalid_grant). Retrying every job
+    # against it would burn quota and log noise forever; an operator must reconnect.
+    RECONNECT_REQUIRED = "reconnect_required"
 
 
 class ConnectedNodeStatus(str, enum.Enum):

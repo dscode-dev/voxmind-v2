@@ -276,13 +276,51 @@ class Settings(BaseSettings):
     )
     # Lets the in-process loop be turned off entirely (to run it elsewhere) without changing
     # the kill switch, which governs whether automation may act at all.
-    # Application logs are dropped without a handler on the root logger: uvicorn configures
-    # only its own loggers, so everything the scheduler reports would go nowhere. INFO is the
-    # level at which a tick that did something is visible and an idle one is not.
-    log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     automation_runner_enabled: bool = Field(
         default=True, alias="AUTOMATION_RUNNER_ENABLED"
     )
+
+    # Application logs are dropped without a handler on the root logger: uvicorn configures
+    # only its own loggers, so everything the application reports would go nowhere. INFO is
+    # the level at which a tick that did something is visible and an idle one is not.
+    log_level: str = Field(default="INFO", alias="LOG_LEVEL")
+
+    # =====================================
+    # Publishing (PR-PUBLISH-01)
+    # -------------------------------------------------------------------------------
+    # The global publish kill switch. Default OFF, and for a harder reason than the
+    # automation one: publishing is the only boundary in this system that is irreversible
+    # from the inside. A duplicated render costs GPU time; a duplicated upload is public.
+    #
+    # Nothing calls the publisher automatically in this PR — the switch guards the manual
+    # command, so an operator cannot publish from a deployment that never opted in.
+    # =====================================
+
+    publishing_enabled: bool = Field(default=False, alias="PUBLISHING_ENABLED")
+
+    # OAuth client credentials for the YouTube Data API. Absent means "provider not
+    # configured" — never a fake token and never a silent no-op upload.
+    youtube_client_id: str | None = Field(default=None, alias="YOUTUBE_CLIENT_ID")
+    youtube_client_secret: str | None = Field(default=None, alias="YOUTUBE_CLIENT_SECRET")
+    # From configuration, never from a request header: deriving it from Host or
+    # X-Forwarded-* would let a spoofed header redirect an authorization code elsewhere.
+    youtube_oauth_redirect_uri: str | None = Field(
+        default=None, alias="YOUTUBE_OAUTH_REDIRECT_URI"
+    )
+
+    # Encrypts refresh tokens at rest. Urlsafe-base64, 32 bytes (Fernet). Without it a
+    # target cannot be connected at all — see app/security/secret_box.py.
+    publish_secret_key: str | None = Field(default=None, alias="PUBLISH_SECRET_KEY")
+
+    # How long a run may spend uploading before the client gives up. A timeout here is
+    # exactly the ambiguous case: the bytes may have landed, so it resolves to UNKNOWN and
+    # never to a blind retry.
+    youtube_upload_timeout_sec: float = Field(
+        default=900.0, alias="YOUTUBE_UPLOAD_TIMEOUT_SEC"
+    )
+    # Resumable upload chunk size, in MiB. 8 is a multiple of the 256 KiB the API requires
+    # and small enough that a broken connection loses little work.
+    youtube_upload_chunk_mib: int = Field(default=8, alias="YOUTUBE_UPLOAD_CHUNK_MIB")
 
     # =====================================
     # Validation

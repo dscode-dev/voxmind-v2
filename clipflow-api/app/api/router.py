@@ -9,6 +9,7 @@ from app.api import job_events
 from app.api import jobs
 from app.api import ops_stream
 from app.api import pipeline_runs
+from app.api import publishing
 from app.api import products
 from app.api import purchases
 from app.api import register
@@ -38,6 +39,13 @@ api_router.include_router(admin.router)
 # ==========================================
 
 api_router.include_router(automation.router)
+
+
+# ==========================================
+# Publishing (targets, OAuth, manual publish, resolution)
+# ==========================================
+
+api_router.include_router(publishing.router)
 
 
 # ==========================================
