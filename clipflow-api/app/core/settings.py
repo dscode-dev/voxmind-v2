@@ -323,6 +323,61 @@ class Settings(BaseSettings):
     youtube_upload_chunk_mib: int = Field(default=8, alias="YOUTUBE_UPLOAD_CHUNK_MIB")
 
     # =====================================
+    # Publication runtime (PR-PUBLISH-QUEUE-01)
+    # -------------------------------------------------------------------------------
+    # A queue of its own, never the media queue. A render retry costs GPU time; a publication
+    # retry may cost a duplicate public video, so the two need different visibility timeouts,
+    # different budgets, and different rules about when a redelivery may repeat the work.
+    # =====================================
+
+    publish_queue_name: str = Field(
+        default="clipflow_publish_jobs", alias="PUBLISH_QUEUE_NAME"
+    )
+    # Runs the publication loop in this process. Separate from PUBLISHING_ENABLED, which says
+    # whether publishing may happen at all: this says whether THIS process is the one doing
+    # it. The API sets it false and the publisher container sets it true.
+    publisher_runtime_enabled: bool = Field(
+        default=False, alias="PUBLISHER_RUNTIME_ENABLED"
+    )
+    # How long a claimed command stays invisible without a heartbeat. Generous, because an
+    # upload legitimately takes minutes and recovering a command that is still uploading is
+    # the expensive mistake.
+    publish_visibility_timeout_sec: int = Field(
+        default=900, alias="PUBLISH_VISIBILITY_TIMEOUT_SEC"
+    )
+    # Well under the visibility timeout, so a live worker renews several times before it
+    # could ever be considered dead.
+    publish_heartbeat_interval_sec: int = Field(
+        default=20, alias="PUBLISH_HEARTBEAT_INTERVAL_SEC"
+    )
+    publish_heartbeat_ttl_sec: int = Field(default=60, alias="PUBLISH_HEARTBEAT_TTL_SEC")
+    publish_claim_block_sec: int = Field(default=5, alias="PUBLISH_CLAIM_BLOCK_SEC")
+
+    # The queue-level execution budget. Small: a publication that has failed this many times
+    # needs a person, not another attempt. Multiplied by nothing - the provider client does
+    # not retry internally, so this IS the total budget.
+    publish_max_attempts: int = Field(default=3, alias="PUBLISH_MAX_ATTEMPTS")
+    publish_retry_backoff_base_sec: float = Field(
+        default=30.0, alias="PUBLISH_RETRY_BACKOFF_BASE_SEC"
+    )
+    publish_retry_backoff_max_sec: float = Field(
+        default=900.0, alias="PUBLISH_RETRY_BACKOFF_MAX_SEC"
+    )
+    # Quota is not a transient error. YouTube's daily quota resets on a schedule we are not
+    # told, so retrying in 30 seconds burns log space and nothing else - it comes back in an
+    # hour by default.
+    publish_quota_backoff_sec: float = Field(
+        default=3600.0, alias="PUBLISH_QUOTA_BACKOFF_SEC"
+    )
+    # How often the runtime looks for attempts that were committed but never enqueued, and
+    # for commands whose worker died.
+    publish_sweep_interval_sec: int = Field(default=60, alias="PUBLISH_SWEEP_INTERVAL_SEC")
+    # How long to let an in-flight upload finish after SIGTERM before giving up on it.
+    publish_shutdown_grace_sec: float = Field(
+        default=30.0, alias="PUBLISH_SHUTDOWN_GRACE_SEC"
+    )
+
+    # =====================================
     # Validation
     # =====================================
 

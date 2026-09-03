@@ -359,3 +359,143 @@ def test_marking_not_published_settles_the_attempt(client, db):
 
     assert body["status"] == "failed_final"
     assert body["external_id"] is None
+
+# ===========================================================================
+# The asynchronous contract (PR-PUBLISH-QUEUE-01)
+# ===========================================================================
+
+
+@pytest.fixture()
+def async_client(db, admin_user, no_event_fanout, monkeypatch):
+    """A client wired to the real (non-draining) service, so nothing executes inline."""
+    import fakeredis
+
+    from app.publishing.publish_queue import PublishQueue
+    from app.services.publishing_service import PublishingService
+    from tests.test_publishing import StubArtifacts, StubMediaSource
+
+    queue = PublishQueue(
+        fakeredis.FakeRedis(decode_responses=True), "test_publish_jobs",
+        worker_id="test-publisher",
+    )
+    publisher = StubPublisher()
+
+    monkeypatch.setattr(
+        publishing_api, "_publishing",
+        lambda: PublishingService(
+            publisher=publisher, artifacts=StubArtifacts(),
+            media_source=StubMediaSource(), queue=queue,
+        ),
+    )
+    monkeypatch.setattr(
+        publishing_api, "_targets",
+        lambda: PublishTargetService(oauth=oauth_client(google_ok), box=SecretBox(TEST_KEY)),
+    )
+
+    app = FastAPI()
+    app.include_router(api_router)
+    app.dependency_overrides[get_db] = lambda: db
+    app.dependency_overrides[get_current_admin] = lambda: admin_user
+    with TestClient(app) as client:
+        client.queue = queue
+        client.publisher = publisher
+        yield client
+
+
+def test_a_real_publish_is_accepted_not_completed(async_client, db):
+    """The upload no longer happens inside the request."""
+    job = make_publishable_run(db)
+    target = make_target(db)
+
+    response = async_client.post(
+        f"/admin/pipeline-jobs/{job.id}/publish",
+        json={"target_id": str(target.id), "dry_run": False},
+    )
+
+    assert response.status_code == 202, "accepted, not completed"
+    body = response.json()
+    assert body["status"] == "accepted"
+    assert body["items"][0]["status"] == "queued"
+    assert body["job_state"] == "publishing"
+    assert async_client.publisher.calls == [], "the request must not wait on an upload"
+    assert async_client.queue.depths()["ready"] == 1
+    assert db.query(PublishAttempt).count() == 1
+
+
+def test_a_dry_run_still_answers_200(async_client, db):
+    job = make_publishable_run(db)
+    target = make_target(db)
+
+    response = async_client.post(
+        f"/admin/pipeline-jobs/{job.id}/publish", json={"target_id": str(target.id)}
+    )
+
+    assert response.status_code == 200, "a validation that already finished is not 202"
+    assert response.json()["status"] == "validated"
+    assert async_client.queue.depths()["ready"] == 0
+
+
+def test_a_blocked_publication_answers_200_not_202(async_client, db):
+    """Nothing was accepted, so nothing is pending."""
+    job = make_publishable_run(
+        db,
+        metadata_json={"publication_eligibility": {"eligible": False,
+                                                   "blocked_by": ["final_media_qa_fail"]}},
+    )
+    target = make_target(db)
+
+    response = async_client.post(
+        f"/admin/pipeline-jobs/{job.id}/publish",
+        json={"target_id": str(target.id), "dry_run": False},
+    )
+
+    assert response.status_code == 200
+    assert "publication_not_eligible" in response.json()["blocked_by"]
+    assert async_client.queue.depths()["ready"] == 0
+
+
+def test_two_requests_queue_one_command(async_client, db):
+    job = make_publishable_run(db)
+    target = make_target(db)
+    body = {"target_id": str(target.id), "dry_run": False}
+
+    async_client.post(f"/admin/pipeline-jobs/{job.id}/publish", json=body)
+    async_client.post(f"/admin/pipeline-jobs/{job.id}/publish", json=body)
+
+    assert db.query(PublishAttempt).count() == 1
+    assert async_client.queue.depths()["ready"] == 1
+
+
+def test_the_runtime_endpoint_reports_the_queue_and_workers(client, db, monkeypatch):
+    import fakeredis
+
+    from app.publishing.identity import PublisherHeartbeat
+    from app.publishing.publish_queue import PublishQueue, command_payload
+
+    fake = fakeredis.FakeRedis(decode_responses=True)
+    queue = PublishQueue(fake, "test_publish_jobs", worker_id="publisher-1")
+    queue.enqueue(command_payload(publish_attempt_id="a", pipeline_job_id="j",
+                                  target_id="t", media_identity="m"))
+    PublisherHeartbeat("publisher-1", fake).beat(state="idle")
+
+    monkeypatch.setattr(
+        "app.services.publish_runtime.PublishQueue", lambda *a, **k: queue, raising=False
+    )
+    monkeypatch.setattr(
+        "app.publishing.identity._default_redis", lambda: fake, raising=False
+    )
+
+    body = client.get("/admin/publishing/runtime").json()
+
+    assert body["ready"] == 1
+    assert body["workers_alive"] == 1
+    assert body["workers"][0]["worker_id"] == "publisher-1"
+    assert "pending_enqueue" in body and "unresolved" in body
+
+
+def test_the_runtime_endpoint_requires_an_admin(db, no_event_fanout):
+    app = FastAPI()
+    app.include_router(api_router)
+    app.dependency_overrides[get_db] = lambda: db
+    with TestClient(app) as anonymous:
+        assert anonymous.get("/admin/publishing/runtime").status_code in (401, 403)

@@ -124,6 +124,8 @@ services:
       YOUTUBE_OAUTH_REDIRECT_URI: ${YOUTUBE_OAUTH_REDIRECT_URI:-}
       YOUTUBE_UPLOAD_TIMEOUT_SEC: ${YOUTUBE_UPLOAD_TIMEOUT_SEC:-900}
       YOUTUBE_UPLOAD_CHUNK_MIB: ${YOUTUBE_UPLOAD_CHUNK_MIB:-8}
+      PUBLISH_QUEUE_NAME: ${PUBLISH_QUEUE_NAME:-clipflow_publish_jobs}
+      PUBLISHER_RUNTIME_ENABLED: "false"
       AUTONOMOUS_PIPELINE_ENABLED: ${AUTONOMOUS_PIPELINE_ENABLED:-false}
       AUTOMATION_POLL_INTERVAL_SEC: ${AUTOMATION_POLL_INTERVAL_SEC:-60}
       AUTOMATION_STARTUP_DELAY_SEC: ${AUTOMATION_STARTUP_DELAY_SEC:-15}
@@ -169,6 +171,80 @@ services:
   # It is not a running component: like minio-init, it executes a no-op and exits 0. It
   # cannot use `profiles`, because a service hidden behind an inactive profile is not
   # resolvable as a build context.
+  # The publication worker (PR-PUBLISH-QUEUE-01).
+  #
+  # Same image as the API, because that is where the publishing code lives and a third copy
+  # of the codebase to run one loop would be worse than a second container from one image.
+  # It shares nothing else: no HTTP port, no GPU, and its own restart lifecycle - an upload
+  # that takes ten minutes must not be interrupted by an API deploy, and a publisher restart
+  # must not drop requests.
+  #
+  # Deliberately NOT the GPU worker: publishing is network I/O, and queueing it behind ffmpeg
+  # and ASR would make every publication wait for a render.
+  clipflow-publisher:
+    build:
+      context: ./clipflow-api
+      dockerfile: Dockerfile
+    image: ${CLIPFLOW_API_IMAGE:-clipflow-api:local}
+    container_name: clipflow-publisher
+    restart: unless-stopped
+    depends_on:
+      clipflow-postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      clipflow-api:
+        condition: service_healthy
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@clipflow-postgres:5432/${POSTGRES_DB}
+      DATABASE_POOL_SIZE: ${DATABASE_POOL_SIZE}
+      DATABASE_MAX_OVERFLOW: ${DATABASE_MAX_OVERFLOW}
+      JWT_SECRET: ${JWT_SECRET}
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
+      DEFAULT_ADMIN_PHONE_NUMBER: ${DEFAULT_ADMIN_PHONE_NUMBER}
+      DEFAULT_ADMIN_FULL_NAME: ${DEFAULT_ADMIN_FULL_NAME}
+      MINIO_ENDPOINT: minio:9000
+      MINIO_SECURE: "false"
+      MINIO_PUBLIC_ENDPOINT: ${MINIO_PUBLIC_ENDPOINT}
+      MINIO_PUBLIC_SECURE: ${MINIO_PUBLIC_SECURE:-false}
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: ${CLIPFLOW_MINIO_BUCKET}
+      # The bucket the worker writes final media into: what the publisher reads.
+      WORKER_ARTIFACTS_BUCKET: ${MINIO_BUCKET}
+      VOXMIND_REDIS_HOST: redis
+      VOXMIND_REDIS_PORT: 6379
+      VOXMIND_REDIS_QUEUE: ${VOXMIND_REDIS_QUEUE}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # The publisher is the one process that runs the loop.
+      PUBLISHER_RUNTIME_ENABLED: "true"
+      PUBLISHER_WORKER_ID: ${PUBLISHER_WORKER_ID:-}
+      PUBLISHING_ENABLED: ${PUBLISHING_ENABLED:-false}
+      PUBLISH_SECRET_KEY: ${PUBLISH_SECRET_KEY:-}
+      YOUTUBE_CLIENT_ID: ${YOUTUBE_CLIENT_ID:-}
+      YOUTUBE_CLIENT_SECRET: ${YOUTUBE_CLIENT_SECRET:-}
+      YOUTUBE_OAUTH_REDIRECT_URI: ${YOUTUBE_OAUTH_REDIRECT_URI:-}
+      YOUTUBE_UPLOAD_TIMEOUT_SEC: ${YOUTUBE_UPLOAD_TIMEOUT_SEC:-900}
+      YOUTUBE_UPLOAD_CHUNK_MIB: ${YOUTUBE_UPLOAD_CHUNK_MIB:-8}
+      PUBLISH_QUEUE_NAME: ${PUBLISH_QUEUE_NAME:-clipflow_publish_jobs}
+      PUBLISH_MAX_ATTEMPTS: ${PUBLISH_MAX_ATTEMPTS:-3}
+      PUBLISH_VISIBILITY_TIMEOUT_SEC: ${PUBLISH_VISIBILITY_TIMEOUT_SEC:-900}
+      PUBLISH_HEARTBEAT_INTERVAL_SEC: ${PUBLISH_HEARTBEAT_INTERVAL_SEC:-20}
+      PUBLISH_HEARTBEAT_TTL_SEC: ${PUBLISH_HEARTBEAT_TTL_SEC:-60}
+      PUBLISH_CLAIM_BLOCK_SEC: ${PUBLISH_CLAIM_BLOCK_SEC:-5}
+      PUBLISH_RETRY_BACKOFF_BASE_SEC: ${PUBLISH_RETRY_BACKOFF_BASE_SEC:-30}
+      PUBLISH_RETRY_BACKOFF_MAX_SEC: ${PUBLISH_RETRY_BACKOFF_MAX_SEC:-900}
+      PUBLISH_QUOTA_BACKOFF_SEC: ${PUBLISH_QUOTA_BACKOFF_SEC:-3600}
+      PUBLISH_SWEEP_INTERVAL_SEC: ${PUBLISH_SWEEP_INTERVAL_SEC:-60}
+      PUBLISH_SHUTDOWN_GRACE_SEC: ${PUBLISH_SHUTDOWN_GRACE_SEC:-30}
+    # No ports: it serves nothing. It claims commands and uploads.
+    command: ["python", "-m", "app.publisher"]
+    # Long enough for an in-flight upload to finish rather than being killed mid-chunk.
+    stop_grace_period: 60s
+
   voxmind-worker-base:
     build:
       context: ./worker

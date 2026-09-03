@@ -16,7 +16,7 @@ import logging
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -38,7 +38,8 @@ from app.services.publish_resolution_service import (
     serialize_attempt,
 )
 from app.services.publish_target_service import ConnectError, PublishTargetService
-from app.services.publishing_service import PublishingService
+from app.services.publish_runtime import runtime_snapshot
+from app.services.publishing_service import EXECUTABLE_STATUSES, PublishingService
 
 logger = logging.getLogger(__name__)
 
@@ -289,16 +290,26 @@ class PublishInput(BaseModel):
         }
 
 
-@router.post("/admin/pipeline-jobs/{job_id}/publish")
+@router.post("/admin/pipeline-jobs/{job_id}/publish", status_code=202)
 def publish_job(
     job_id: uuid.UUID,
     payload: PublishInput,
+    response: Response,
     db: Session = Depends(get_db),
     admin: User = Depends(get_current_admin),
 ):
-    """Publish a run's final media, or validate that it could be published.
+    """Accept a publication, or validate that one could be accepted.
 
-    The only path in the system that reaches a provider. Nothing calls it automatically.
+    **Asynchronous since PR-PUBLISH-QUEUE-01.** With ``dry_run=false`` this validates, creates
+    or reuses the PublishAttempt rows, puts a command on the publish queue and returns 202 —
+    it does not wait for the upload. A large clip took longer than the proxy timeout between
+    the operator and this endpoint, and the publication carried on regardless, so the request
+    was reporting a failure that had not happened.
+
+    A dry run stays synchronous and returns 200: it touches no provider, so there is nothing
+    to wait for.
+
+    Still the only path that leads to a provider, and still nothing calls it automatically.
     """
     job = db.query(PipelineJob).filter(PipelineJob.id == job_id).first()
     if job is None:
@@ -323,6 +334,12 @@ def publish_job(
         actor=str(admin.id),
     )
 
+    # A dry run answers now; an accepted publication answers later. Saying 202 for a
+    # validation that already completed would be a lie, and saying 200 for work that has not
+    # started would be a worse one.
+    if payload.dry_run or report.status == "blocked":
+        response.status_code = 200
+
     audit_service.log(
         db,
         action="admin.publish.requested",
@@ -340,6 +357,40 @@ def publish_job(
     )
     db.commit()
     return report.as_dict()
+
+
+@router.get("/admin/publishing/runtime")
+def publishing_runtime(
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    """Is publishing actually running, and how much is waiting?
+
+    Exists because PR-SCHEDULER-01 shipped a background loop whose liveness could only be
+    inferred, and a dead publisher looks exactly like an empty queue: every manual publish
+    accepted, none executed, nothing to point at. ``workers`` comes from heartbeats with a
+    TTL, so a process that died stops being listed without anything having to notice.
+    """
+    snapshot = runtime_snapshot()
+    snapshot["pending_enqueue"] = (
+        db.query(PublishAttempt)
+        .filter(
+            PublishAttempt.enqueued_at.is_(None),
+            PublishAttempt.status.in_(EXECUTABLE_STATUSES),
+        )
+        .count()
+    )
+    snapshot["unresolved"] = (
+        db.query(PublishAttempt)
+        .filter(
+            PublishAttempt.status.in_(
+                [PublishAttemptStatus.UNKNOWN,
+                 PublishAttemptStatus.NEEDS_MANUAL_RESOLUTION]
+            )
+        )
+        .count()
+    )
+    return snapshot
 
 
 @router.get("/admin/pipeline-jobs/{job_id}/publish-attempts")

@@ -105,6 +105,25 @@ class PublishRequest:
     # new session".
     resume_session_uri: str | None = None
 
+    # Called as the upload makes progress, with (session_uri, bytes_committed).
+    #
+    # This is what makes a killed worker recoverable rather than a duplicate. The adapter
+    # holds the session URI in memory the moment it is created; if that only reached the
+    # database when the attempt settled, a process killed mid-upload would leave no session
+    # to resume, recovery would conclude that nothing durable existed, and the next execution
+    # would open a second session and upload the video a second time. Found by the
+    # crash/recovery smoke doing exactly that.
+    on_progress: Any = None
+
+    def report_progress(self, session_uri: str | None, bytes_committed: int) -> None:
+        """Tell the caller how far this upload has got. Never raises into the upload."""
+        if self.on_progress is None:
+            return
+        try:
+            self.on_progress(session_uri, bytes_committed)
+        except Exception:  # noqa: BLE001 - bookkeeping must not abort a live upload
+            pass
+
 
 @dataclass
 class PublishResult:

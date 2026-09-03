@@ -579,7 +579,9 @@ POST /admin/pipeline-jobs/{id}/publish        ← an admin, deliberately, dry_ru
       |
   preflight        kill switches · target · QA eligibility · media · metadata
       |
- PublishAttempt    committed BEFORE any byte leaves, and claimed atomically
+ PublishAttempt    committed BEFORE any byte leaves          → 202 Accepted, request ends
+      |
+ publish queue → clipflow-publisher                          claimed atomically
       |
  YouTube Data API v3, resumable upload, streamed in 256 KiB chunks
       |
@@ -590,6 +592,116 @@ POST /admin/pipeline-jobs/{id}/publish        ← an admin, deliberately, dry_ru
 because a lost message is recoverable. Publishing commits the attempt *before* the first byte
 and writes the external id *after* the provider confirms, because the thing that must never
 happen is a video existing that this system has no record of.
+
+### The publication runtime
+
+The upload does not happen inside the HTTP request. A large clip can take longer than any
+proxy timeout between an operator and the API, and the publication carried on regardless — so
+the request reported a failure that had not happened.
+
+```
+POST .../publish (dry_run=false)   → 202 Accepted, returns immediately
+        |
+   PublishAttempt committed, command enqueued
+        |
+   clipflow_publish_jobs (Redis)   ready → processing → delayed → dead, plus leases
+        |
+   clipflow-publisher              its own container: no GPU, no port, own restart cycle
+        |
+   YouTube resumable upload
+```
+
+Its own queue, never the media queue: a render retry costs GPU time, a publication retry can
+cost a duplicate public video, so the two disagree about the most important setting they would
+have to share. The publisher runs from the API image (that is where the code is) but as a
+separate service — it must not be interrupted by an API deploy, and must not queue behind
+ffmpeg and ASR.
+
+**Delivery is at-least-once; the publication is not.**
+
+```
+Redis command delivery      at-least-once      a command can arrive twice
+PublishAttempt execution    idempotent         the atomic claim allows one upload
+External publication        at-most-once       guarded, never guaranteed by the queue
+Ambiguous external result   UNKNOWN            a human or a session probe settles it
+```
+
+There is no exactly-once upload to YouTube and this system does not claim one.
+
+### Two leases, two authorities
+
+The distinction the runtime is built around:
+
+| Question | Answered by |
+|---|---|
+| which worker owns this command? | the **queue lease** |
+| is it safe to call the provider again? | the **attempt row** |
+
+Deriving the second from the first — "the lease expired, so retry" — is what turns a dead
+worker into a second video. A recovered command is never simply re-run; it is classified from
+evidence written before each irreversible step.
+
+### Crash recovery
+
+`provider_started_at` is committed immediately before the first call that could create anything
+at the provider. The resumable session URI and the byte offset are committed **as the upload
+proceeds**, not when it ends — otherwise a worker killed mid-upload leaves no session, recovery
+concludes nothing durable exists, and the next execution starts a second one.
+
+| Crash point | Evidence on the row | Recovery |
+|---|---|---|
+| before the provider | no `provider_started_at`, no session | requeue — nothing exists remotely |
+| session opened, no bytes | `provider_started_at`, no bytes | requeue — an unused session is not a video |
+| mid-chunk | session + offset | probe → 308 → **resume the same session** |
+| final chunk | session + full offset | probe: completed → success; expired → **UNKNOWN** |
+| provider succeeded, DB not yet written | attempt `IN_PROGRESS` | probe returns the video → recorded |
+| DB written, ACK lost | attempt terminal | redelivery finds it settled, zero provider calls |
+
+A worker that stalls, loses its lease, and later wakes up can neither acknowledge the command
+(the queue settles under a compare-and-set on an owner token) nor overwrite the newer outcome
+(the record path refuses to write unless it still owns the attempt).
+
+### Retry budget
+
+`PUBLISH_MAX_ATTEMPTS` (default 3) is the **total**: the provider client does not retry
+internally, so nothing multiplies it. Backoff is exponential with jitter — several
+publications of one run fail together when a provider has a bad minute, and without jitter
+they return together and fail together again.
+
+| Failure | Next |
+|---|---|
+| 503 / 429 / network | delayed retry, same attempt row, `attempt_no + 1` |
+| `quotaExceeded` | delayed by `PUBLISH_QUOTA_BACKOFF_SEC` (1h) — a daily quota does not clear in 30s |
+| `invalid_grant` | target → `reconnect_required`, attempt final, command acknowledged |
+| budget exhausted | dead letter (the command), attempt left for an operator |
+| **UNKNOWN** | **acknowledged, never retried** |
+
+The dead letter is for commands the runtime could not process. An `UNKNOWN` publication is not
+a runtime failure — it is a correctly recorded outcome that needs a person, and it lives in the
+database where one can act on it.
+
+### Recovering an enqueue that never happened
+
+Moving execution behind a queue reopens the window admission has: the row commits, then Redis
+is unreachable. The attempt keeps `enqueued_at IS NULL` and a bounded sweep sends the command
+later. That sweep reads `publish_attempts` and nothing else — it never queries for runs in
+`READY_TO_PUBLISH`, because a sweeper that could create publications would be autopublish
+wearing a disguise.
+
+### Is it running?
+
+```bash
+curl localhost:8010/admin/publishing/runtime -H "Authorization: Bearer $ADMIN_JWT"
+```
+
+```json
+{"ready": 2, "processing": 1, "delayed": 0, "dead": 0,
+ "workers": [{"worker_id": "publisher-...", "last_heartbeat_at": "..."}],
+ "workers_alive": 1, "pending_enqueue": 0, "unresolved": 0}
+```
+
+`workers` comes from Redis heartbeats with a TTL, never from configuration: a dead publisher
+otherwise looks exactly like an empty queue, with every publish accepted and none executed.
 
 ### The outcome vocabulary
 
@@ -680,8 +792,10 @@ is the channel the operator meant.
 curl -X POST localhost:8010/admin/publish-targets/youtube/connect   # → authorization_url
 curl -X PUT  localhost:8010/admin/publish-targets/{id} -d '{"is_active": true}'
 
-# dry run is the default
+# a dry run is synchronous: it touches no provider, so there is nothing to wait for -> 200
 curl -X POST localhost:8010/admin/pipeline-jobs/{id}/publish -d '{"target_id": "..."}'
+
+# a real publication is accepted and executed by the publisher container -> 202
 curl -X POST localhost:8010/admin/pipeline-jobs/{id}/publish      -d '{"target_id": "...", "dry_run": false, "privacy": "private"}'
 
 curl localhost:8010/admin/publish-attempts/unresolved                # the operator's queue

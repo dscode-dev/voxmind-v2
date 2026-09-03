@@ -119,6 +119,9 @@ class YouTubePublisher:
         if session_uri is None:
             try:
                 session_uri = self._open_session(request, token.access_token)
+                # Persisted before a single byte is sent: from here on there is something at
+                # the provider that a recovery must probe rather than replace.
+                request.report_progress(session_uri, 0)
             except _ProviderFailure as failure:
                 return failure.as_result()
             except httpx.HTTPError as exc:
@@ -265,6 +268,9 @@ class YouTubePublisher:
                 # 308 Resume Incomplete: the normal answer to a non-final chunk.
                 if response.status_code == 308:
                     offset = _next_offset(response, fallback=end + 1)
+                    # Committed as we go, so a worker killed on the next chunk leaves an
+                    # accurate resume point instead of an unknown one.
+                    request.report_progress(session_uri, offset)
                     continue
 
                 if response.status_code in (200, 201):

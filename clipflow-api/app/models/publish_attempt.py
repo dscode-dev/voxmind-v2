@@ -48,6 +48,14 @@ class PublishAttempt(Base, UUIDPrimaryKeyMixin, TimestampMixin):
             "status",
             postgresql_where=text("status IN ('UNKNOWN', 'NEEDS_MANUAL_RESOLUTION')"),
         ),
+        # The pending-enqueue sweep: attempts that committed but whose command never
+        # reached Redis. Partial, so it indexes the handful that are stuck rather than
+        # every publication ever made.
+        Index(
+            "ix_publish_attempts_pending_enqueue",
+            "enqueued_at",
+            postgresql_where=text("enqueued_at IS NULL"),
+        ),
     )
 
     pipeline_job_id: Mapped[uuid.UUID] = mapped_column(
@@ -104,6 +112,26 @@ class PublishAttempt(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     # Never a response body: the provider echoes request parameters into some of its errors.
     error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # -------------------------------------------------------------- execution
+    # Set when the command reaches the queue. NULL on a committed attempt means the enqueue
+    # never landed - the same commit-then-publish window admission has, with the same
+    # answer: a bounded sweep finds it rather than an operator noticing.
+    enqueued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    publisher_worker_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+    # The evidence that decides crash recovery. Set immediately before the first call that
+    # can create something at the provider, and cleared on every settle.
+    #
+    # Without it, an attempt found stuck in IN_PROGRESS is unclassifiable: "did anything
+    # reach YouTube?" has no answer, and both possible guesses are bad - assume yes and a
+    # publication is stranded forever, assume no and a video is duplicated. With it, an
+    # IN_PROGRESS attempt that never set this provably did nothing remotely and is safe to
+    # run again.
+    provider_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     # ------------------------------------------------------------- operational
     # The resumable session URI. Treated as a credential: it authorises writes to this

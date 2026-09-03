@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+import redis
 from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -48,6 +49,7 @@ from app.publishing.contracts import (
     PublishResult,
 )
 from app.publishing.media_source import MediaUnavailableError, MinioMediaSource
+from app.publishing.publish_queue import PublishQueue, command_payload
 from app.publishing.metadata import MetadataValidationError, ResolvedMetadata, resolve
 from app.publishing.youtube_oauth import YouTubeOAuthClient
 from app.publishing.youtube_publisher import YouTubePublisher
@@ -86,6 +88,17 @@ ATTEMPT_IN_PROGRESS = "attempt_in_progress"
 # Bounded, because an unbounded retry against a quota-limited API is a way to lose the quota
 # rather than to publish. UNKNOWN never enters this count - it is not a retry path at all.
 DEFAULT_MAX_ATTEMPTS = 3
+
+# The only two statuses a publisher may pick up and run.
+#
+# Everything else is excluded for a specific reason: SUCCEEDED and FAILED_FINAL are settled;
+# CANCELED was withdrawn; UNKNOWN may already exist at the provider and is the one state that
+# must never be executed automatically; IN_PROGRESS is either live or a crash to be classified
+# from evidence, never simply repeated.
+EXECUTABLE_STATUSES = (
+    PublishAttemptStatus.PENDING,
+    PublishAttemptStatus.FAILED_RETRYABLE,
+)
 
 
 @dataclass
@@ -159,11 +172,18 @@ class PublishingService:
         media_source: MinioMediaSource | None = None,
         artifacts: ArtifactContentService | None = None,
         state_machine: PipelineStateMachine | None = None,
+        queue: PublishQueue | None = None,
+        session_factory=None,
     ) -> None:
         self.targets = targets or PublishTargetService()
         self.media_source = media_source or MinioMediaSource()
         self.artifacts = artifacts or ArtifactContentService()
         self.state = state_machine or PipelineStateMachine()
+        self.queue = queue or PublishQueue()
+        # Only used by the progress recorder, which needs a session of its own while the
+        # caller's transaction is open. Injectable so a test can point it at the same
+        # database the test is reading.
+        self._session_factory = session_factory
         self._publisher = publisher
 
     # ------------------------------------------------------------------ publish
@@ -228,14 +248,82 @@ class PublishingService:
             )
 
         report.publication_status = self._publication_status(report.items)
-        report.status = "validated" if dry_run else report.publication_status
+        report.status = "validated" if dry_run else "accepted"
 
         if not dry_run:
-            self._settle_job(db, job, report)
+            # The run enters PUBLISHING on acceptance rather than when the first byte moves.
+            # Between the two there is a queue, and a run sitting in READY_TO_PUBLISH with a
+            # command already in flight would invite a second publish request.
+            if any(item.status == "queued" for item in report.items):
+                if job.state == PipelineState.READY_TO_PUBLISH:
+                    self.state.start_publishing(db, job, actor=actor)
+            self._settle_job(db, job)
+            report.publication_status = job_publication_status(db, job)
 
         report.job_state = job.state.value
         report.duration_ms = _elapsed(started)
         return report
+
+    # ------------------------------------------------------------------- enqueue
+
+    def enqueue_attempt(self, db: Session, attempt: PublishAttempt) -> bool:
+        """Put this attempt's command on the queue and record that it got there.
+
+        Ordering is the same trade admission makes, for the same reason: the row commits
+        first, so the failure mode is a command that was never sent (recoverable by a sweep)
+        rather than a command referring to a row that does not exist.
+        """
+        payload = command_payload(
+            publish_attempt_id=str(attempt.id),
+            pipeline_job_id=str(attempt.pipeline_job_id),
+            target_id=str(attempt.target_id),
+            media_identity=attempt.media_identity or "",
+        )
+        try:
+            self.queue.enqueue(payload)
+        except redis.RedisError as exc:
+            # Deliberately not fatal. The attempt stays committed with enqueued_at NULL,
+            # which is exactly what the sweep looks for; failing the request here would
+            # leave the operator thinking nothing happened when a publication is pending.
+            logger.warning(
+                "publish_enqueue_failed",
+                extra={"publish_attempt_id": str(attempt.id),
+                       "error_type": type(exc).__name__},
+            )
+            return False
+
+        attempt.enqueued_at = datetime.now(timezone.utc)
+        db.commit()
+        return True
+
+    def sweep_pending_enqueue(self, db: Session, *, limit: int = 20) -> int:
+        """Queue commands for attempts that committed but never reached Redis.
+
+        **This is not autopublish.** It only ever looks at PublishAttempt rows, which exist
+        only because someone explicitly asked to publish. It never queries PipelineJob for
+        runs in READY_TO_PUBLISH, and it never creates an attempt - doing either would make
+        the system start publishing on its own, which is precisely what this PR must not do.
+        """
+        stuck = (
+            db.query(PublishAttempt)
+            .filter(
+                PublishAttempt.enqueued_at.is_(None),
+                PublishAttempt.status.in_(EXECUTABLE_STATUSES),
+            )
+            .order_by(PublishAttempt.created_at.asc())
+            .limit(max(1, limit))
+            .all()
+        )
+        recovered = 0
+        for attempt in stuck:
+            if self.enqueue_attempt(db, attempt):
+                recovered += 1
+                logger.info(
+                    "publish_enqueue_recovered",
+                    extra={"publish_attempt_id": str(attempt.id),
+                           "pipeline_job_id": str(attempt.pipeline_job_id)},
+                )
+        return recovered
 
     # --------------------------------------------------------------- validation
 
@@ -416,6 +504,15 @@ class PublishingService:
         if settled is not None:
             return settled
 
+        if attempt.status == PublishAttemptStatus.IN_PROGRESS:
+            # A publisher holds it. Enqueueing again would put a duplicate command behind an
+            # upload that is already in flight.
+            return ItemOutcome(
+                media_identity=item.identity, status="in_progress",
+                attempt_id=str(attempt.id), blocked_by=[ATTEMPT_IN_PROGRESS],
+                notes=["a publisher is already uploading this media"],
+            )
+
         if (
             attempt.attempt_no >= attempt.max_attempts
             and attempt.status == PublishAttemptStatus.FAILED_RETRYABLE
@@ -425,10 +522,100 @@ class PublishingService:
                 blocked_by=[ATTEMPTS_EXHAUSTED], error_code=attempt.error_code,
             )
 
-        # The unique index deduplicates the ROW; this deduplicates the UPLOAD. Found by the
-        # concurrency smoke: two requests raced, one lost the insert, read the winner's row
-        # and cheerfully uploaded the same media a second time. One attempt row, two videos.
-        if not self._claim(db, attempt):
+        # Where the upload used to be. The command goes on the queue and this request
+        # returns; a publisher process claims it, takes the atomic DB claim, and uploads.
+        #
+        # A PENDING attempt that already carries a command is not given a second one. A
+        # FAILED_RETRYABLE one always is: its previous command has been settled - retried,
+        # exhausted, or dead-lettered - so an operator asking again would otherwise get a
+        # silent no-op. A duplicate command is harmless here in a way silence is not, because
+        # the atomic claim still allows exactly one upload.
+        needs_command = (
+            attempt.enqueued_at is None
+            or attempt.status == PublishAttemptStatus.FAILED_RETRYABLE
+        )
+        queued = self.enqueue_attempt(db, attempt) if needs_command else True
+
+        self._emit(db, job, "publish.queued", None, target=target, attempt=attempt)
+        db.commit()
+
+        return ItemOutcome(
+            media_identity=item.identity,
+            status="queued" if queued else "pending_enqueue",
+            attempt_id=str(attempt.id),
+            notes=(
+                [f"idempotency_key={key}"] if queued
+                else ["the queue was unreachable; a sweep will send this command"]
+            ),
+        )
+
+    # ------------------------------------------------------------------ execute
+
+    def execute_attempt(
+        self,
+        db: Session,
+        *,
+        attempt: PublishAttempt,
+        worker_id: str,
+    ) -> ItemOutcome:
+        """Run one publication. The publisher process entry point.
+
+        Everything the upload needs is on the attempt row: the frozen metadata snapshot, the
+        media key, and any resumable session left by a previous execution. The queue command
+        carries four ids and nothing else, so nothing here can be stale relative to what was
+        decided when the publication was accepted.
+        """
+        job = attempt.job
+        target = attempt.target
+        item = MediaItem(
+            identity=attempt.media_identity or "",
+            storage_key=attempt.media_storage_key or "",
+            video_index=int((attempt.payload_json or {}).get("video_index") or 1),
+            video={},
+        )
+
+        if job is None or target is None:
+            return ItemOutcome(
+                media_identity=item.identity, status="blocked", attempt_id=str(attempt.id),
+                blocked_by=["attempt_orphaned"],
+            )
+
+        # The redelivery path. A command whose outcome was committed before its ACK arrives
+        # again, finds the row terminal, and goes no further: provider calls delta zero.
+        settled = self._settled_outcome(attempt, item)
+        if settled is not None:
+            return settled
+
+        if attempt.status not in EXECUTABLE_STATUSES:
+            # IN_PROGRESS reaches here only through recovery, which classifies it from
+            # evidence rather than from the queue lease. It is never simply run again.
+            return ItemOutcome(
+                media_identity=item.identity, status="not_executable",
+                attempt_id=str(attempt.id), blocked_by=[f"attempt_{attempt.status.value}"],
+            )
+
+        blocked_by = self._runtime_preflight(target)
+        if blocked_by:
+            # Paused, not failed: the switch may be flipped back, and spending an attempt on
+            # a policy decision would exhaust the budget for no reason.
+            return ItemOutcome(
+                media_identity=item.identity, status="paused",
+                attempt_id=str(attempt.id), blocked_by=blocked_by,
+            )
+
+        if (
+            attempt.attempt_no >= attempt.max_attempts
+            and attempt.status == PublishAttemptStatus.FAILED_RETRYABLE
+        ):
+            return ItemOutcome(
+                media_identity=item.identity, status="blocked", attempt_id=str(attempt.id),
+                blocked_by=[ATTEMPTS_EXHAUSTED], error_code=attempt.error_code,
+            )
+
+        # Still required, for the same reason as before the queue existed: at-least-once
+        # delivery means a command can arrive twice, and the queue cannot prevent that. The
+        # database can.
+        if not self._claim(db, attempt, worker_id=worker_id):
             db.refresh(attempt)
             settled = self._settled_outcome(attempt, item)
             if settled is not None:
@@ -436,14 +623,37 @@ class PublishingService:
             return ItemOutcome(
                 media_identity=item.identity, status="in_progress",
                 attempt_id=str(attempt.id), blocked_by=[ATTEMPT_IN_PROGRESS],
-                notes=["another request is uploading this media"],
+                notes=["another publisher holds this attempt"],
             )
 
-        return self._upload(db, job=job, target=target, item=item, attempt=attempt,
-                            resolved=resolved, size=size, actor=actor)
+        outcome = self._upload(
+            db, job=job, target=target, item=item, attempt=attempt,
+            resolved=None, size=attempt.media_bytes or 0, actor=worker_id,
+        )
+        self._settle_job(db, job)
+        return outcome
 
     @staticmethod
-    def _claim(db: Session, attempt: PublishAttempt) -> bool:
+    def _runtime_preflight(target: PublishTarget) -> list[str]:
+        """The checks that must still hold at execution time, not only at accept time.
+
+        A kill switch flipped or a target disconnected between accepting a command and
+        running it has to stop the upload. Deliberately not the full preflight: that also
+        checks the run workflow state, which is legitimately PUBLISHING by now.
+        """
+        blocked: list[str] = []
+        if not settings.publishing_enabled:
+            blocked.append(GLOBAL_DISABLED)
+        if not target.is_active:
+            blocked.append(TARGET_DISABLED)
+        if target.connection_status.value == "reconnect_required":
+            blocked.append(TARGET_RECONNECT_REQUIRED)
+        elif not target.refresh_token_encrypted:
+            blocked.append(TARGET_NO_CREDENTIAL)
+        return blocked
+
+    @staticmethod
+    def _claim(db: Session, attempt: PublishAttempt, *, worker_id: str | None = None) -> bool:
         """Take exclusive ownership of this publication, or report that someone else has it.
 
         A conditional UPDATE, so the database decides. ``WHERE status IN (claimable)`` is the
@@ -469,8 +679,14 @@ class PublishingService:
                 status=PublishAttemptStatus.IN_PROGRESS,
                 attempt_no=PublishAttempt.attempt_no + 1,
                 started_at=now,
+                claimed_at=now,
+                publisher_worker_id=worker_id,
                 error_code=None,
                 error_message=None,
+                # Cleared on every claim: it means "this execution has reached the
+                # provider", and a stale value from a previous attempt would make a fresh
+                # execution look like it had already done something remotely.
+                provider_started_at=None,
             )
         )
         db.commit()
@@ -612,9 +828,16 @@ class PublishingService:
         # Status, attempt_no and started_at were set by _claim; setting them again here
         # would let a caller that skipped the claim look like it had one.
         self._emit(db, job, "publish.started", None, target=target, attempt=attempt)
-        db.commit()
 
         resume_uri = self._resume_uri(attempt)
+
+        # Committed BEFORE the provider is touched, and this is the whole point of the
+        # column: if this process dies now, recovery can tell that something may have
+        # reached YouTube. Recording it afterwards would leave exactly the window it exists
+        # to close.
+        attempt.provider_started_at = datetime.now(timezone.utc)
+        db.commit()
+
         started = time.monotonic()
 
         try:
@@ -633,6 +856,7 @@ class PublishingService:
                     metadata=metadata,
                     credential=credential,
                     resume_session_uri=resume_uri,
+                    on_progress=self._progress_recorder(attempt.id),
                 )
                 result = self.publisher().publish(request)
         except MediaUnavailableError as exc:
@@ -658,7 +882,7 @@ class PublishingService:
 
         duration_ms = _elapsed(started)
         outcome = self._record(db, job=job, target=target, attempt=attempt, result=result,
-                               duration_ms=duration_ms, item=item)
+                               duration_ms=duration_ms, item=item, worker_id=actor)
         db.commit()
         return outcome
 
@@ -672,11 +896,54 @@ class PublishingService:
         result: PublishResult,
         duration_ms: int,
         item: MediaItem,
+        worker_id: str | None = None,
     ) -> ItemOutcome:
-        """Write the outcome down. The only place attempt status is decided."""
+        """Write the outcome down. The only place attempt status is decided.
+
+        **Guarded against a resurrected worker.** A process that stalled long enough for its
+        lease to expire, was recovered, and then woke up still holds a live database session
+        and an in-flight result. Without this check it would write that stale result over the
+        outcome the worker that actually finished the job recorded - turning a SUCCEEDED
+        publication into a FAILED_RETRYABLE one, and inviting a retry that duplicates a video
+        that already exists.
+
+        The queue's ownership token stops such a worker acknowledging a command; this stops
+        it corrupting the row. They are separate guards because they protect separate things.
+        """
+        if worker_id is not None:
+            current = (
+                db.query(PublishAttempt.publisher_worker_id, PublishAttempt.status)
+                .filter(PublishAttempt.id == attempt.id)
+                .first()
+            )
+            if current is not None and (
+                current[0] != worker_id
+                or current[1] != PublishAttemptStatus.IN_PROGRESS
+            ):
+                logger.warning(
+                    "publish_outcome_discarded_not_owner",
+                    extra={
+                        "publish_attempt_id": str(attempt.id),
+                        "publisher_worker_id": worker_id,
+                        "current_owner": current[0],
+                        "current_status": current[1].value if current[1] else None,
+                    },
+                )
+                db.rollback()
+                return ItemOutcome(
+                    media_identity=item.identity, status="superseded",
+                    attempt_id=str(attempt.id),
+                    notes=["another publisher settled this attempt while this one was "
+                           "stalled; the stale result was discarded"],
+                )
+
         now = datetime.now(timezone.utc)
         attempt.bytes_uploaded = result.bytes_uploaded
         attempt.provider_metadata_json = result.provider_metadata or None
+        # This execution is over however it ended, so the "may have reached the provider"
+        # flag stops applying. Leaving it set would make a later retry look, to recovery,
+        # like it had already touched YouTube when it had not yet started.
+        attempt.provider_started_at = None
         if result.session_uri:
             attempt.upload_session_uri_encrypted = _encrypt_session(result.session_uri)
 
@@ -750,34 +1017,61 @@ class PublishingService:
 
     # ------------------------------------------------------------ job settlement
 
-    def _settle_job(self, db: Session, job: PipelineJob, report: PublishReport) -> None:
-        """Move the run only when every required publication is confirmed.
+    def _settle_job(self, db: Session, job: PipelineJob) -> None:
+        """Move the run according to every attempt it has, read from the database.
 
-        A run with three clips is not published because the first one uploaded. PUBLISHED is
-        a claim about the whole run, and a partial result that claimed it would quietly lose
-        the two clips nobody ever went back for.
+        **Rewritten for the async runtime.** It used to judge the run from the items in the
+        report it had just produced. That was correct while one request published every clip
+        in a loop; with a queue, a publisher executes exactly one attempt and sees exactly
+        one item, so a run with three clips would have been marked PUBLISHED by whichever
+        one happened to finish first. The siblings still queued would have been forgotten.
+
+        The attempts table is the only complete answer, so it is the one consulted.
         """
-        published = [
-            item for item in report.items
-            if item.status in ("published", "already_published") and item.external_id
-        ]
+        attempts = (
+            db.query(PublishAttempt)
+            .filter(PublishAttempt.pipeline_job_id == job.id)
+            .all()
+        )
+        if not attempts:
+            return
 
-        if report.publication_status == "published" and published:
-            self.state.mark_published(
-                db, job, external_ids=[item.external_id for item in published if item.external_id]
-            )
+        succeeded = [a for a in attempts if a.status == PublishAttemptStatus.SUCCEEDED]
+        status = attempts_publication_status(attempts)
+
+        if status == "published":
+            if job.state == PipelineState.READY_TO_PUBLISH:
+                self.state.start_publishing(db, job, actor="publisher")
+            if job.state == PipelineState.PUBLISHING:
+                self.state.mark_published(
+                    db, job,
+                    external_ids=[a.external_id for a in succeeded if a.external_id],
+                )
+        elif status in ("queued", "in_progress"):
+            # Work is still outstanding. The run stays in PUBLISHING rather than being
+            # released, so nothing invites a second publish request while a command is live.
+            pass
         elif job.state == PipelineState.PUBLISHING:
-            # Anything short of complete goes back to READY_TO_PUBLISH so the remaining
-            # items can be attempted again. Not FAILED: the production is fine.
-            self.state.publish_failed(db, job, reason=report.publication_status)
+            # Nothing is running any more and the run is not complete. Back to
+            # READY_TO_PUBLISH so the remainder can be retried - not FAILED, which would
+            # describe a production that is in fact intact.
+            self.state.publish_failed(db, job, reason=status)
 
         metadata = dict(job.metadata_json or {})
-        metadata["publication_status"] = report.publication_status
+        metadata["publication_status"] = status
         metadata["publication_summary"] = {
-            "total": len(report.items),
-            "published": len(published),
-            "unknown": sum(1 for i in report.items if i.status == "unknown"),
-            "failed": sum(1 for i in report.items if i.status == "failed"),
+            "total": len(attempts),
+            "published": len(succeeded),
+            "queued": sum(1 for a in attempts if a.status == PublishAttemptStatus.PENDING),
+            "in_progress": sum(
+                1 for a in attempts if a.status == PublishAttemptStatus.IN_PROGRESS
+            ),
+            "unresolved": sum(1 for a in attempts if a.needs_human),
+            "failed": sum(
+                1 for a in attempts
+                if a.status in (PublishAttemptStatus.FAILED_RETRYABLE,
+                                PublishAttemptStatus.FAILED_FINAL)
+            ),
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         job.metadata_json = metadata
@@ -785,7 +1079,12 @@ class PublishingService:
 
     @staticmethod
     def _publication_status(items: list[ItemOutcome]) -> str:
-        """What happened to the run as a whole, in one word that does not overstate."""
+        """A summary of the items in ONE report - a dry run, or one accept request.
+
+        Not the run's publication status: that is ``attempts_publication_status``, which
+        reads every attempt from the database. This one cannot see siblings it did not
+        touch, which is exactly the mistake the async runtime made it stop being used for.
+        """
         if not items:
             return "none"
         done = {"published", "already_published"}
@@ -853,6 +1152,38 @@ class PublishingService:
             timeout_sec=settings.youtube_upload_timeout_sec,
             chunk_bytes=settings.youtube_upload_chunk_mib * 1024 * 1024,
         )
+
+    def _progress_recorder(self, attempt_id: Any):
+        """A callback that commits upload progress as it happens.
+
+        Its own short-lived session, because it is called from inside the upload while the
+        outer transaction is open, and a mid-upload commit there would settle work that has
+        not finished. One small UPDATE per chunk - a few dozen for a large video - is the
+        price of a crash being recoverable instead of a duplicate.
+        """
+        from app.db.session import SessionLocal
+
+        factory = self._session_factory or SessionLocal
+
+        def record(session_uri: str | None, bytes_committed: int) -> None:
+            values: dict[str, Any] = {"bytes_uploaded": bytes_committed}
+            if session_uri:
+                encrypted = _encrypt_session(session_uri)
+                if encrypted:
+                    values["upload_session_uri_encrypted"] = encrypted
+
+            db = factory()
+            try:
+                db.execute(
+                    update(PublishAttempt)
+                    .where(PublishAttempt.id == attempt_id)
+                    .values(**values)
+                )
+                db.commit()
+            finally:
+                db.close()
+
+        return record
 
     @staticmethod
     def _resume_uri(attempt: PublishAttempt) -> str | None:
@@ -944,3 +1275,36 @@ def _log(
             "error_code": result.error_code,
         },
     )
+
+
+def attempts_publication_status(attempts: list[PublishAttempt]) -> str:
+    """What has happened to a run's publications, in one word that does not overstate.
+
+    Ordered by what needs attention rather than by what is most common:
+
+    * ``unresolved`` outranks everything except nothing - it is the state that needs a
+      person, and burying it inside "partial" is how a duplicate video gets made later;
+    * ``in_progress`` / ``queued`` are reported as themselves so nobody reads work in
+      flight as work that failed and retries it;
+    * ``published`` requires every attempt to have succeeded, not most of them.
+    """
+    if not attempts:
+        return "none"
+    if all(a.status == PublishAttemptStatus.SUCCEEDED for a in attempts):
+        return "published"
+    if any(a.needs_human for a in attempts):
+        return "unresolved"
+    if any(a.status == PublishAttemptStatus.IN_PROGRESS for a in attempts):
+        return "in_progress"
+    if any(a.status == PublishAttemptStatus.PENDING for a in attempts):
+        return "queued"
+    if any(a.status == PublishAttemptStatus.SUCCEEDED for a in attempts):
+        return "partial"
+    return "failed"
+
+
+def job_publication_status(db: Session, job: PipelineJob) -> str:
+    attempts = (
+        db.query(PublishAttempt).filter(PublishAttempt.pipeline_job_id == job.id).all()
+    )
+    return attempts_publication_status(attempts)

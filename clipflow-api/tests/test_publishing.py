@@ -16,6 +16,7 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
+import fakeredis
 import httpx
 import pytest
 from cryptography.fernet import Fernet
@@ -32,6 +33,8 @@ from app.models.oauth_state import OAuthState
 from app.models.publish_attempt import PublishAttempt
 from app.models.publish_target import PublishTarget
 from app.publishing.contracts import PublishOutcome, PublishResult
+from app.publishing.identity import PublisherHeartbeat
+from app.publishing.publish_queue import PublishQueue
 from app.publishing.media_source import MediaUnavailableError
 from app.publishing.metadata import MetadataValidationError, resolve
 from app.publishing.youtube_oauth import OAuthError, YouTubeOAuthClient
@@ -223,11 +226,128 @@ def make_publishable_run(db, **overrides):
     return make_run(db, **fields)
 
 
+class DrainingPublishingService(PublishingService):
+    """Accept a publication and then run it, in one call.
+
+    PR-PUBLISH-QUEUE-01 moved the upload out of ``publish()`` and behind a queue. The tests
+    in this module are about the publication *rules* - the QA gate, idempotency, metadata,
+    what happens to an ambiguous outcome - and not about the transport, which
+    ``test_publish_queue`` covers. So the harness drains the queue and reports the finished
+    state, which is exactly what these tests meant when the upload was synchronous.
+
+    The production path is untouched: this subclass adds draining and nothing else.
+    """
+
+    def publish(self, db, **kwargs):
+        report = super().publish(db, **kwargs)
+        if kwargs.get("dry_run", True) or report.status == "blocked":
+            return report
+
+        self._drain(db)
+        return self._restate(db, report, kwargs["job"])
+
+    def _drain(self, db, limit: int = 10) -> None:
+        from app.services.publish_runtime import PublisherRuntime
+
+        worker = PublisherRuntime(
+            worker_id="test-publisher",
+            queue=self.queue,
+            publishing=PublishingService(
+                publisher=self._publisher,
+                artifacts=self.artifacts,
+                media_source=self.media_source,
+                targets=self.targets,
+                queue=self.queue,
+            ),
+            heartbeat=PublisherHeartbeat("test-publisher", self.queue.redis),
+            # The runtime closes the session it is handed, which is right in production -
+            # every command gets its own - but here it would detach the objects the test is
+            # still holding. The proxy keeps the shared session open so assertions read the
+            # committed state instead of a stale copy.
+            session_factory=lambda: _UnclosableSession(db),
+        )
+        for _ in range(limit):
+            if not self.queue.depths()["ready"]:
+                self.queue.promote_due_delayed()
+                if not self.queue.depths()["ready"]:
+                    break
+            worker.tick()
+        db.expire_all()
+
+    @staticmethod
+    def _restate(db, report, job):
+        """Rewrite the report from the attempts, now that they have actually run."""
+        from app.services.publishing_service import attempts_publication_status
+
+        db.expire_all()
+        attempts = {
+            a.media_identity: a
+            for a in db.query(PublishAttempt).filter(
+                PublishAttempt.pipeline_job_id == job.id
+            )
+        }
+        mapping = {
+            PublishAttemptStatus.SUCCEEDED: "published",
+            PublishAttemptStatus.UNKNOWN: "unknown",
+            PublishAttemptStatus.NEEDS_MANUAL_RESOLUTION: "requires_manual_resolution",
+            PublishAttemptStatus.FAILED_RETRYABLE: "failed",
+            PublishAttemptStatus.FAILED_FINAL: "failed",
+            PublishAttemptStatus.IN_PROGRESS: "in_progress",
+            PublishAttemptStatus.PENDING: "queued",
+            PublishAttemptStatus.CANCELED: "canceled",
+        }
+        for item in report.items:
+            attempt = attempts.get(item.media_identity)
+            if attempt is None or item.status not in ("queued", "pending_enqueue"):
+                continue
+            item.status = mapping.get(attempt.status, item.status)
+            item.attempt_id = str(attempt.id)
+            item.external_id = attempt.external_id
+            item.external_url = (
+                f"https://www.youtube.com/watch?v={attempt.external_id}"
+                if attempt.external_id else None
+            )
+            item.error_code = attempt.error_code
+            item.retryability = (
+                attempt.retryability.value if attempt.retryability else None
+            )
+
+        report.publication_status = attempts_publication_status(list(attempts.values()))
+        report.status = report.publication_status
+        report.job_state = _reread_state(db, job)
+        return report
+
+
+class _UnclosableSession:
+    """The test session, minus ``close``. Test-only scaffolding."""
+
+    def __init__(self, session):
+        self._session = session
+
+    def close(self):
+        return None
+
+    def __getattr__(self, name):
+        return getattr(self._session, name)
+
+
+def _reread_state(db, job):
+    from app.models.pipeline_job import PipelineJob
+
+    fresh = db.query(PipelineJob).filter(PipelineJob.id == job.id).first()
+    return fresh.state.value if fresh else job.state.value
+
+
 def service(publisher=None, artifacts=None, media=None) -> PublishingService:
-    return PublishingService(
+    return DrainingPublishingService(
         publisher=publisher or StubPublisher(),
         artifacts=artifacts or StubArtifacts(),
         media_source=media or StubMediaSource(),
+        queue=PublishQueue(
+            fakeredis.FakeRedis(decode_responses=True),
+            "test_publish_jobs",
+            worker_id="test-publisher",
+        ),
     )
 
 
@@ -549,7 +669,7 @@ def test_a_run_blocked_by_technical_qa_is_never_published(db):
     report = service().publish(db, job=job, target=target, dry_run=False)
     assert "publication_not_eligible" in report.blocked_by
     assert db.query(PublishAttempt).count() == 0
-    assert job.state == PipelineState.READY_TO_PUBLISH
+    assert _reread_state(db, job) == PipelineState.READY_TO_PUBLISH.value
 
 
 def test_a_run_with_no_eligibility_record_is_refused(db):
@@ -641,7 +761,10 @@ def test_missing_final_media_blocks_that_item(db):
         db, job=job, target=target, dry_run=False
     )
     assert report.items[0].blocked_by == ["final_media_unavailable"]
-    assert report.publication_status == "failed"
+    # No attempt was created, so there is nothing to report a publication status for -
+    # "none" rather than "failed", which would imply something was tried.
+    assert report.publication_status == "none"
+    assert db.query(PublishAttempt).count() == 0
 
 
 # ===========================================================================
@@ -918,7 +1041,7 @@ def test_an_in_progress_attempt_is_not_reported_as_a_failure(db):
 
     report = service().publish(db, job=job, target=target, dry_run=False)
     assert report.publication_status != "failed"
-    assert job.state != PipelineState.PUBLISHED
+    assert _reread_state(db, job) != PipelineState.PUBLISHED.value
 
 
 def test_a_final_failure_is_not_retried(db):
@@ -996,7 +1119,7 @@ def test_an_unknown_outcome_does_not_publish_the_run(db):
     service(publisher=StubPublisher([_unknown_result()])).publish(
         db, job=job, target=target, dry_run=False
     )
-    assert job.state != PipelineState.PUBLISHED
+    assert _reread_state(db, job) != PipelineState.PUBLISHED.value
 
 
 def test_an_unknown_attempt_keeps_its_session_encrypted(db):
@@ -1054,7 +1177,7 @@ def test_reconcile_settles_an_unknown_when_the_session_reports_completion(db):
     assert result["external_id"] == "vid_from_session"
     assert attempt.status == PublishAttemptStatus.SUCCEEDED
     assert attempt.external_id_source == "reconciled"
-    assert job.state == PipelineState.PUBLISHED
+    assert _reread_state(db, job) == PipelineState.PUBLISHED.value
 
 
 def test_reconcile_refuses_to_guess_when_the_session_cannot_answer(db):
@@ -1071,7 +1194,7 @@ def test_reconcile_refuses_to_guess_when_the_session_cannot_answer(db):
 
     assert attempt.status == PublishAttemptStatus.NEEDS_MANUAL_RESOLUTION
     assert result["external_id"] is None
-    assert job.state != PipelineState.PUBLISHED
+    assert _reread_state(db, job) != PipelineState.PUBLISHED.value
 
 
 def test_reconcile_reports_incomplete_when_the_session_is_still_open(db):
@@ -1128,7 +1251,7 @@ def test_an_operator_can_resolve_with_a_verified_video_id(db):
     assert result["external_id"] == "vid_operator"
     assert attempt.external_id_source == "operator"
     assert attempt.provider_metadata_json["verified"] is True
-    assert job.state == PipelineState.PUBLISHED
+    assert _reread_state(db, job) == PipelineState.PUBLISHED.value
 
 
 def test_a_video_id_that_does_not_exist_is_refused(db):
@@ -1177,7 +1300,7 @@ def test_an_operator_can_record_that_nothing_was_published(db):
 
     assert attempt.status == PublishAttemptStatus.FAILED_FINAL
     assert attempt.external_id is None
-    assert job.state == PipelineState.READY_TO_PUBLISH
+    assert _reread_state(db, job) == PipelineState.READY_TO_PUBLISH.value
 
 
 def test_a_started_attempt_cannot_be_cancelled(db):
@@ -1206,7 +1329,7 @@ def test_all_outputs_succeeding_publishes_the_run(db):
 
     assert report.publication_status == "published"
     assert db.query(PublishAttempt).count() == 3
-    assert job.state == PipelineState.PUBLISHED
+    assert _reread_state(db, job) == PipelineState.PUBLISHED.value
 
 
 def test_a_partial_result_does_not_publish_the_run(db):
@@ -1227,7 +1350,7 @@ def test_a_partial_result_does_not_publish_the_run(db):
     )
 
     assert report.publication_status == "partial"
-    assert job.state == PipelineState.READY_TO_PUBLISH
+    assert _reread_state(db, job) == PipelineState.READY_TO_PUBLISH.value
     # The success is kept, not rolled back.
     assert db.query(PublishAttempt).filter(
         PublishAttempt.status == PublishAttemptStatus.SUCCEEDED
@@ -1253,7 +1376,7 @@ def test_one_unknown_among_successes_surfaces_as_unresolved(db):
     # "unresolved" rather than "partial": this one needs a person, and hiding it inside a
     # word that sounds like ordinary progress is how a duplicate video happens later.
     assert report.publication_status == "unresolved"
-    assert job.state != PipelineState.PUBLISHED
+    assert _reread_state(db, job) != PipelineState.PUBLISHED.value
 
 
 def test_resolving_the_last_outstanding_item_publishes_the_run(db):
@@ -1269,7 +1392,7 @@ def test_resolving_the_last_outstanding_item_publishes_the_run(db):
     service(publisher=publisher, artifacts=StubArtifacts(videos=2)).publish(
         db, job=job, target=target, dry_run=False
     )
-    assert job.state != PipelineState.PUBLISHED
+    assert _reread_state(db, job) != PipelineState.PUBLISHED.value
 
     unknown = db.query(PublishAttempt).filter(
         PublishAttempt.status == PublishAttemptStatus.UNKNOWN
@@ -1282,7 +1405,7 @@ def test_resolving_the_last_outstanding_item_publishes_the_run(db):
         client=httpx.Client(transport=httpx.MockTransport(session_completed))
     ).reconcile(db, unknown)
 
-    assert job.state == PipelineState.PUBLISHED
+    assert _reread_state(db, job) == PipelineState.PUBLISHED.value
 
 
 # ===========================================================================
@@ -1360,10 +1483,12 @@ def test_a_failed_publish_releases_the_run_rather_than_failing_it(db):
         ]
     )
 
-    service(publisher=publisher).publish(db, job=job, target=target, dry_run=False)
+    report = service(publisher=publisher).publish(
+        db, job=job, target=target, dry_run=False
+    )
 
-    assert job.state == PipelineState.READY_TO_PUBLISH
-    assert job.state != PipelineState.FAILED
+    assert report.job_state == PipelineState.READY_TO_PUBLISH.value
+    assert report.job_state != PipelineState.FAILED.value
 
 
 def test_the_published_transition_records_the_external_ids(db, no_event_fanout):
