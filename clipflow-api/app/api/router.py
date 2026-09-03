@@ -6,6 +6,7 @@ from app.api import internal_worker
 from app.api import job_events
 from app.api import jobs
 from app.api import ops_stream
+from app.api import pipeline_runs
 from app.api import products
 from app.api import purchases
 from app.api import register
@@ -56,6 +57,13 @@ api_router.include_router(jobs.router)
 # ==========================================
 
 api_router.include_router(ops_stream.router)
+
+
+# ==========================================
+# Pipeline runs (authoritative state lifecycle)
+# ==========================================
+
+api_router.include_router(pipeline_runs.router)
 
 
 # ==========================================

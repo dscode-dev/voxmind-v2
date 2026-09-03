@@ -28,12 +28,14 @@ from app.services.asset_url_service import AssetUrlService
 from app.services.artifact_content_service import ArtifactContentService
 from app.services.audit_service import AuditService
 from app.services.job_artifact_sync import JobArtifactSyncService
+from app.services.pipeline_job_service import PipelineJobService
 
 router = APIRouter()
 asset_url_service = AssetUrlService()
 artifact_content_service = ArtifactContentService()
 audit_service = AuditService()
 job_artifact_sync_service = JobArtifactSyncService()
+pipeline_job_service = PipelineJobService()
 artifact_storage_client = Minio(
     settings.minio_endpoint,
     access_key=settings.minio_access_key,
@@ -270,11 +272,35 @@ def _publish_job(
     *,
     pipeline_stage: str,
     manual_response: dict | None = None,
+    db: Session | None = None,
 ) -> None:
+    """Create the run, then enqueue it.
+
+    Order matters: the PipelineJob exists before the payload reaches Redis, so a worker that
+    claims immediately always finds a run to report against. The reverse would leave a window
+    where the worker holds a pipeline_job_id that resolves to nothing.
+    """
     config = _job_config(job)
+    pipeline_job_id: str | None = None
+    if db is not None:
+        run = pipeline_job_service.create_for_enqueue(
+            db,
+            worker_job_id=str(job.id),
+            source_url=job.source_url,
+            source_storage_key=job.source_storage_key,
+            pipeline_stage=pipeline_stage,
+            clip_mode=config.get("clip_mode", "short_serie"),
+            video_ratio=config.get("video_ratio", "portrait"),
+            preset_id=config.get("preset_id") or config.get("job_preset"),
+            origin="api",
+            metadata={"clip_job_id": str(job.id), "user_id": str(job.user_id)},
+        )
+        pipeline_job_id = str(run.id)
+
     payload = {
         "video_url": job.source_url,
         "job_id": str(job.id),
+        "pipeline_job_id": pipeline_job_id,
         "pipeline_stage": pipeline_stage,
         "manual_response": manual_response,
         "source_type": job.source_type.value,
@@ -289,17 +315,55 @@ def _publish_job(
     _worker_queue().lpush(settings.voxmind_redis_queue, json.dumps(payload))
 
 
-def _publish_prepare_job(job: ClipJob) -> None:
-    _publish_job(job, pipeline_stage=job.pipeline_stage, manual_response=None)
+def _publish_prepare_job(job: ClipJob, db: Session | None = None) -> None:
+    _publish_job(job, pipeline_stage=job.pipeline_stage, manual_response=None, db=db)
 
 
 def _refresh_job_from_artifacts(db: Session, job: ClipJob) -> None:
+    """Reconcile a LEGACY job's status from the objects in storage.
+
+    Since PR-STATE-01 this is a fallback, not the state authority. A job with a PipelineJob
+    has an authoritative state that was reached by a validated transition, and eleven
+    ``stat_object`` probes must not be allowed to overwrite it — the objects say what has
+    been written, not what the run is doing.
+
+    Jobs enqueued before this PR have no run, and for those the old inference is still the
+    only answer available. They are marked as such in the response (``state_source``) rather
+    than being silently mixed in with authoritative ones.
+    """
     if job.status in {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELED}:
+        return
+    if pipeline_job_service.get_by_worker_job_id(db, str(job.id)) is not None:
         return
     try:
         job_artifact_sync_service.sync_job(db=db, job=job)
     except Exception:
         return
+
+
+def _run_view(db: Session, job: ClipJob) -> dict:
+    """The authoritative lifecycle fields for a job, or the legacy fallback.
+
+    Added rather than replacing ``status``: existing clients keep reading the field they
+    already read, and gain ``state``/``state_source`` when they are ready to use them.
+    """
+    run = pipeline_job_service.get_by_worker_job_id(db, str(job.id))
+    if run is None:
+        return {
+            "state": None,
+            "state_source": "legacy_artifact_inference",
+            "pipeline_job_id": None,
+            "attempt": None,
+            "publication_eligibility": None,
+        }
+    view = pipeline_job_service.serialize(run)
+    return {
+        "state": view["state"],
+        "state_source": "pipeline",
+        "pipeline_job_id": view["pipeline_job_id"],
+        "attempt": view["attempt"],
+        "publication_eligibility": view["publication_eligibility"],
+    }
 
 
 def _clip_review_summary(assets: list[ClipAsset]) -> dict[str, int]:
@@ -484,7 +548,7 @@ def create_job(
     db.commit()
     db.refresh(job)
     try:
-        _publish_prepare_job(job)
+        _publish_prepare_job(job, db=db)
     except RedisError as exc:
         job.status = JobStatus.FAILED
         db.add(
@@ -510,6 +574,7 @@ def create_job(
     return {
         "job_id": str(job.id),
         "status": job.status.value,
+        **_run_view(db, job),
         "job_config": _job_config(job),
     }
 
@@ -567,6 +632,7 @@ def job_detail(
     return {
         "id": str(job.id),
         "status": job.status.value,
+        **_run_view(db, job),
         "source_url": job.source_url,
         "pipeline_stage": job.pipeline_stage,
         "created_at": job.created_at,
@@ -772,6 +838,7 @@ def job_delivery_package(
     return {
         "job_id": str(job.id),
         "status": job.status.value,
+        **_run_view(db, job),
         "pipeline_stage": job.pipeline_stage,
         "job_config": _job_config(job),
         "delivery_package": {
@@ -887,6 +954,7 @@ def submit_ai_response(
             job,
             pipeline_stage="finalize",
             manual_response=payload.response_json,
+            db=db,
         )
     except RedisError as exc:
         job.status = JobStatus.FAILED
@@ -1083,6 +1151,7 @@ def job_editorial_context(
     return {
         "job_id": str(job.id),
         "status": job.status.value,
+        **_run_view(db, job),
         "pipeline_stage": job.pipeline_stage,
         "job_config": _job_config(job),
         "qa_report": qa_report if isinstance(qa_report, dict) else None,

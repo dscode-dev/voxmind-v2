@@ -17,6 +17,7 @@ from telegram.ext import (
     ContextTypes,
 )
 
+from .pipeline_run_client import PipelineRunClient
 from .queue_publisher import QueuePublisher
 from .settings import settings
 from .job_registry import JobRegistry
@@ -26,6 +27,7 @@ from .health_server import ControlPlaneHealth
 logger = logging.getLogger(__name__)
 
 publisher = QueuePublisher()
+pipeline_runs = PipelineRunClient()
 registry = JobRegistry()
 
 
@@ -165,6 +167,17 @@ Use --manual para o fluxo legado de prompt/response.json via Telegram.
 
         registry.register(job_id, video_url)
 
+        # Create the run before enqueueing, so a worker that claims immediately always finds
+        # a run to report against.
+        pipeline_job_id = pipeline_runs.create_run(
+            worker_job_id=job_id,
+            source_url=video_url,
+            pipeline_stage="prepare",
+            clip_mode=clip_mode,
+            video_ratio=video_ratio,
+            preset_id=job_preset,
+        )
+
         publisher.publish(
             video_url=video_url,
             job_id=job_id,
@@ -173,6 +186,7 @@ Use --manual para o fluxo legado de prompt/response.json via Telegram.
             video_ratio=video_ratio,
             job_preset=job_preset,
             build_ia=build_ia,
+            pipeline_job_id=pipeline_job_id,
         )
 
         await update.message.reply_text(
@@ -720,11 +734,21 @@ Esse arquivo é informativo e não dispara finalização.
                 + "\n- ".join(warnings[:8])
             )
 
+        # Finalize is the second stage of the same logical job, but the prepare run has
+        # already come to rest waiting for this response. A new run represents the finalize
+        # execution; both share the worker_job_id, so they stay correlated.
+        pipeline_job_id = pipeline_runs.create_run(
+            worker_job_id=job_id,
+            source_url=video_url,
+            pipeline_stage="finalize",
+        )
+
         publisher.publish(
             video_url=video_url,
             job_id=job_id,
             pipeline_stage="finalize",
             manual_response=data,
+            pipeline_job_id=pipeline_job_id,
         )
 
         await update.message.reply_text(

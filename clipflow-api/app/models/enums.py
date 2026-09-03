@@ -127,6 +127,10 @@ class PipelineState(str, enum.Enum):
 
     DISCOVERED = "discovered"
     SELECTED = "selected"
+    # Enqueued and waiting for a worker to claim it. Added in PR-STATE-01: the machine had
+    # no way to say "accepted, not yet running", so a job's first observable state was
+    # DOWNLOADING — after the work had already begun.
+    QUEUED = "queued"
     DOWNLOADING = "downloading"
     DOWNLOADED = "downloaded"
     TRANSCRIBING = "transcribing"
@@ -137,7 +141,14 @@ class PipelineState(str, enum.Enum):
     AI_COMPLETED = "ai_completed"
     RENDERING = "rendering"
     RENDERED = "rendered"
+    # The run finished and its output passed the PR-QA-01 technical gate.
     READY_TO_PUBLISH = "ready_to_publish"
+    # The run finished but its output needs a human before it can go anywhere. Added in
+    # PR-STATE-01 so a blocked render is not filed under a state whose name asserts it is
+    # ready. This is a workflow state (the workflow now waits on a person), not a QA verdict
+    # — the verdict itself stays in publication_eligibility, and QA_AUTO_READY /
+    # QA_NEEDS_REVIEW / QA_BLOCKED are deliberately NOT states.
+    REVIEW_REQUIRED = "review_required"
     PUBLISHING = "publishing"
     PUBLISHED = "published"
     FAILED = "failed"

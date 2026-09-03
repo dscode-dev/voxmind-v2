@@ -271,6 +271,74 @@ Run the seam evaluation:
 python -m evaluation --asr
 ```
 
+## Job state
+
+A run's state is the result of a validated transition, never an inference from which objects
+happen to exist in storage.
+
+```
+producer -> PipelineJob (QUEUED) -> Redis payload {job_id, pipeline_job_id}
+                                          |
+                                       worker claims
+                                          |
+                              stage reports -> internal API
+                                          |
+                              PipelineStateMachine -> PostgreSQL
+                                          |
+                                   PipelineEvent -> SSE
+```
+
+**Three authorities, kept apart.** Redis owns possession of the message — a claim, a retry
+and a dead-letter are queue facts. The worker owns *facts*: the step it is executing, that it
+failed, that it finished. The API owns *state*: it maps a step to a lifecycle state, checks
+the transition and persists it. The worker never writes to the database and never names a
+state, so it cannot route around the rules.
+
+**States.** `QUEUED → DOWNLOADING → DOWNLOADED → TRANSCRIBING → TRANSCRIBED → ANALYZING →
+PROMPT_BUILDING → WAITING_AI → AI_COMPLETED → RENDERING → RENDERED`, then either
+`READY_TO_PUBLISH` or `REVIEW_REQUIRED` depending on PR-QA-01's publication verdict.
+`FAILED` and `CANCELED` are reachable from anywhere in flight. `PUBLISHING`/`PUBLISHED`
+exist for a publisher that does not: **`READY_TO_PUBLISH` is not `PUBLISHED`.**
+
+The `…ED` states are checkpoints, and no worker step means "transcribed" — it just starts
+chunking. So a run may skip forward to any later production state; what is refused is moving
+*backwards*, which is the direction that actually corrupts a timeline.
+
+**Delivery is at-least-once, transitions are idempotent.** A worker may report the same step
+twice (HTTP retry, restart, duplicate delivery), and several steps map to one state — seven
+analysis steps mean one `ANALYZING` transition. Each report is classified:
+
+| Outcome | Meaning |
+|---|---|
+| `applied` | the run moved |
+| `duplicate` | already in that state — no-op, no event |
+| `regression_ignored` | the report is stale; the run is left alone |
+| `not_mapped` | a real step that does not move the lifecycle (recorded as an event) |
+| `invalid` | not an allowed edge |
+
+Concurrent reports are serialised with `SELECT … FOR UPDATE`, so a late report re-reads the
+state the earlier one committed instead of overwriting it.
+
+**Retries reuse the run.** One `PipelineJob` spans every attempt; `retry_count` says which is
+current. Re-queueing is a *command* from the queue runner, not a progress report — the one
+legitimate backwards move, and unreachable from a stage report because no step maps to
+`QUEUED`.
+
+**Identity.** Three ids, not interchangeable:
+
+| Id | Identifies | Notes |
+|---|---|---|
+| `worker_job_id` | where the bytes live (`jobs/<id>/…`, queue payload) | the `ClipJob.id` for API jobs; a bare UUID for Telegram ones |
+| `PipelineJob.id` | the run | created by every producer before enqueueing |
+| `ClipJob.id` | the billing-coupled customer job | absent for Telegram runs — which is why the run cannot hang off it |
+
+**Reads do not touch object storage.** `GET /jobs/{id}/events` and the SSE stream read the
+database. Artifact reconciliation still exists, but as an explicit operation
+(`POST /internal/jobs/{id}/sync-artifacts`) and as the fallback for jobs enqueued before runs
+existed. Those are labelled `state_source: "legacy_artifact_inference"`; authoritative ones
+are `"pipeline"`. The two are never mixed silently, and no history is fabricated for old
+jobs.
+
 ## Two quality gates
 
 A job passes through two independent checks that answer different questions.

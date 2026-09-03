@@ -111,6 +111,11 @@ def run_pipeline(job: dict, queue: ReliableQueue | None = None):
 
     video_url = job.get("video_url")
     job_id = job.get("job_id") or str(uuid.uuid4())
+    # The authoritative run this payload belongs to. Absent on payloads enqueued before
+    # PR-STATE-01: those still run, they just report no lifecycle. The absence is logged once
+    # per job rather than silently tolerated forever.
+    pipeline_job_id = job.get("pipeline_job_id")
+    attempt = job.get("_attempt")
     pipeline_stage = job.get("pipeline_stage", "prepare")
     manual_response = job.get("manual_response")
     source_storage_key = job.get("source_storage_key")
@@ -163,6 +168,16 @@ def run_pipeline(job: dict, queue: ReliableQueue | None = None):
     # ==========================================
 
     settings.pipeline_stage = pipeline_stage
+    if not pipeline_job_id:
+        logger.warning(
+            "Payload carries no pipeline_job_id; this run has no authoritative lifecycle",
+            extra={
+                "job_id": job_id,
+                "pipeline_stage": pipeline_stage,
+                "step": "resolve_run",
+                "status": "legacy_payload",
+            },
+        )
     logger.info(
         f"Starting pipeline {job_id} ({pipeline_stage})",
         extra={
@@ -194,6 +209,9 @@ def run_pipeline(job: dict, queue: ReliableQueue | None = None):
         build_ia=automatic,
         source_storage_key=source_storage_key,
         edit_brief=job.get("edit_brief"),
+        pipeline_job_id=pipeline_job_id,
+        worker_id=WORKER_ID,
+        attempt=attempt,
     )
 
     storage = MinioStorage()
@@ -349,6 +367,8 @@ def run_pipeline(job: dict, queue: ReliableQueue | None = None):
                 pipeline_stage="prepare",
                 status="awaiting_manual_llm",
             )
+            # No completion report here. Prepare ending means the run is waiting for a
+            # response, not that it is finished — the finalize stage is the same run.
             succeeded = True
 
             # Automatic mode attached a follow-up finalize job. Prepare artifacts are now in
@@ -554,6 +574,19 @@ def run_pipeline(job: dict, queue: ReliableQueue | None = None):
                 pipeline_stage="finalize",
                 status="completed",
             )
+            # Settle the run. Eligibility comes from PR-QA-01's fail-closed gate, which
+            # already refuses to grant it when the final media QA did not pass — including
+            # when it did not run at all. The worker forwards that verdict; it does not
+            # compute one, and it never decides that a run is publishable.
+            if pipeline_job_id:
+                eligibility = _publication_eligibility(result)
+                api_client.report_completion_safe(
+                    pipeline_job_id,
+                    publication_eligible=bool(eligibility.get("eligible")),
+                    publication_eligibility=eligibility,
+                    worker_id=WORKER_ID,
+                    attempt=attempt,
+                )
             succeeded = True
             return
 
@@ -612,6 +645,23 @@ def run_pipeline(job: dict, queue: ReliableQueue | None = None):
         )
 
 
+def _publication_eligibility(result: dict) -> dict:
+    """The publication verdict PR-QA-01 computed for this run.
+
+    Fail-closed by construction: a result that carries no verdict is not eligible. A missing
+    field must never read as approval — that is the whole point of the gate.
+    """
+    eligibility = result.get("publication_eligibility")
+    if not isinstance(eligibility, dict):
+        return {
+            "eligible": False,
+            "technical_gate": "unmeasurable",
+            "blocked_by": ["publication_eligibility_unavailable"],
+            "publisher_available": False,
+        }
+    return eligibility
+
+
 def process_claimed_job(
     job: ClaimedJob,
     queue: ReliableQueue,
@@ -628,25 +678,66 @@ def process_claimed_job(
     if heartbeat is not None:
         heartbeat.mark_busy(job)
 
-    logger.info(
-        "Job claimed",
-        extra={
-            "job_id": job.job_id,
-            "pipeline_stage": job.payload.get("pipeline_stage"),
-            "step": "queue_claim",
-            "status": "claimed",
-            "attempt": job.attempt,
-        },
+    pipeline_job_id = job.payload.get("pipeline_job_id")
+    api_client = ClipFlowApiClient()
+    # Bind the run to every log line this job produces, so a transition and the logs that
+    # led to it can be joined on pipeline_job_id as well as job_id.
+    context = log_context(
+        job_id=job.job_id,
+        pipeline_job_id=pipeline_job_id,
+        attempt=job.attempt,
     )
 
+    with context:
+        logger.info(
+            "Job claimed",
+            extra={
+                "job_id": job.job_id,
+                "pipeline_stage": job.payload.get("pipeline_stage"),
+                "step": "queue_claim",
+                "status": "claimed",
+                "attempt": job.attempt,
+            },
+        )
+
+        # Reported AFTER the Redis claim, never before. The queue owns possession of the
+        # message; a state saying a worker is running a job it does not hold would be false.
+        if pipeline_job_id:
+            api_client.report_claim_safe(
+                pipeline_job_id, worker_id=WORKER_ID, attempt=job.attempt
+            )
+
+        return _run_and_settle(job, queue, api_client, pipeline_job_id)
+
+
+def _run_and_settle(
+    job: ClaimedJob,
+    queue: ReliableQueue,
+    api_client: "ClipFlowApiClient",
+    pipeline_job_id: str | None,
+) -> str:
+    """Run the payload and settle it on both the queue and the run lifecycle.
+
+    The queue decides retry-or-dead-letter (PR-RUNTIME-01 owns that, unchanged). The
+    lifecycle mirrors the outcome: a scheduled retry re-queues the SAME run so its history
+    stays in one place, and an exhausted or non-retryable failure marks it failed.
+    """
+    payload = dict(job.payload)
+    payload["_attempt"] = job.attempt
+
     try:
-        run_pipeline(job.payload, queue=queue)
+        run_pipeline(payload, queue=queue)
     except Exception as exc:
         cause = getattr(exc, "cause", None) or exc
         retryable = is_retryable(cause)
 
         if retryable and not job.is_last_attempt:
             delay = queue.retry(job, cause)
+            if pipeline_job_id:
+                # One PipelineJob spans every attempt; retry_count records which is current.
+                api_client.report_retry_safe(
+                    pipeline_job_id, attempt=job.attempt + 1, worker_id=WORKER_ID
+                )
             logger.warning(
                 "Job failed; scheduled for retry",
                 extra={
@@ -664,6 +755,15 @@ def process_claimed_job(
             "attempts_exhausted" if retryable else "non_retryable_failure"
         )
         queue.dead_letter(job, cause, reason=reason)
+        if pipeline_job_id:
+            api_client.report_failure_safe(
+                pipeline_job_id,
+                error_type=type(cause).__name__,
+                error_message=str(cause),
+                attempt=job.attempt,
+                worker_id=WORKER_ID,
+                retryable=retryable,
+            )
         logger.error(
             "Job moved to the dead-letter queue",
             extra={

@@ -38,8 +38,16 @@ def test_terminal_states_have_no_outgoing_transitions():
     assert ALLOWED_TRANSITIONS[PipelineState.CANCELED] == frozenset()
 
 
-def test_failed_can_retry_into_downloading():
-    assert can_transition(PipelineState.FAILED, PipelineState.DOWNLOADING)
+def test_failed_retries_by_re_entering_the_queue():
+    """PR-STATE-01 changed where a retry re-enters.
+
+    It used to jump straight to DOWNLOADING. But a retry is the reliable queue re-delivering
+    the same payload, which a worker then has to claim — so the run goes back to QUEUED and
+    reaches DOWNLOADING again only when someone actually picks it up. Anything else would
+    show a job as downloading while it sat in the queue.
+    """
+    assert can_transition(PipelineState.FAILED, PipelineState.QUEUED)
+    assert not can_transition(PipelineState.FAILED, PipelineState.DOWNLOADING)
     assert can_transition(PipelineState.FAILED, PipelineState.CANCELED)
     # FAILED is recoverable, not terminal.
     assert not is_terminal(PipelineState.FAILED)
@@ -56,7 +64,10 @@ def test_assert_can_transition_raises_on_illegal_edge():
 
 
 def test_assert_can_transition_passes_on_legal_edge():
-    assert_can_transition(PipelineState.SELECTED, PipelineState.DOWNLOADING)
+    # SELECTED now reaches work through QUEUED: a run that has been chosen still has to wait
+    # for a worker, and that wait is a state rather than a gap.
+    assert_can_transition(PipelineState.SELECTED, PipelineState.QUEUED)
+    assert_can_transition(PipelineState.QUEUED, PipelineState.DOWNLOADING)
 
 
 def test_worker_stage_map_targets_are_valid_states():

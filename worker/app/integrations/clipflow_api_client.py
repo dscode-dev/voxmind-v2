@@ -157,6 +157,187 @@ class ClipFlowApiClient:
             )
             return None
 
+
+    # ------------------------------------------------------------------
+    # Authoritative run lifecycle (PR-STATE-01)
+    #
+    # The worker reports facts. It sends the step name it is executing and never a state:
+    # the API owns WORKER_STAGE_TO_STATE and the transition table, so a step cannot smuggle
+    # a state past the rules by naming it. Every call here is best-effort — losing a report
+    # must never fail a job that is otherwise running correctly — and every one is safe to
+    # repeat, because the API classifies duplicates instead of erroring on them.
+    # ------------------------------------------------------------------
+
+    def _post_run(self, path: str, *, json_body: dict | None = None, params: dict | None = None):
+        url = f"{self.base_url}/internal/pipeline-runs/{path}"
+        response = requests.post(
+            url,
+            json=json_body,
+            params=params,
+            headers=self._headers(),
+            timeout=settings.clipflow_api_timeout_sec,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def report_claim_safe(
+        self,
+        pipeline_job_id: str,
+        *,
+        worker_id: str | None = None,
+        attempt: int | None = None,
+    ) -> dict[str, Any] | None:
+        return self._run_call_safe(
+            "report_claim",
+            pipeline_job_id,
+            lambda: self._post_run(
+                f"{pipeline_job_id}/claimed",
+                params={"worker_id": worker_id, "attempt": attempt},
+            ),
+        )
+
+    def report_stage_safe(
+        self,
+        pipeline_job_id: str,
+        *,
+        stage: str,
+        status: str,
+        worker_id: str | None = None,
+        attempt: int | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        return self._run_call_safe(
+            "report_stage",
+            pipeline_job_id,
+            lambda: self._post_run(
+                f"{pipeline_job_id}/stage",
+                json_body={
+                    "stage": stage,
+                    "status": status,
+                    "worker_id": worker_id,
+                    "attempt": attempt,
+                    "metadata": metadata or {},
+                },
+            ),
+        )
+
+    def report_failure_safe(
+        self,
+        pipeline_job_id: str,
+        *,
+        error_type: str,
+        error_message: str,
+        attempt: int | None = None,
+        worker_id: str | None = None,
+        retryable: bool = False,
+    ) -> dict[str, Any] | None:
+        return self._run_call_safe(
+            "report_failure",
+            pipeline_job_id,
+            lambda: self._post_run(
+                f"{pipeline_job_id}/failed",
+                json_body={
+                    "error_type": error_type,
+                    # Truncated here as well as server-side: no reason to put a stack trace
+                    # on the wire to have it thrown away at the other end.
+                    "error_message": str(error_message)[:2000],
+                    "attempt": attempt,
+                    "worker_id": worker_id,
+                    "retryable": retryable,
+                },
+            ),
+        )
+
+    def report_retry_safe(
+        self,
+        pipeline_job_id: str,
+        *,
+        attempt: int | None = None,
+        worker_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        return self._run_call_safe(
+            "report_retry",
+            pipeline_job_id,
+            lambda: self._post_run(
+                f"{pipeline_job_id}/retrying",
+                params={"attempt": attempt, "worker_id": worker_id},
+            ),
+        )
+
+    def report_completion_safe(
+        self,
+        pipeline_job_id: str,
+        *,
+        publication_eligible: bool,
+        publication_eligibility: dict[str, Any] | None = None,
+        worker_id: str | None = None,
+        attempt: int | None = None,
+    ) -> dict[str, Any] | None:
+        return self._run_call_safe(
+            "report_completion",
+            pipeline_job_id,
+            lambda: self._post_run(
+                f"{pipeline_job_id}/completed",
+                json_body={
+                    "publication_eligible": publication_eligible,
+                    "publication_eligibility": publication_eligibility or {},
+                    "worker_id": worker_id,
+                    "attempt": attempt,
+                },
+            ),
+        )
+
+    def record_ai_execution_safe(
+        self,
+        pipeline_job_id: str,
+        *,
+        provider: str,
+        model: str | None = None,
+        purpose: str | None = None,
+        status: str = "succeeded",
+        latency_ms: int | None = None,
+        prompt_chars: int | None = None,
+        fallback_used: bool = False,
+        error_message: str | None = None,
+        attempt: int | None = None,
+    ) -> dict[str, Any] | None:
+        """Record one provider call.
+
+        Token counts and cost are deliberately not sent: this provider layer does not report
+        them, and a fabricated number here would surface as a real cost figure elsewhere.
+        """
+        return self._run_call_safe(
+            "record_ai_execution",
+            pipeline_job_id,
+            lambda: self._post_run(
+                f"{pipeline_job_id}/ai-executions",
+                json_body={
+                    "provider": provider,
+                    "model": model,
+                    "purpose": purpose,
+                    "status": status,
+                    "latency_ms": latency_ms,
+                    "prompt_chars": prompt_chars,
+                    "fallback_used": fallback_used,
+                    "error_message": (error_message or None) and str(error_message)[:500],
+                    "attempt": attempt,
+                },
+            ),
+        )
+
+    def _run_call_safe(self, operation: str, pipeline_job_id: str, call):
+        if not self.enabled or not pipeline_job_id:
+            return None
+        try:
+            return call()
+        except Exception:
+            logger.warning(
+                f"Failed to report to the run lifecycle ({operation})",
+                extra={"pipeline_job_id": pipeline_job_id, "step": operation, "status": "failed"},
+                exc_info=True,
+            )
+            return None
+
     @retry(
         retry=retry_if_exception_type(requests.RequestException),
         wait=wait_exponential(

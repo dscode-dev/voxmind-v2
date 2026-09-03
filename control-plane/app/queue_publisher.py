@@ -24,11 +24,15 @@ class QueuePublisher:
         video_ratio: str = "portrait",
         job_preset: str | None = None,
         build_ia: bool = False,
+        pipeline_job_id: str | None = None,
     ):
 
         payload = {
             "video_url": video_url,
             "job_id": job_id,
+            # The authoritative run. None only when the API could not be reached to create
+            # one; the worker reports that case as a legacy payload rather than assuming.
+            "pipeline_job_id": pipeline_job_id,
             "pipeline_stage": pipeline_stage,
             "manual_response": manual_response,
             "clip_mode": clip_mode,

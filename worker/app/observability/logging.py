@@ -33,6 +33,10 @@ except ModuleNotFoundError:  # pragma: no cover
 # filter on any one, and so the JSON formatter always has the attributes it names.
 LOG_CONTEXT_FIELDS = (
     "job_id",
+    # The authoritative run this execution belongs to (PR-STATE-01). job_id identifies where
+    # the artifacts live; pipeline_job_id identifies the run whose state is being changed.
+    # Both are needed to join a log line to a state transition.
+    "pipeline_job_id",
     "pipeline_stage",
     "step",
     "status",

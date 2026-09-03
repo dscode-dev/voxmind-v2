@@ -70,12 +70,21 @@ class Pipeline:
         build_ia: bool = False,
         source_storage_key: str | None = None,
         edit_brief: str | None = None,
+        pipeline_job_id: str | None = None,
+        worker_id: str | None = None,
+        attempt: int | None = None,
     ):
 
         self.video_url = video_url
         self.source_storage_key = source_storage_key
         self.edit_brief = edit_brief
         self.job_id = job_id
+        # The authoritative run. `job_id` says where the artifacts live; this says which run's
+        # lifecycle these steps belong to. None for a legacy payload enqueued before
+        # PR-STATE-01 — in which case nothing is reported and the job still runs.
+        self.pipeline_job_id = pipeline_job_id
+        self.worker_id = worker_id
+        self.attempt = attempt
         self.manual_response = manual_response
 
         self.preset: ClipPreset = resolve_job_preset(job_preset, clip_mode, video_ratio)
@@ -287,6 +296,7 @@ JOB_ID: {self.job_id}
             f"{step}:{status}",
             extra={
                 "job_id": self.job_id,
+                "pipeline_job_id": self.pipeline_job_id,
                 "pipeline_stage": settings.pipeline_stage,
                 "step": step,
                 "status": status,
@@ -299,6 +309,18 @@ JOB_ID: {self.job_id}
             status=status,
             details=details or {},
         )
+        # The single point where worker progress reaches the authoritative lifecycle. One
+        # call site, not dozens scattered through the pipeline: every step already flows
+        # through here, and the API decides which of them move the state.
+        if self.pipeline_job_id and status == "started":
+            self.clipflow_api.report_stage_safe(
+                self.pipeline_job_id,
+                stage=step,
+                status=status,
+                worker_id=self.worker_id,
+                attempt=self.attempt,
+                metadata=details or {},
+            )
 
     def _write_json_artifact(self, filename: str, payload: object, artifact_name: str) -> Path:
         path = self.work_dir / filename
@@ -715,10 +737,19 @@ para continuar o processamento.
     ) -> None:
         """Publish an AI event as a generic PipelineEvent (service="ai") via the EventBus.
 
-        ``pipeline_job_id`` is left None on purpose: these are global provider-health events
-        (the current worker job is a billing-coupled ClipJob, not a PipelineJob), so the
-        OpsCenter shows them on the global feed without violating the FK."""
-        payload: dict = {"ai_event": event_name, "job_id": self.job_id}
+        These used to be emitted with ``pipeline_job_id=None`` — every AI event in the system
+        was unattributable, because no PipelineJob existed to attribute it to. Since
+        PR-STATE-01 one does, so provider activity is joined to the run that caused it and
+        the Ops Center can answer "which job was that model call for?".
+
+        ``worker_id`` also carried the job id, which made the field useless for identifying a
+        worker. It now carries the worker.
+        """
+        payload: dict = {
+            "ai_event": event_name,
+            "job_id": self.job_id,
+            "attempt": self.attempt,
+        }
         if provider:
             payload["provider"] = provider
         if model:
@@ -733,12 +764,31 @@ para continuar o processamento.
         self.clipflow_api.publish_event_safe(
             service="ai",
             type=ai_events.level_for(event_name),
-            pipeline_job_id=None,
+            pipeline_job_id=self.pipeline_job_id,
             stage="ai",
             message=event_name,
             payload=payload,
-            worker_id=self.job_id,
+            worker_id=self.worker_id,
         )
+
+        # A finished or failed provider call is also an execution record: provider, model and
+        # latency are what the router actually measured. Tokens and cost are omitted because
+        # this provider layer does not report them.
+        if self.pipeline_job_id and event_name in {
+            ai_events.AI_REQUEST_FINISHED,
+            ai_events.AI_PROVIDER_FAILED,
+        }:
+            self.clipflow_api.record_ai_execution_safe(
+                self.pipeline_job_id,
+                provider=provider or "unknown",
+                model=model,
+                purpose="shorts_selection",
+                status="succeeded" if event_name == ai_events.AI_REQUEST_FINISHED else "failed",
+                latency_ms=latency_ms,
+                fallback_used=bool(extra.get("fallback_used")),
+                error_message=error,
+                attempt=self.attempt,
+            )
 
     def _prepare_source_video(self) -> Path:
         video_path = self.work_dir / "source_video.mp4"
@@ -1369,6 +1419,9 @@ Envie o JSON de roteiro/plano de edição para registrar a decisão editorial.
             "qa_report_path": str(self.work_dir / "qa_report.json") if qa_report is not None else None,
             "final_qa_report_path": str(final_qa_report_path) if final_qa_report_path else None,
             "final_media_qa_status": (final_media_report or {}).get("status"),
+            # Surfaced on the result so the run can be settled without re-reading artifacts
+            # from storage. Computed fail-closed by PR-QA-01: absent means not eligible.
+            "publication_eligibility": (automation_report or {}).get("publication_eligibility"),
             "render_plan_path": str(render_plan_path),
             "delivery_package_path": str(delivery_package_path),
             "publish_package_path": str(publish_package_path),

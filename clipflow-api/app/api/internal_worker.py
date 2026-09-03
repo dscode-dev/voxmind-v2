@@ -15,12 +15,14 @@ from app.models.enums import UserRole
 from app.security.auth_middleware import require_internal_api_token
 from app.services.audit_service import AuditService
 from app.services.job_artifact_sync import JobArtifactSyncService
+from app.services.pipeline_job_service import PipelineJobService
 from app.services.private_scheduler_service import PrivateSchedulerService
 
 router = APIRouter()
 artifact_sync_service = JobArtifactSyncService()
 audit_service = AuditService()
 private_scheduler_service = PrivateSchedulerService()
+pipeline_job_service = PipelineJobService()
 
 
 class RuntimeUpdateInput(BaseModel):
@@ -261,11 +263,26 @@ def claim_due_private_scheduler_runs(
             continue
 
         run.status = "dispatched"
+        # The scheduler is the third producer, and it enqueues through the worker rather than
+        # directly — so the run is created here, where the payload is built, for the same
+        # reason it is created before the API's own lpush.
+        scheduler_run = pipeline_job_service.create_for_enqueue(
+            db,
+            worker_job_id=str(job.id),
+            source_url=run.source_url,
+            pipeline_stage="prepare",
+            clip_mode=profile.clip_mode,
+            video_ratio=profile.video_ratio,
+            origin="private_scheduler",
+            metadata={"scheduler_run_id": str(run.id), "profile_id": str(profile.id)},
+            commit=False,
+        )
         claimed_runs.append(
             {
                 "run": private_scheduler_service.serialize_run(run),
                 "job_payload": {
                     "job_id": str(job.id),
+                    "pipeline_job_id": str(scheduler_run.id),
                     "video_url": run.source_url,
                     "pipeline_stage": "prepare",
                     "job_preset": (
@@ -296,6 +313,20 @@ def claim_due_private_scheduler_runs(
             manual_trigger=False,
         )
         run.status = "dispatched" if payload else run.status
+        if payload and payload.get("job_id"):
+            profile_run = pipeline_job_service.create_for_enqueue(
+                db,
+                worker_job_id=str(payload["job_id"]),
+                source_url=payload.get("video_url"),
+                pipeline_stage=str(payload.get("pipeline_stage") or "prepare"),
+                clip_mode=str(payload.get("clip_mode") or "short_serie"),
+                video_ratio=str(payload.get("video_ratio") or "portrait"),
+                preset_id=payload.get("job_preset"),
+                origin="private_scheduler",
+                metadata={"scheduler_run_id": str(run.id), "profile_id": str(profile.id)},
+                commit=False,
+            )
+            payload["pipeline_job_id"] = str(profile_run.id)
         audit_service.log(
             db,
             action="internal.private_scheduler.claim_due",
