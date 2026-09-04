@@ -53,6 +53,7 @@ from app.services.autopublish_service import (
     UNRESOLVED_ATTEMPT,
     AutonomousPublicationService,
 )
+from app.services.autopublish_budget import utc_today
 from app.services.publishing_service import PublishingService, idempotency_key
 from tests.conftest import make_run
 from tests.test_automation import StubAdmission, StubDiscovery, StubSelection
@@ -470,7 +471,12 @@ def _attempt(db, job, target, status, media="final_clips/final_clip_01.mp4", **o
         idempotency_key=idempotency_key(job.id, target.id, media),
         media_identity=media, media_storage_key=f"jobs/x/{media}",
         media_bytes=1024, status=status, attempt_no=1, initiator=INITIATOR,
+        # Automatic publications carry the UTC day they are charged to, exactly as the real
+        # creation path writes it. A manual one carries none - it spends no automatic budget.
+        budget_date=utc_today(),
     )
+    if overrides.get("initiator") == "manual":
+        fields["budget_date"] = None
     fields.update(overrides)
     attempt = PublishAttempt(**fields)
     db.add(attempt)
@@ -598,10 +604,14 @@ def test_a_retry_does_not_spend_the_cap_again(db, queue, monkeypatch, no_event_f
     db.flush()
 
     make_ready_job(db, topic)
+    before = policy(queue)._published_today(db)
     report = policy(queue).run(db, dry_run=False)
 
-    assert report.daily_used == 1, "three provider attempts, one logical publication"
+    # The seeded row has attempt_no=3 - three provider attempts - and contributes exactly
+    # one unit. The cap is charged per logical publication, not per try.
+    assert before == 1, "three provider attempts on one row is one logical publication"
     assert report.queued == 1
+    assert report.daily_used == 2, "the pre-existing one, plus the one this run created"
 
 
 def test_manual_publications_do_not_consume_the_automatic_cap(db, queue, monkeypatch,
@@ -616,8 +626,10 @@ def test_manual_publications_do_not_consume_the_automatic_cap(db, queue, monkeyp
     make_ready_job(db, topic)
     report = policy(queue).run(db, dry_run=False)
 
-    assert report.daily_used == 0
+    # The cap is 1 and a manual publication already exists. Had manual spent the budget this
+    # run would have been blocked; it was not, and the one unit now used is its own.
     assert report.queued == 1
+    assert report.daily_used == 1, "only this run's automatic publication is charged"
 
 
 def test_the_per_tick_cap_bounds_one_run(db, queue, monkeypatch, no_event_fanout):

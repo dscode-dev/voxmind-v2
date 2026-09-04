@@ -25,6 +25,7 @@ from app.models.content_topic import ContentTopic
 from app.models.enums import VideoCandidateStatus
 from app.models.user import User
 from app.models.video_candidate import VideoCandidate
+from app.publishing.identity import AutomationHeartbeat
 from app.security.auth_middleware import get_current_admin
 from app.services.audit_service import AuditService
 from app.services.automation_scheduler import AutomationScheduler
@@ -85,10 +86,26 @@ def automation_status(
     for topic_id, _ in backlog_rows:
         backlog[topic_id] = backlog.get(topic_id, 0) + 1
 
+    runners = AutomationHeartbeat.alive()
     return {
         # The kill switch, and whether this process is the one ticking.
         "enabled": settings.autonomous_pipeline_enabled,
+        # Configuration: this process was TOLD to run a loop.
         "runner_enabled": settings.automation_runner_enabled,
+        # Evidence: a loop has actually ticked recently. PR-SCHEDULER-01 had only the line
+        # above, so a dead task and a quiet one looked identical.
+        "runners_alive": len(runners),
+        "runner_state": _runner_state(runners),
+        "last_tick_at": max(
+            (r.get("last_tick_at") for r in runners if r.get("last_tick_at")),
+            default=None,
+        ),
+        "runners": [
+            {"runner_id": r.get("worker_id"), "state": r.get("state"),
+             "last_tick_at": r.get("last_tick_at"),
+             "last_heartbeat_at": r.get("last_heartbeat_at")}
+            for r in runners
+        ],
         "poll_interval_sec": settings.automation_poll_interval_sec,
         "topics": [
             _serialize_topic_state(topic, states.get(topic.id), backlog.get(topic.id, 0))
@@ -202,6 +219,19 @@ def run_tick(
     """
     report = _scheduler().tick(db)
     return report.as_dict()
+
+
+def _runner_state(runners: list[dict]) -> str:
+    """Three states, because two would hide the interesting one.
+
+    ``disabled``  nobody was asked to run a loop.
+    ``live``      a loop reported a tick within its heartbeat TTL.
+    ``stale``     one was expected and none is reporting - the case that used to be
+                  indistinguishable from ``live``.
+    """
+    if not settings.automation_runner_enabled:
+        return "disabled"
+    return "live" if runners else "stale"
 
 
 def _serialize_topic_state(

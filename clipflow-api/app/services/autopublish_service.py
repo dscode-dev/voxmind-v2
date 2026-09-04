@@ -47,6 +47,11 @@ from app.publishing.identity import PublisherHeartbeat
 from app.publishing.publish_queue import PublishQueue
 from app.services import event_bus
 from app.services.automation_service import AutomationConfig
+from app.services.autopublish_budget import (
+    AutopublishBudget,
+    BudgetUnavailableError,
+    utc_today,
+)
 from app.services.publishing_service import PublishingService
 
 logger = logging.getLogger(__name__)
@@ -83,6 +88,11 @@ QUEUE_BACKPRESSURE = "publish_queue_backpressure"
 DEAD_LETTER_BACKPRESSURE = "publish_dead_letter_backpressure"
 PUBLIC_DISABLED = "public_autopublish_disabled"
 PRIVACY_INVALID = "privacy_invalid"
+# Another replica is allocating. Not a refusal - the work is still eligible, and the next
+# tick will find it.
+BUDGET_LOCKED = "budget_locked"
+# Nothing left to publish for this run: every media item is already accounted for.
+NOTHING_OUTSTANDING = "nothing_outstanding"
 
 # Reasons that are a *policy* pause, not a safety refusal. A run blocked for one of these may
 # still be published by a human — the system is declining to act on its own, not declaring
@@ -101,6 +111,7 @@ POLICY_ONLY_REASONS = frozenset(
         PUBLISHER_UNAVAILABLE,
         QUEUE_BACKPRESSURE,
         DEAD_LETTER_BACKPRESSURE,
+        BUDGET_LOCKED,
     }
 )
 
@@ -116,6 +127,10 @@ class Candidate:
     reasons: list[str] = field(default_factory=list)
     queued_media: list[str] = field(default_factory=list)
     attempt_ids: list[str] = field(default_factory=list)
+    # How many media items this run had left, and how many the budget let it take. Reported
+    # so a partial allocation is visible rather than looking like a complete one.
+    outstanding: int = 0
+    allowance: int = 0
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -126,6 +141,8 @@ class Candidate:
             "reasons": self.reasons,
             "queued_media": self.queued_media,
             "attempt_ids": self.attempt_ids,
+            "outstanding_media": self.outstanding,
+            "allowance": self.allowance,
             # Said explicitly, because it is the question an operator asks next: may I
             # publish this by hand, or is the system telling me it is not fit to publish?
             "manual_publish_still_allowed": all(
@@ -147,6 +164,7 @@ class AutopublishReport:
     blocked_reasons: dict[str, int] = field(default_factory=dict)
     daily_used: int = 0
     daily_remaining: int = 0
+    budget_date: str | None = None
     publisher_workers_alive: int = 0
     queue_backlog: int = 0
     duration_ms: int = 0
@@ -163,6 +181,7 @@ class AutopublishReport:
             "blocked_reasons": self.blocked_reasons,
             "daily_used": self.daily_used,
             "daily_remaining": self.daily_remaining,
+            "budget_date": self.budget_date,
             "publisher_workers_alive": self.publisher_workers_alive,
             "queue_backlog": self.queue_backlog,
             "candidates": [candidate.as_dict() for candidate in self.candidates],
@@ -172,7 +191,10 @@ class AutopublishReport:
     def record(self, candidate: Candidate) -> None:
         self.candidates.append(candidate)
         if candidate.status == "queued":
-            self.queued += 1
+            # Counted in MEDIA ITEMS, not candidates. Before PR-AUTONOMY-HARDEN-01 this was
+            # `+= 1` per run, so a job with three clips spent one unit of a cap of one and
+            # published three videos - the per-tick cap said one and meant "one job".
+            self.queued += max(1, len(candidate.queued_media))
         elif candidate.status == "blocked":
             self.blocked += 1
             for reason in candidate.reasons:
@@ -185,8 +207,11 @@ class AutonomousPublicationService:
         publishing: PublishingService | None = None,
         queue: PublishQueue | None = None,
         heartbeat_reader=None,
+        clock=None,
     ) -> None:
         self.publishing = publishing or PublishingService()
+        # Injected so the day-boundary behaviour is testable without waiting for midnight.
+        self.clock = clock
         self.queue = queue or self.publishing.queue
         # Injected so a test can describe the fleet without a live Redis.
         self._heartbeat_reader = heartbeat_reader or (
@@ -217,7 +242,9 @@ class AutonomousPublicationService:
         )
         per_day = _clamp(settings.autopublish_max_per_day, 0, AUTOPUBLISH_CEILING_PER_DAY)
 
-        report.daily_used = self._published_today(db)
+        budget = AutopublishBudget(db, limit=per_day, clock=self.clock)
+        report.budget_date = budget.date.isoformat()
+        report.daily_used = budget.used()
         report.daily_remaining = max(0, per_day - report.daily_used)
         report.publisher_workers_alive = len(self._workers())
         depths = self._depths()
@@ -238,24 +265,33 @@ class AutonomousPublicationService:
         candidates = self._ready_jobs(db, topic=topic)
         report.considered = len(candidates)
 
-        for job in candidates:
-            if report.queued >= per_tick:
-                report.record(Candidate(
-                    pipeline_job_id=str(job.id), topic_id=_str(job.topic_id),
-                    target_id=None, status="blocked", reasons=[PER_RUN_LIMIT],
-                ))
-                continue
-            if report.queued >= report.daily_remaining:
-                report.record(Candidate(
-                    pipeline_job_id=str(job.id), topic_id=_str(job.topic_id),
-                    target_id=None, status="blocked", reasons=[DAILY_LIMIT],
-                ))
-                continue
-
-            report.record(
-                self._evaluate(db, job, dry_run=dry_run, report=report,
+        if dry_run:
+            # A dry run reads the budget and spends none of it, so it takes no lock: holding
+            # one would let a preview stall a real allocation for no reason.
+            self._evaluate_all(db, candidates, budget=budget, per_tick=per_tick,
+                               dry_run=True, report=report,
                                automation_run_id=automation_run_id, actor=actor)
-            )
+        else:
+            try:
+                with budget.hold():
+                    self._evaluate_all(db, candidates, budget=budget, per_tick=per_tick,
+                                       dry_run=False, report=report,
+                                       automation_run_id=automation_run_id, actor=actor)
+            except BudgetUnavailableError as exc:
+                # Another replica is allocating. Skipping is strictly safer than proceeding
+                # without the lock, and the work stays eligible for the next tick.
+                report.status = "blocked"
+                report.blocked_reasons = {BUDGET_LOCKED: 1}
+                report.duration_ms = _ms(started)
+                logger.info("autopublish_budget_busy", extra={"detail": str(exc)})
+                self._emit_run(db, report, "autopublish.blocked", automation_run_id,
+                               event_type=PipelineEventType.WARNING)
+                return report
+
+        # Re-read after allocating, so the report states what is true now rather than what
+        # was true before this run spent part of it.
+        report.daily_used = budget.used()
+        report.daily_remaining = max(0, per_day - report.daily_used)
 
         report.eligible = sum(
             1 for c in report.candidates if c.status in ("queued", "would_queue")
@@ -266,6 +302,53 @@ class AutonomousPublicationService:
         self._emit_run(db, report, "autopublish.completed", automation_run_id)
         self._log(report, automation_run_id, [])
         return report
+
+    def _evaluate_all(
+        self,
+        db: Session,
+        candidates: list[PipelineJob],
+        *,
+        budget: AutopublishBudget,
+        per_tick: int,
+        dry_run: bool,
+        report: AutopublishReport,
+        automation_run_id: str | None,
+        actor: str | None,
+    ) -> None:
+        """Walk the candidates, spending at most what both caps allow.
+
+        Both caps count **media items**, not runs. Before this PR they counted candidates, so
+        a run with three clips spent one unit of a cap of one and published three videos.
+        """
+        for job in candidates:
+            spent = report.queued
+            tick_left = max(0, per_tick - spent)
+            if tick_left <= 0:
+                report.record(Candidate(
+                    pipeline_job_id=str(job.id), topic_id=_str(job.topic_id),
+                    target_id=None, status="blocked", reasons=[PER_RUN_LIMIT],
+                ))
+                continue
+
+            if dry_run:
+                day_left = max(0, budget.limit - budget.used())
+            else:
+                # Recomputed under the lock, after everything this run has already created.
+                day_left = budget.allocatable(tick_left)
+            if day_left <= 0:
+                report.record(Candidate(
+                    pipeline_job_id=str(job.id), topic_id=_str(job.topic_id),
+                    target_id=None, status="blocked", reasons=[DAILY_LIMIT],
+                ))
+                continue
+
+            report.record(
+                self._evaluate(
+                    db, job, dry_run=dry_run, report=report,
+                    automation_run_id=automation_run_id, actor=actor,
+                    allowance=min(tick_left, day_left), budget=budget,
+                )
+            )
 
     # ------------------------------------------------------------ global gates
 
@@ -330,6 +413,8 @@ class AutonomousPublicationService:
         report: AutopublishReport,
         automation_run_id: str | None,
         actor: str | None,
+        allowance: int,
+        budget: AutopublishBudget,
     ) -> Candidate:
         candidate = Candidate(
             pipeline_job_id=str(job.id), topic_id=_str(job.topic_id),
@@ -429,10 +514,61 @@ class AutonomousPublicationService:
             candidate.reasons.append(blocking)
             return candidate
 
+        # ---- how much of this run may be published now ----------------------
+        #
+        # A run can produce several clips, and each is one unit of budget. Resolving them
+        # here - rather than letting the publish command take all of them - is what makes
+        # both caps exact for multi-clip runs.
+        try:
+            outstanding = self._outstanding_media(db, job, target)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "autopublish_media_unreadable",
+                extra={"pipeline_job_id": str(job.id), "error_type": type(exc).__name__},
+            )
+            candidate.reasons.append("media_unavailable")
+            return candidate
+
+        if not outstanding:
+            # Every media item is accounted for. Which of the two reasons applies matters to
+            # an operator: one means the run is finished, the other that it is mid-flight.
+            unsettled = self._has_unsettled_attempt(db, job, target)
+            candidate.reasons.append(IN_FLIGHT if unsettled else NOTHING_OUTSTANDING)
+            return candidate
+
+        # ---- all of a run, or none of it -------------------------------------
+        #
+        # A run is allocated whole. Publishing three clips of five and leaving the rest is not
+        # safe today: accepting a publication moves the run out of READY_TO_PUBLISH, and the
+        # publisher settles it to PUBLISHED once the attempts it can see have succeeded - so
+        # the two unallocated clips would be silently dropped, with the run reporting success.
+        #
+        # Making the settle logic outstanding-aware would fix that, but it means the publisher
+        # reading publish_package.json on every completion, which is a change to
+        # PR-PUBLISH-QUEUE-01's semantics that this PR is explicitly not making. So the
+        # explicit policy is: a run whose outstanding clips exceed the remaining budget waits
+        # for a tick that can take all of them.
+        #
+        # The cost is named in the report: a run with more clips than the daily cap never
+        # becomes eligible, and needs a larger cap or a manual publication.
+        if len(outstanding) > allowance:
+            candidate.reasons.append(DAILY_LIMIT)
+            candidate.outstanding = len(outstanding)
+            candidate.allowance = allowance
+            return candidate
+
+        # Deterministic, and the order the package declares them in, so a series publishes
+        # first clip first.
+        selection = sorted(outstanding)
+
+        candidate.allowance = len(selection)
+        candidate.outstanding = len(outstanding)
+
         # ---- act ------------------------------------------------------------
         if dry_run:
             candidate.status = "would_queue"
             candidate.reasons = []
+            candidate.queued_media = [f"video_index={index}" for index in selection]
             return candidate
 
         # The same command an admin issues. Preflight runs again inside it and is the
@@ -444,8 +580,12 @@ class AutonomousPublicationService:
             target=target,
             dry_run=False,
             overrides={"privacy": privacy},
+            # Bounded to what the budget allowed. Without this the command publishes every
+            # outstanding clip, and a cap of one becomes a cap of one *job*.
+            media_selection=selection,
             actor=actor or "autopublish",
             initiator=INITIATOR,
+            budget_date=budget.date,
             provenance={
                 "policy_version": POLICY_VERSION,
                 "autopublish_run_id": report.autopublish_run_id,
@@ -472,6 +612,44 @@ class AutonomousPublicationService:
                                  report, automation_run_id,
                                  event_type=PipelineEventType.WARNING)
         return candidate
+
+    @staticmethod
+    def _has_unsettled_attempt(db: Session, job: PipelineJob, target: PublishTarget) -> bool:
+        return (
+            db.query(PublishAttempt.id)
+            .filter(
+                PublishAttempt.pipeline_job_id == job.id,
+                PublishAttempt.target_id == target.id,
+                PublishAttempt.status.in_(
+                    [PublishAttemptStatus.PENDING, PublishAttemptStatus.IN_PROGRESS]
+                ),
+            )
+            .first()
+            is not None
+        )
+
+    def _outstanding_media(
+        self, db: Session, job: PipelineJob, target: PublishTarget
+    ) -> list[int]:
+        """Video indexes of this run that have no publication yet.
+
+        An item already carrying an attempt of any kind is excluded: settled ones are done,
+        and unsettled ones are handled by the whole-run gate above. What remains is exactly
+        what a new allocation could create, which is what the budget must be measured
+        against.
+        """
+        items = self.publishing.resolve_media(db, job)
+        if not items:
+            return []
+
+        taken = {
+            identity
+            for (identity,) in db.query(PublishAttempt.media_identity).filter(
+                PublishAttempt.pipeline_job_id == job.id,
+                PublishAttempt.target_id == target.id,
+            )
+        }
+        return [item.video_index for item in items if item.identity not in taken]
 
     # ------------------------------------------------------------- sub-policies
 
@@ -519,37 +697,21 @@ class AutonomousPublicationService:
         if any(a.status == PublishAttemptStatus.CANCELED for a in attempts):
             # An operator veto. Automation does not overrule it.
             return OPERATOR_CANCELED
-        if any(
-            a.status in (PublishAttemptStatus.PENDING, PublishAttemptStatus.IN_PROGRESS)
-            for a in attempts
-        ):
-            return IN_FLIGHT
-        if all(a.status == PublishAttemptStatus.SUCCEEDED for a in attempts):
-            # Every publication this run has is done. Whether more media remains is the
-            # publishing service's question, and it answers it by finding nothing to do.
-            return None
+        # Deliberately NOT blocking on PENDING or IN_PROGRESS. Once allocation became
+        # per-media (PR-AUTONOMY-HARDEN-01), a whole-run block on those would mean a run that
+        # got one clip published under a tight budget could never publish the rest: the clip
+        # in flight would block its own siblings forever. Per-item deduplication is handled
+        # by `_outstanding_media`, and the publish command re-checks each item anyway.
         return None
 
-    def _published_today(self, db: Session) -> int:
-        """Logical automatic publications started today, in UTC.
+    def _published_today(self, db: Session, limit: int = 0) -> int:
+        """Kept as a thin read for callers that only want the number.
 
-        Counts attempt ROWS, which is what "a logical publication" means here: one row per
-        job/target/media, created once and retried in place. A retry therefore does not spend
-        the cap again, and neither does a queue redelivery or a provider call.
-
-        One PipelineJob can produce several videos, and each is counted - the cap is about how
-        much reaches the channel, not how many runs were involved.
+        Delegates to the budget so there is one query, used by both the read model and the
+        enforcement path — a second implementation is how a status page starts disagreeing
+        with the thing it reports on.
         """
-        since = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-        return int(
-            db.query(func.count(PublishAttempt.id))
-            .filter(
-                PublishAttempt.initiator == INITIATOR,
-                PublishAttempt.created_at >= since,
-            )
-            .scalar()
-            or 0
-        )
+        return AutopublishBudget(db, limit=limit, clock=self.clock).used()
 
     # ------------------------------------------------------------------ status
 
@@ -557,7 +719,10 @@ class AutonomousPublicationService:
         """The read model: what the policy would do right now, and why."""
         depths = self._depths()
         per_day = _clamp(settings.autopublish_max_per_day, 0, AUTOPUBLISH_CEILING_PER_DAY)
-        used = self._published_today(db)
+        # The same object and the same query the enforcement path uses, so the number an
+        # operator reads cannot disagree with the number that decides.
+        budget = AutopublishBudget(db, limit=per_day, clock=self.clock)
+        snapshot = budget.snapshot()
         workers = self._workers()
 
         ready = db.query(func.count(PipelineJob.id)).filter(
@@ -579,9 +744,10 @@ class AutonomousPublicationService:
             "max_per_tick": _clamp(
                 settings.autopublish_max_per_tick, 0, AUTOPUBLISH_CEILING_PER_TICK
             ),
-            "daily_cap": per_day,
-            "daily_used": used,
-            "daily_remaining": max(0, per_day - used),
+            "daily_cap": snapshot["daily_limit"],
+            "daily_used": snapshot["daily_used"],
+            "daily_remaining": snapshot["daily_remaining"],
+            "budget_date": snapshot["budget_date"],
             "publisher_workers_alive": len(workers),
             "publisher_workers": [w.get("worker_id") for w in workers],
             "queue": depths,

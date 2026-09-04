@@ -28,6 +28,7 @@ import logging
 
 from app.core.settings import settings
 from app.db.session import SessionLocal
+from app.publishing.identity import AutomationHeartbeat, resolve_runner_id
 from app.services.automation_scheduler import AutomationScheduler
 
 logger = logging.getLogger(__name__)
@@ -36,8 +37,17 @@ logger = logging.getLogger(__name__)
 class AutomationRunner:
     """Owns the asyncio task. One per process."""
 
-    def __init__(self, scheduler: AutomationScheduler | None = None) -> None:
+    def __init__(
+        self,
+        scheduler: AutomationScheduler | None = None,
+        heartbeat: AutomationHeartbeat | None = None,
+    ) -> None:
         self._scheduler = scheduler or AutomationScheduler()
+        self.runner_id = resolve_runner_id()
+        # PR-AUTONOMY-HARDEN-01: without this, `runner_enabled` was the only observable fact
+        # about the loop, and it is a configuration flag - it says the process was told to
+        # run one, not that one is running. A TTL key says the second thing.
+        self._heartbeat = heartbeat or AutomationHeartbeat(self.runner_id)
         self._task: asyncio.Task | None = None
         self._stopping = asyncio.Event()
 
@@ -55,6 +65,7 @@ class AutomationRunner:
             logger.warning("automation_runner_already_running")
             return
         self._stopping.clear()
+        self._heartbeat.beat(state="starting")
         self._task = asyncio.create_task(self._loop(), name="automation-scheduler")
         logger.info(
             "automation_runner_started",
@@ -83,6 +94,9 @@ class AutomationRunner:
             pass
         finally:
             self._task = None
+            # Dropped on a clean stop so the runner disappears at once; on an unclean one the
+            # TTL does the same job a minute later, which is why the TTL is the mechanism.
+            self._heartbeat.stop()
             logger.info("automation_runner_stopped")
 
     async def _loop(self) -> None:
@@ -92,6 +106,9 @@ class AutomationRunner:
 
         while not self._stopping.is_set():
             await self._run_one_tick()
+            # After the tick, not before: a heartbeat that only proved the loop was awake
+            # would keep beating while every tick raised.
+            self._heartbeat.beat(state="idle", last_tick_at=_now_iso())
             await self._sleep(settings.automation_poll_interval_sec)
 
     async def _run_one_tick(self) -> None:
@@ -126,6 +143,12 @@ class AutomationRunner:
             await asyncio.wait_for(self._stopping.wait(), timeout=seconds)
         except asyncio.TimeoutError:
             return
+
+
+def _now_iso() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _tick_fields(report) -> dict:

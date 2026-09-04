@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import (
     BigInteger,
+    Date,
     DateTime,
     Enum,
     ForeignKey,
@@ -59,6 +60,8 @@ class PublishAttempt(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         # The daily autopublish cap counts rows here; without an index it would scan every
         # publication ever made, on every tick.
         Index("ix_publish_attempts_initiator_created", "initiator", "created_at"),
+        # The authoritative budget query: automatic publications charged to one UTC day.
+        Index("ix_publish_attempts_budget", "budget_date", "initiator"),
     )
 
     pipeline_job_id: Mapped[uuid.UUID] = mapped_column(
@@ -82,6 +85,19 @@ class PublishAttempt(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     initiator: Mapped[str] = mapped_column(
         String(16), nullable=False, default="manual", server_default="manual"
     )
+
+    # The UTC day this publication is charged to, for the automatic daily budget.
+    #
+    # A column of its own rather than a range query over ``created_at``, for two reasons that
+    # both matter to a safety cap. ``created_at`` defaults to ``datetime.utcnow`` - a *naive*
+    # value - so a timestamptz comparison against it resolves through the session timezone,
+    # which makes the budget's day boundary depend on the container's TZ. And an equality
+    # test on a stored date is exact and index-backed, where a half-open range over a
+    # timestamp is neither.
+    #
+    # NULL for manual publications: they do not consume the automatic budget, so they have no
+    # day to be charged to.
+    budget_date: Mapped[date | None] = mapped_column(Date, nullable=True)
 
     # ---------------------------------------------------------------- identity
     # publish:<pipeline_job_id>:<target_id>:<media_identity>:v1 — deterministic, derived

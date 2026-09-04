@@ -949,6 +949,108 @@ curl -X PUT localhost:8010/admin/publish-targets/{id} -d '{"autopublish_enabled"
 3. Only then `AUTOPUBLISH_PUBLIC_ENABLED=true`, and set `default_privacy` on the specific
    targets that should go public.
 
+## Operational health
+
+`/health` and `/ready` answer *is this container working* — they are what an orchestrator
+watches. `GET /admin/operations/health` answers *is the product working*. The two are
+deliberately different endpoints: a YouTube token expiring is a real problem and a real signal,
+and it must never make Docker restart a perfectly healthy API.
+
+For the same reason it returns **200 with a status field**, not a 5xx. The request succeeded;
+the answer is that the product is degraded.
+
+```json
+{"status": "degraded",
+ "signals": [{"code": "unresolved_publications", "severity": "high", "active": true,
+              "message": "1 publication(s) need a human decision",
+              "metadata": {"count": 1, "oldest_age_sec": 7200}}]}
+```
+
+| Signal | Condition | Severity |
+|---|---|---|
+| `publisher_down` | publishing on, work waiting, no publisher alive | critical |
+| `unresolved_publications` | any `UNKNOWN` / `NEEDS_MANUAL_RESOLUTION` attempt | high |
+| `publish_dead_letters` | dead letter at or above the threshold | high |
+| `stalled_publish_queue` | a publication has waited past the window with a live publisher and none settling | high |
+| `automation_runner_stale` | automation enabled, no runner heartbeat | high |
+| `target_reconnect_required` | an **active** target has lost its credential | high |
+| `repeated_automation_failure` | a topic's consecutive failures at or above the threshold | medium |
+
+Signals are derived each time they are asked for. Nothing is materialised and nothing needs
+acknowledging: when the condition stops holding, the signal stops being active. A stored alert
+that outlives its cause is one operators learn to ignore.
+
+Every one is written not to cry wolf. Publishing switched off does not raise `publisher_down`.
+A deep queue that is draining is not a stall. An inactive target that needs reconnecting is
+nobody's problem. One dead letter is not a pile.
+
+### Is the loop actually running?
+
+`GET /admin/automation/status` now separates two things that used to look identical:
+
+```
+runner_enabled   configuration: this process was TOLD to run a loop
+runner_state     evidence: disabled | live | stale
+last_tick_at     when a loop last completed a tick
+```
+
+The runner writes a Redis heartbeat **after** each tick — after, so a loop whose every tick
+raises does not keep reporting itself healthy. A configuration flag could never say this, and
+before PR-AUTONOMY-HARDEN-01 it was the only thing on offer.
+
+## Publication budget
+
+`AUTOPUBLISH_MAX_PER_DAY` is enforced, not observed. It used to be read once and then spent,
+so two replicas ticking together both saw the same remaining figure and both took it:
+
+```
+replica A   count -> 2   remaining 1   creates #3
+replica B   count -> 2   remaining 1   creates #4     cap breached
+```
+
+Allocation is now serialised by a session-scoped PostgreSQL advisory lock, and usage is
+**recomputed inside it** before every unit. The authority is the publication rows themselves,
+not a counter beside them — a counter is a second truth that drifts from the first the moment
+an attempt creation fails after it moved.
+
+The lock is session-scoped rather than `pg_advisory_xact_lock` (which the rest of the codebase
+uses) because creating a publication commits several times inside the publish command, and a
+transaction-scoped lock would be released by the first of those — leaving the rest of the
+allocation unprotected, which is exactly the window being closed.
+
+**One unit is one logical external publication:** one media item, on one target, once.
+
+| Spends a unit | Does not |
+|---|---|
+| a new automatic `PublishAttempt` row | a retry (`attempt_no + 1` on the same row) |
+| each clip of a multi-clip run | a queue redelivery or a provider call |
+| | a manual publication (`initiator = manual`, no `budget_date`) |
+| | an attempt an operator canceled |
+
+The day is **UTC**, from a `budget_date` column written at creation — never a range over
+`created_at`, whose naive default would resolve through the container's timezone and make the
+boundary mean different things to replicas in different zones.
+
+**A run is allocated whole.** If a run's outstanding clips exceed the remaining budget it waits
+for a tick that can take all of them, rather than publishing some. Publishing three of five and
+leaving the rest is not safe today: accepting a publication moves the run out of
+`READY_TO_PUBLISH`, and the publisher settles it to `PUBLISHED` once the attempts it can see
+have succeeded — so the unallocated clips would be silently dropped. The cost is real and named
+in the debt: a run with more clips than the daily cap needs a larger cap or a manual publish.
+
+## Publication spool hygiene
+
+`MinioMediaSource` spools media to `/tmp/clipflow-publish-*.mp4` and deletes it in a `finally`.
+`finally` does not run on `SIGKILL`, and a spool is the size of a video. The publisher sweeps
+at startup — which is precisely when the leftovers of a dead process are there and nothing is
+using them.
+
+Two rules, both load-bearing: the name must match the prefix *and* suffix this codebase writes,
+so an unrelated file sharing the directory is never touched; and the file must be older than
+`PUBLISH_TEMP_STALE_SEC` (6h), comfortably longer than any upload, so a spool a live publisher
+is streaming from right now survives. The second rule is what makes it safe if publishers ever
+share a volume — they do not today, but that is a compose edit away from changing.
+
 ## Job state
 
 A run's state is the result of a validated transition, never an inference from which objects

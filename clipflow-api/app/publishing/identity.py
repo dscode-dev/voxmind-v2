@@ -28,6 +28,10 @@ from app.core.settings import settings
 logger = logging.getLogger(__name__)
 
 WORKER_KEY_PREFIX = "clipflow_publish:workers"
+# The automation runner uses the same mechanism under its own prefix. PR-SCHEDULER-01 shipped
+# it with none, so `runner_enabled` - a configuration flag - was the only thing anyone could
+# read, and a dead loop was indistinguishable from a quiet one.
+AUTOMATION_KEY_PREFIX = "clipflow_automation:runners"
 
 
 def resolve_worker_id() -> str:
@@ -47,6 +51,8 @@ def resolve_worker_id() -> str:
 class PublisherHeartbeat:
     """Announces that this process is alive, and reads who else is."""
 
+    prefix = WORKER_KEY_PREFIX
+
     def __init__(
         self,
         worker_id: str,
@@ -60,7 +66,7 @@ class PublisherHeartbeat:
 
     @property
     def key(self) -> str:
-        return f"{WORKER_KEY_PREFIX}:{self.worker_id}"
+        return f"{self.prefix}:{self.worker_id}"
 
     def beat(self, **fields: Any) -> None:
         """Refresh the key. Never raises: a publisher must not die because Redis blinked."""
@@ -100,7 +106,7 @@ class PublisherHeartbeat:
         client = redis_client or _default_redis()
         workers: list[dict[str, Any]] = []
         try:
-            for key in client.scan_iter(match=f"{WORKER_KEY_PREFIX}:*", count=100):
+            for key in client.scan_iter(match=f"{cls.prefix}:*", count=100):
                 raw = client.get(key)
                 if raw is None:
                     continue
@@ -127,3 +133,30 @@ def _default_redis() -> redis.Redis:
         port=settings.voxmind_redis_port,
         decode_responses=True,
     )
+
+
+class AutomationHeartbeat(PublisherHeartbeat):
+    """Liveness for the in-process scheduler loop.
+
+    Identical mechanism, separate namespace. The scheduler runs inside the API, so a process
+    can be serving HTTP perfectly while its automation task has died - which is exactly the
+    state PR-SCHEDULER-01 could not report and this makes visible.
+    """
+
+    prefix = AUTOMATION_KEY_PREFIX
+
+    def __init__(self, worker_id: str, redis_client=None, *, ttl_sec: int | None = None):
+        super().__init__(
+            worker_id, redis_client,
+            ttl_sec=ttl_sec or settings.automation_heartbeat_ttl_sec,
+        )
+
+
+def resolve_runner_id() -> str:
+    """A stable id for this API process's automation loop."""
+    configured = str(os.environ.get("AUTOMATION_RUNNER_ID") or "").strip()
+    if configured:
+        return configured
+    hostname = (socket.gethostname() or "").strip()
+    suffix = uuid.uuid4().hex[:8]
+    return f"runner-{hostname}-{suffix}" if hostname else f"runner-{suffix}"

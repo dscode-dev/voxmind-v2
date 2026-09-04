@@ -279,6 +279,11 @@ class Settings(BaseSettings):
     automation_runner_enabled: bool = Field(
         default=True, alias="AUTOMATION_RUNNER_ENABLED"
     )
+    # How long a runner's heartbeat survives without a tick. Comfortably more than one poll
+    # interval, so a slow tick is not mistaken for a dead loop.
+    automation_heartbeat_ttl_sec: int = Field(
+        default=180, alias="AUTOMATION_HEARTBEAT_TTL_SEC"
+    )
 
     # Application logs are dropped without a handler on the root logger: uvicorn configures
     # only its own loggers, so everything the application reports would go nowhere. INFO is
@@ -421,6 +426,29 @@ class Settings(BaseSettings):
     autopublish_max_dead_letter: int = Field(
         default=10, alias="AUTOPUBLISH_MAX_DEAD_LETTER"
     )
+
+    # =====================================
+    # Operational signals and hygiene (PR-AUTONOMY-HARDEN-01)
+    # =====================================
+
+    # Enough dead-lettered commands to be a pattern rather than one bad publication.
+    operations_dead_letter_threshold: int = Field(
+        default=3, alias="OPERATIONS_DEAD_LETTER_THRESHOLD"
+    )
+    # How long work may sit with a live publisher and nothing settling before it is called a
+    # stall. Longer than a large upload, so draining a backlog is not mistaken for one.
+    operations_stall_window_sec: int = Field(
+        default=1800, alias="OPERATIONS_STALL_WINDOW_SEC"
+    )
+    # Consecutive automation failures for one topic before it is worth saying so.
+    operations_failure_threshold: int = Field(
+        default=3, alias="OPERATIONS_FAILURE_THRESHOLD"
+    )
+
+    # A publication spool older than this was left by a process that no longer exists:
+    # `finally` does not run on SIGKILL. Comfortably longer than any single upload, so a file
+    # a live publisher is still streaming from is never removed.
+    publish_temp_stale_sec: int = Field(default=21_600, alias="PUBLISH_TEMP_STALE_SEC")
 
     # =====================================
     # Validation

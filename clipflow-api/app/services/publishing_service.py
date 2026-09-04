@@ -200,6 +200,7 @@ class PublishingService:
         actor: str | None = None,
         initiator: str = "manual",
         provenance: dict[str, Any] | None = None,
+        budget_date=None,
     ) -> PublishReport:
         """Accept a publication, or validate that one could be accepted.
 
@@ -253,6 +254,7 @@ class PublishingService:
                     db, job=job, target=target, item=item, package=package,
                     overrides=overrides, dry_run=dry_run, actor=actor,
                     initiator=initiator, provenance=provenance,
+                    budget_date=budget_date,
                 )
             )
 
@@ -457,6 +459,7 @@ class PublishingService:
         actor: str | None,
         initiator: str = "manual",
         provenance: dict[str, Any] | None = None,
+        budget_date=None,
     ) -> ItemOutcome:
         key = idempotency_key(job.id, target.id, item.identity)
 
@@ -507,7 +510,7 @@ class PublishingService:
 
         attempt = existing or self._create_attempt(
             db, job=job, target=target, item=item, key=key, size=size, resolved=resolved,
-            initiator=initiator, provenance=provenance,
+            initiator=initiator, provenance=provenance, budget_date=budget_date,
         )
 
         # Re-checked here and not only above: _create_attempt can return a row this request
@@ -752,6 +755,7 @@ class PublishingService:
         resolved: ResolvedMetadata,
         initiator: str = "manual",
         provenance: dict[str, Any] | None = None,
+        budget_date=None,
     ) -> PublishAttempt:
         """Commit the attempt before anything is sent.
 
@@ -772,6 +776,10 @@ class PublishingService:
             # Recorded on the row, not reconstructed from an audit log later: "was this
             # video published by a person?" is a question about the publication itself.
             initiator=initiator,
+            # The UTC day this publication is charged to. Written at creation, inside the
+            # allocation lock, so the row that spends the budget is the row that records
+            # having spent it - there is no counter to drift from.
+            budget_date=budget_date,
             payload_json={
                 "metadata": resolved.as_snapshot(),
                 "video_index": item.video_index,

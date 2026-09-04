@@ -9,6 +9,7 @@ from app.api import job_events
 from app.api import jobs
 from app.api import ops_stream
 from app.api import pipeline_runs
+from app.api import operations
 from app.api import publishing
 from app.api import products
 from app.api import purchases
@@ -46,6 +47,13 @@ api_router.include_router(automation.router)
 # ==========================================
 
 api_router.include_router(publishing.router)
+
+
+# ==========================================
+# Operations (product health, distinct from process health)
+# ==========================================
+
+api_router.include_router(operations.router)
 
 
 # ==========================================
