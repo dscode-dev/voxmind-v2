@@ -5,3 +5,9 @@ k8s/
 __pycache__
 node_modules
 clipflow-studio
+
+# Environment backups hold the same real secrets the .env does.
+.env.backup*
+
+# Media used for local smokes. Large, and not part of the product.
+*.mp4

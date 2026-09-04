@@ -160,6 +160,12 @@ def youtube_callback(
         target = service.complete_connect(db, code=code, state_value=state)
     except ConnectError as exc:
         db.rollback()
+        # Logged as well as returned. A failed consent otherwise leaves only a 400 in the
+        # access log and the reason on a browser tab the operator has already closed, which
+        # is the hardest possible way to debug a flow that cannot simply be retried.
+        # The message carries Google's error *code*, never its description, which can echo
+        # request parameters.
+        logger.warning("publish_target_connect_failed", extra={"reason": str(exc)[:120]})
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ProviderNotConfiguredError as exc:
         db.rollback()

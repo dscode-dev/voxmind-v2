@@ -85,10 +85,52 @@ services:
       timeout: 5s
       retries: 20
 
+  # ==========================================================================
+  # ClipFlow Studio - the operations console.
+  #
+  # A SEPARATE REPOSITORY. It is referenced here only as a build context so one
+  # `docker compose up` brings the whole product up on a host; no code crosses the
+  # boundary in either direction, and the Studio talks to the API over HTTP like any
+  # other client.
+  #
+  # One image serves every environment: the browser configuration is written into
+  # dist/runtime-config.js when the container starts, from the variables below. That is
+  # why CLIPFLOW_PUBLIC_HOST matters - the browser resolves the API itself, so the URL
+  # must be one the *browser* can reach, not one that only works inside the network.
+  # ==========================================================================
+  clipflow-studio:
+    build:
+      context: ./clipflow-studio
+      # Overridable so a machine that needs a build-time workaround (a TLS-inspecting
+      # proxy, an internal registry) does not have to edit a committed Dockerfile.
+      dockerfile: ${CLIPFLOW_STUDIO_DOCKERFILE:-Dockerfile}
+    image: ${CLIPFLOW_STUDIO_IMAGE:-clipflow-studio:local}
+    container_name: clipflow-studio
+    restart: unless-stopped
+    depends_on:
+      clipflow-api:
+        condition: service_healthy
+    environment:
+      # Where the BROWSER reaches the API. On a LAN server this is the host's address, not
+      # `clipflow-api` - that name only resolves inside the Compose network.
+      VITE_CLIPFLOW_API_BASE: http://${CLIPFLOW_PUBLIC_HOST:-localhost}:${CLIPFLOW_API_PORT:-8010}
+      # The session is an HttpOnly cookie on the API's origin, so cross-origin requests
+      # must carry credentials. The API must also list this origin in CORS_ALLOWED_ORIGINS.
+      VITE_CLIPFLOW_WITH_CREDENTIALS: "true"
+      VITE_CLIPFLOW_BASENAME: ${CLIPFLOW_STUDIO_BASENAME:-/}
+      VITE_CLIPFLOW_SSE_ENABLED: ${CLIPFLOW_STUDIO_SSE_ENABLED:-true}
+    ports:
+      - "${CLIPFLOW_STUDIO_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:3000/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
   clipflow-api:
     build:
       context: ./clipflow-api
-      dockerfile: Dockerfile
+      dockerfile: ${CLIPFLOW_API_DOCKERFILE:-Dockerfile}
     image: ${CLIPFLOW_API_IMAGE:-clipflow-api:local}
     container_name: clipflow-api
     restart: unless-stopped
@@ -107,7 +149,9 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       COOKIE_SECURE: ${COOKIE_SECURE}
       COOKIE_SAMESITE: ${COOKIE_SAMESITE}
-      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS}
+      # Must include the Studio's browser origin, or every request from it is blocked
+      # before it reaches the API. Defaults to the Studio this compose file starts.
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://${CLIPFLOW_PUBLIC_HOST:-localhost}:${CLIPFLOW_STUDIO_PORT:-3000}}
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
       YOUTUBE_API_KEY: ${YOUTUBE_API_KEY:-}
       DISCOVERY_MAX_RESULTS: ${DISCOVERY_MAX_RESULTS:-25}
@@ -204,7 +248,7 @@ services:
   clipflow-publisher:
     build:
       context: ./clipflow-api
-      dockerfile: Dockerfile
+      dockerfile: ${CLIPFLOW_API_DOCKERFILE:-Dockerfile}
     image: ${CLIPFLOW_API_IMAGE:-clipflow-api:local}
     container_name: clipflow-publisher
     restart: unless-stopped

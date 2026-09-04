@@ -988,10 +988,24 @@ class PublishingService:
             attempt.external_id = result.external_id
             attempt.external_id_source = "provider"
             attempt.finished_at = now
-            # The session is spent and it is a credential; there is no reason to keep it.
-            attempt.upload_session_uri_encrypted = None
             target.last_used_at = now
+
+            # The session is spent and it is a credential; there is no reason to keep it.
+            #
+            # Issued as an explicit UPDATE rather than by assigning None to the attribute.
+            # The progress recorder writes this column from its own session while the upload
+            # runs, so by the time we get here the row on disk holds a session URI that this
+            # session has never seen - it still believes the value is the NULL it loaded.
+            # Assigning None would therefore be a no-op for the unit of work, no UPDATE would
+            # be emitted, and the spent credential would survive the publication it belonged
+            # to. Found by the first real upload smoke, where it did exactly that.
+            attempt.upload_session_uri_encrypted = None
             db.flush()
+            db.execute(
+                update(PublishAttempt)
+                .where(PublishAttempt.id == attempt.id)
+                .values(upload_session_uri_encrypted=None)
+            )
 
             self._emit(db, job, "publish.succeeded", None, target=target, attempt=attempt,
                        extra={"duration_ms": duration_ms, "external_id": result.external_id})
