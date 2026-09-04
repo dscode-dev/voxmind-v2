@@ -7,6 +7,7 @@ from app.api import discovery
 from app.api import internal_worker
 from app.api import job_events
 from app.api import jobs
+from app.api import metrics
 from app.api import ops_stream
 from app.api import pipeline_runs
 from app.api import operations
@@ -54,6 +55,13 @@ api_router.include_router(publishing.router)
 # ==========================================
 
 api_router.include_router(operations.router)
+
+
+# ==========================================
+# Metrics (published-video performance and content lineage)
+# ==========================================
+
+api_router.include_router(metrics.router)
 
 
 # ==========================================

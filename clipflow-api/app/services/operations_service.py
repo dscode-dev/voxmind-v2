@@ -29,6 +29,7 @@ from app.models.automation_state import AutomationState
 from app.models.enums import PublishAttemptStatus, PublishTargetConnectionStatus
 from app.models.publish_attempt import PublishAttempt
 from app.models.publish_target import PublishTarget
+from app.models.video_performance_snapshot import VideoPerformanceSnapshot
 from app.publishing.identity import AutomationHeartbeat, PublisherHeartbeat
 from app.publishing.publish_queue import PublishQueue
 
@@ -39,8 +40,11 @@ logger = logging.getLogger(__name__)
 CRITICAL = "critical"
 HIGH = "high"
 MEDIUM = "medium"
+# Worth reporting, never worth paging for. A LOW signal is visible in the payload but
+# does not move the overall status - see `_status`.
+LOW = "low"
 
-SEVERITY_ORDER = {MEDIUM: 1, HIGH: 2, CRITICAL: 3}
+SEVERITY_ORDER = {LOW: 0, MEDIUM: 1, HIGH: 2, CRITICAL: 3}
 
 # The signal registry. Code -> severity, in one table so a reader can see the whole set and
 # its relative weight without opening five files.
@@ -51,6 +55,7 @@ STALLED_PUBLISH_QUEUE = "stalled_publish_queue"
 AUTOMATION_RUNNER_STALE = "automation_runner_stale"
 REPEATED_AUTOMATION_FAILURE = "repeated_automation_failure"
 TARGET_RECONNECT_REQUIRED = "target_reconnect_required"
+METRICS_COLLECTION_STALE = "metrics_collection_stale"
 
 SEVERITIES: dict[str, str] = {
     # Work is waiting and nothing will ever pick it up.
@@ -64,6 +69,10 @@ SEVERITIES: dict[str, str] = {
     TARGET_RECONNECT_REQUIRED: HIGH,
     # Failing repeatedly is worth knowing about, but the system is retrying correctly.
     REPEATED_AUTOMATION_FAILURE: MEDIUM,
+    # Analytics running late. Nothing is broken and nothing is at risk: no video is
+    # unaccounted for and no publication is stuck. Deliberately the only LOW signal, so
+    # that a metrics backlog can never be what makes this product report degraded.
+    METRICS_COLLECTION_STALE: LOW,
 }
 
 HEALTHY = "healthy"
@@ -127,6 +136,7 @@ class OperationsService:
             self._runner_stale(runners, now),
             self._repeated_failures(db, now),
             self._reconnect_required(db, now),
+            self._metrics_stale(db, now),
         ]
         active = [signal for signal in signals if signal.active]
 
@@ -151,6 +161,12 @@ class OperationsService:
         if not active:
             return HEALTHY
         worst = max(SEVERITY_ORDER.get(signal.severity, 0) for signal in active)
+        if worst < SEVERITY_ORDER[MEDIUM]:
+            # Only LOW signals are active. They stay visible in `signals` and
+            # `active_signals`, but they do not degrade the product: metrics arriving late
+            # is not a reason for anyone to be woken up, and a status that cries wolf over
+            # analytics is a status nobody reads.
+            return HEALTHY
         return CRITICAL_STATUS if worst >= SEVERITY_ORDER[CRITICAL] else DEGRADED
 
     # ------------------------------------------------------------------ signals
@@ -377,6 +393,58 @@ class OperationsService:
                     {"id": str(row[0]), "name": row[1], "error_code": row[2]}
                     for row in rows[:10]
                 ],
+            },
+        )
+
+    def _metrics_stale(self, db: Session, now: datetime) -> Signal:
+        """Collection is enabled, videos are being tracked, and nothing has been observed.
+
+        Only meaningful when collection is switched on: a system that was never asked to
+        collect is not behind, and reporting it as such would train an operator to ignore
+        this signal. Likewise it stays inactive when there is nothing published to track -
+        an empty channel is not a stale one.
+        """
+        if not settings.metrics_collection_enabled:
+            return Signal(
+                code=METRICS_COLLECTION_STALE,
+                severity=SEVERITIES[METRICS_COLLECTION_STALE],
+                active=False,
+                message="metrics collection is disabled",
+                observed_at=now.isoformat(),
+                metadata={"enabled": False},
+            )
+
+        horizon = now - timedelta(days=max(1, settings.metrics_tracking_days))
+        tracked = (
+            db.query(func.count(PublishAttempt.id))
+            .filter(
+                PublishAttempt.status == PublishAttemptStatus.SUCCEEDED,
+                PublishAttempt.external_id.isnot(None),
+                PublishAttempt.finished_at >= horizon.replace(tzinfo=None),
+            )
+            .scalar()
+        ) or 0
+        latest = db.query(func.max(VideoPerformanceSnapshot.captured_at)).scalar()
+
+        stale_after = timedelta(hours=max(1, settings.metrics_stale_hours))
+        age = None if latest is None else now - _as_utc(latest)
+        active = bool(tracked) and (age is None or age > stale_after)
+
+        return Signal(
+            code=METRICS_COLLECTION_STALE,
+            severity=SEVERITIES[METRICS_COLLECTION_STALE],
+            active=active,
+            message=(
+                f"no performance snapshot in the last {settings.metrics_stale_hours}h "
+                f"for {tracked} tracked video(s)"
+                if active else "metrics collection is current"
+            ),
+            observed_at=now.isoformat(),
+            metadata={
+                "enabled": True,
+                "tracked_videos": int(tracked),
+                "latest_capture_at": _as_utc(latest).isoformat() if latest else None,
+                "stale_after_hours": settings.metrics_stale_hours,
             },
         )
 

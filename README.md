@@ -1128,6 +1128,150 @@ so an unrelated file sharing the directory is never touched; and the file must b
 is streaming from right now survives. The second rule is what makes it safe if publishers ever
 share a volume — they do not today, but that is a compose edit away from changing.
 
+## Performance metrics and lineage
+
+Measurement, not optimization. Collection records what happened to videos that were already
+published, and **nothing it records changes what the system does next** — not discovery
+ranking, not the selection score, not relevance or trend, not admission, not clip planning,
+not QA, not publication eligibility, not the autopublish policy. There is no feedback loop,
+deliberately: a loop built before the data exists would optimise against a guess. This is the
+empirical base; what to do with it is a separate decision on separate evidence.
+
+That independence is enforced structurally rather than promised. Nothing in `app/discovery`,
+`app/selection`, `app/publishing` or the admission, scheduling and publishing services imports
+`app.metrics`, and `test_metrics_package_is_not_imported_by_the_production_path` fails if that
+ever changes — a future feedback edge has to show up as an import in a diff.
+
+### What is collected
+
+`videos.list?part=statistics,status` on the YouTube **Data** API: `viewCount`, `likeCount`,
+`commentCount`, plus upload and privacy status. Fifty ids per call for one quota unit, so a
+backlog of 500 videos costs 10 units and not 500.
+
+The Data API works with `youtube.readonly`, a scope every connected target already granted
+when it was connected. The **Analytics** API offers far more — watch time, retention, traffic
+sources — but needs `yt-analytics.readonly`: a new scope, meaning every existing target has to
+be disconnected and reconnected. That is a real cost to pay before anyone has looked at a
+single view count, so it is not paid here. It is the obvious next step when the richer figures
+are actually wanted.
+
+Collection is grouped by `PublishTarget` because the OAuth credential is per target. A batch
+only ever contains videos from the channel whose token is being used.
+
+### The snapshot table
+
+`video_performance_snapshots` is append-only. A later collection inserts a new row; it never
+updates an earlier one.
+
+```
+10:00  views=100
+12:00  views=180
+18:00  views=410
+```
+
+Overwriting would leave the system knowing a video has 410 views and nothing about how it got
+there, and the shape of that curve is the entire reason to collect anything.
+
+Four rules the schema enforces or the ingestion honours:
+
+- **Absolute counters, not deltas.** What the provider reported, as reported. A delta is
+  derivable from two snapshots; a missed collection makes a stored delta wrong for ever while
+  leaving an absolute counter merely sparse.
+- **Counters may go down.** YouTube removes spam views and deleted comments, so `new >= old`
+  is not an invariant and is not enforced. A decrease is a valid observation.
+- **NULL is not zero.** YouTube omits `likeCount` when the owner hides likes and
+  `commentCount` when comments are disabled. Zero means "observed, and it was zero"; NULL
+  means "not disclosed". The distinction survives all the way to the API response.
+- **A video that vanishes is classified, never zeroed.** Deleted, made private, region-blocked
+  — the API does not say which, so the row records `availability = not_returned` with NULL
+  counters. Writing `views=0` would look like a catastrophic collapse on any chart.
+
+Counters are `BIGINT`: a successful video exceeds 2³¹ views, and finding that out through an
+overflow is not the way.
+
+### Cadence
+
+Newer videos move faster, so they are watched more closely:
+
+| Age of the video | Collected every |
+| --- | --- |
+| under 24h | `METRICS_INTERVAL_FRESH_HOURS` (1h) |
+| 1–7 days | `METRICS_INTERVAL_RECENT_HOURS` (6h) |
+| older | `METRICS_INTERVAL_MATURE_HOURS` (24h) |
+
+Past `METRICS_TRACKING_DAYS` (30) a publication drops out entirely: its series is history
+rather than signal, and polling it would spend the quota fresh videos need.
+
+A fixed table rather than an adaptive scheduler. Quota is the binding constraint and a simple
+rule is one an operator can predict; an adaptive one would be a second system to reason about
+before anyone has looked at the first day of data.
+
+### Idempotency
+
+Each row carries a `capture_slot` — the UTC hour it belongs to, stored as `2026-09-04T13` so
+the rounding rule is visible in the data rather than implied by a query — and
+`(publish_attempt_id, capture_slot)` is unique.
+
+Two layers, for two different races. The cadence stops a *second run* from spending quota an
+hour early. The unique constraint stops a *second row*: two replicas can both evaluate "is
+this due?" before either has written, and a check-then-insert walks straight through that. A
+`pg_try_advisory_lock` sits in front of the whole round so the losing replica skips rather
+than duplicating the work — try, never wait, because the loser has nothing useful to do.
+
+### Failure is never a production gate
+
+If Google is down, a token expired, or the collector raises outright, discovery still runs,
+selection still ranks, admission still admits and the publisher still publishes. Collection
+rides the automation loop but runs strictly *after* the production tick, inside its own
+`try/except`, on its own much slower cadence (`METRICS_POLL_INTERVAL_SEC`, 15m).
+
+A rejected credential reuses the existing vocabulary: the target goes to
+`reconnect_required`, exactly as a failed publication would leave it. There is no second
+notion of a broken credential for the publisher and the collector to disagree about. A
+disconnected target is reported as `target_unavailable` and skipped — one broken channel must
+not cost every other channel its collection.
+
+The operational signal `metrics_collection_stale` is the only **LOW** severity signal in the
+system, and LOW signals deliberately do not move the overall status. Analytics running late is
+an inconvenience, never an incident, and a health status that cries wolf over it is one nobody
+reads.
+
+### Lineage
+
+Each clip of a run is its own video with its own audience, so snapshots hang off
+`PublishAttempt` rather than `PipelineJob` — aggregating at ingestion would destroy exactly
+the comparison the data exists to make: which cut of the same match did better.
+
+That gives the full chain, end to end:
+
+```
+DiscoverySource -> VideoCandidate -> ContentTopic -> PipelineJob -> PublishAttempt -> YouTube video
+```
+
+`complete: true` means every link is a real foreign key. A publication whose job has no
+candidate reports an *unknown* origin and `complete: false`. Matching on title, or on the
+nearest candidate by time, would manufacture provenance that reads as authoritative and is a
+guess.
+
+### Endpoints
+
+All admin-only. None of them returns a refresh token, an access token, an encrypted
+credential, an upload session URI, or a raw provider error body — the read models are built
+from columns chosen for that reason, not filtered afterwards.
+
+```
+GET  /admin/published-videos/{attempt_id}/performance   the temporal series
+GET  /admin/published-videos/{attempt_id}/lineage       source -> published video
+GET  /admin/metrics/status                              enabled, tracked, due, last capture
+POST /admin/metrics/youtube/run?dry_run=true            collect now (dry run by default)
+```
+
+`dry_run` defaults to **true**. The safe reading of "run this" is "show me what it would do",
+and a real run spends the channel's YouTube quota.
+
+Collection is off by default (`METRICS_COLLECTION_ENABLED=false`), like every other autonomous
+behaviour here.
+
 ## Job state
 
 A run's state is the result of a validated transition, never an inference from which objects

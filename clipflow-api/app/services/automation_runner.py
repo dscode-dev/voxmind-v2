@@ -25,11 +25,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 from app.core.settings import settings
 from app.db.session import SessionLocal
 from app.publishing.identity import AutomationHeartbeat, resolve_runner_id
 from app.services.automation_scheduler import AutomationScheduler
+from app.services.metrics_ingestion_service import YouTubeMetricsIngestionService
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +43,7 @@ class AutomationRunner:
         self,
         scheduler: AutomationScheduler | None = None,
         heartbeat: AutomationHeartbeat | None = None,
+        metrics: YouTubeMetricsIngestionService | None = None,
     ) -> None:
         self._scheduler = scheduler or AutomationScheduler()
         self.runner_id = resolve_runner_id()
@@ -50,6 +53,12 @@ class AutomationRunner:
         self._heartbeat = heartbeat or AutomationHeartbeat(self.runner_id)
         self._task: asyncio.Task | None = None
         self._stopping = asyncio.Event()
+        # PR-METRICS-01. Collection rides this loop rather than getting a loop of its own:
+        # it is the same shape of work (a periodic query on a timer) and a second runner
+        # would be a second thing to deploy, monitor and shut down cleanly. It runs on its
+        # own, much slower cadence and in its own try/except - see `_maybe_collect_metrics`.
+        self._metrics = metrics or YouTubeMetricsIngestionService()
+        self._metrics_next_at = 0.0
 
     @property
     def running(self) -> bool:
@@ -109,6 +118,8 @@ class AutomationRunner:
             # After the tick, not before: a heartbeat that only proved the loop was awake
             # would keep beating while every tick raised.
             self._heartbeat.beat(state="idle", last_tick_at=_now_iso())
+            # Strictly after production work, and unable to affect it. See below.
+            await self._maybe_collect_metrics()
             await self._sleep(settings.automation_poll_interval_sec)
 
     async def _run_one_tick(self) -> None:
@@ -132,6 +143,55 @@ class AutomationRunner:
         db = SessionLocal()
         try:
             return self._scheduler.tick(db)
+        finally:
+            db.close()
+
+    # ---------------------------------------------------------------- metrics
+
+    async def _maybe_collect_metrics(self) -> None:
+        """Collect published-video metrics, on a slow cadence and at arm's length.
+
+        **Measurement must never gate production.** This runs after the scheduler tick, never
+        before it, and its failure mode is a log line: if YouTube is down, a token expired,
+        or this raises outright, discovery, selection and admission are entirely unaffected
+        on the next pass. That ordering and this `except` are the whole isolation strategy,
+        and they are the reason collection can share the loop safely.
+
+        Not `except: pass` — the traceback is logged. A silent failure here would be
+        indistinguishable from "nothing was due", which is the normal case and would hide
+        the fault for as long as anyone cared to look.
+        """
+        if not settings.metrics_collection_enabled:
+            return
+        now = time.monotonic()
+        if now < self._metrics_next_at:
+            return
+        # Scheduled before the run, not after: a slow or failing collection must not be able
+        # to retry immediately on the next poll and turn a provider outage into a hot loop.
+        self._metrics_next_at = now + max(60, settings.metrics_poll_interval_sec)
+
+        try:
+            report = await asyncio.to_thread(self._collect_metrics)
+        except Exception:  # noqa: BLE001
+            logger.exception("metrics_collection_failed")
+            return
+
+        if report.snapshots_created:
+            logger.info(
+                "metrics_collection_tick",
+                extra={
+                    "metrics_run_id": report.metrics_run_id,
+                    "status": report.status,
+                    "videos_due": report.videos_due,
+                    "snapshots_created": report.snapshots_created,
+                    "duration_ms": report.duration_ms,
+                },
+            )
+
+    def _collect_metrics(self):
+        db = SessionLocal()
+        try:
+            return self._metrics.run(db, dry_run=False)
         finally:
             db.close()
 

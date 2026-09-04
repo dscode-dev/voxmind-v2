@@ -451,6 +451,56 @@ class Settings(BaseSettings):
     publish_temp_stale_sec: int = Field(default=21_600, alias="PUBLISH_TEMP_STALE_SEC")
 
     # =====================================
+    # Performance metrics ingestion (PR-METRICS-01)
+    # =====================================
+    #
+    # Measurement, not optimization. Nothing configured here can change what gets discovered,
+    # selected, produced or published — these knobs only decide how often we look at what
+    # already happened.
+
+    # Off by default like every other autonomous behaviour: collection spends YouTube quota
+    # on a schedule, and starting to spend it should be a decision someone made.
+    metrics_collection_enabled: bool = Field(
+        default=False, alias="METRICS_COLLECTION_ENABLED"
+    )
+
+    # How long a publication stays interesting. Views keep accruing for ever, but the shape
+    # worth watching is early; past this the series is history, not a signal, and continuing
+    # to poll it would spend the quota that fresh videos need.
+    metrics_tracking_days: int = Field(default=30, alias="METRICS_TRACKING_DAYS")
+
+    # The cadence table. Newer videos move faster, so they are observed more closely — a
+    # fixed rule rather than an adaptive scheduler, because quota is the binding constraint
+    # and an operator should be able to predict the bill.
+    metrics_interval_fresh_hours: int = Field(   # < 24h old
+        default=1, alias="METRICS_INTERVAL_FRESH_HOURS"
+    )
+    metrics_interval_recent_hours: int = Field(  # 1-7 days old
+        default=6, alias="METRICS_INTERVAL_RECENT_HOURS"
+    )
+    metrics_interval_mature_hours: int = Field(  # > 7 days old
+        default=24, alias="METRICS_INTERVAL_MATURE_HOURS"
+    )
+
+    # How often the automation loop even considers collecting. Much longer than the
+    # production poll interval: the finest cadence below is hourly, so checking every few
+    # seconds would be a scan that finds nothing almost every time.
+    metrics_poll_interval_sec: int = Field(
+        default=900, alias="METRICS_POLL_INTERVAL_SEC"
+    )
+
+    # A ceiling on one collection run, so a backlog drains over several ticks instead of
+    # emptying the day's quota in one.
+    metrics_max_videos_per_run: int = Field(
+        default=200, alias="METRICS_MAX_VIDEOS_PER_RUN"
+    )
+
+    # How stale collection has to get before it is worth mentioning. Analytics running late
+    # is an inconvenience, never a production incident — the signal it raises is low
+    # severity by construction.
+    metrics_stale_hours: int = Field(default=48, alias="METRICS_STALE_HOURS")
+
+    # =====================================
     # Validation
     # =====================================
 

@@ -176,6 +176,12 @@ class PublishAttempt(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 
     job = relationship("PipelineJob", back_populates="publish_attempts")
     target = relationship("PublishTarget", back_populates="attempts")
+    # The temporal series of what happened to this video after it was published.
+    performance_snapshots = relationship(
+        "VideoPerformanceSnapshot",
+        back_populates="attempt",
+        cascade="all, delete-orphan",
+    )
 
     @property
     def is_settled(self) -> bool:

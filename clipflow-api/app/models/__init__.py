@@ -24,6 +24,7 @@ from app.models.pipeline_event import PipelineEvent
 from app.models.generated_asset import GeneratedAsset
 from app.models.publish_target import PublishTarget
 from app.models.publish_attempt import PublishAttempt
+from app.models.video_performance_snapshot import VideoPerformanceSnapshot
 from app.models.connected_node import ConnectedNode
 from app.models.ai_execution import AIExecution
 
@@ -52,6 +53,7 @@ __all__ = [
     "GeneratedAsset",
     "PublishTarget",
     "PublishAttempt",
+    "VideoPerformanceSnapshot",
     "ConnectedNode",
     "AIExecution",
 ]
