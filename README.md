@@ -998,6 +998,85 @@ The runner writes a Redis heartbeat **after** each tick — after, so a loop who
 raises does not keep reporting itself healthy. A configuration flag could never say this, and
 before PR-AUTONOMY-HARDEN-01 it was the only thing on offer.
 
+## Publication completion
+
+`PUBLISHED` means *every media item this run was required to publish has been published*. It
+used to mean *every PublishAttempt that happens to exist succeeded* — which is true of a
+four-clip run with two attempts, and marked such runs PUBLISHED with two videos never uploaded
+and nothing left to say so.
+
+Three things are now distinguished, where two used to be conflated:
+
+```
+required     what the run owes, from a manifest fixed before anything was published
+attempts     what has been tried, on one target
+outstanding  required items with no attempt at all - the only ones anything may create
+```
+
+### The manifest
+
+`publish_package.json`'s `videos[]` is the contract for "one publishable output". It is read
+**once**, on first access — which is before any attempt can exist — and snapshotted onto the
+run as `publication_manifest`. From then on the required set comes from the row.
+
+Snapshotting rather than re-reading matters twice: it keeps a MinIO round trip out of the
+publisher's hot path, and it stops a later re-render silently redefining what this run was
+supposed to do. Only outputs with `final_clip.status == "generated"` are required — a clip
+that never rendered is not something to wait for for ever.
+
+If the package cannot be read and the run has no publications to reconstruct from, publication
+is **blocked**. An empty manifest would read as "everything required is done", which is the
+exact mistake being prevented. Runs that predate the feature derive a `version: 0` manifest
+from their own attempts, which reproduces the behaviour they were created under and is
+labelled in the data rather than inferred.
+
+### Completion states
+
+| Situation | Completion | Pipeline state |
+|---|---|---|
+| nothing attempted | `not_started` | `READY_TO_PUBLISH` |
+| something queued, uploading, or awaiting a scheduled retry | `in_progress` | `PUBLISHING` |
+| some succeeded, rest outstanding, nothing active | `partial` | `READY_TO_PUBLISH` |
+| every required item succeeded | `complete` | `PUBLISHED` |
+| a required item is `FAILED_FINAL`, `CANCELED`, or out of retries | `blocked` | `READY_TO_PUBLISH` |
+| a required item is `UNKNOWN` | `unresolved` | `READY_TO_PUBLISH` |
+
+Releasing a partly published run back to `READY_TO_PUBLISH` is not a failure report — it is how
+a run larger than a daily budget makes progress. A `FAILED_RETRYABLE` item counts as *active*
+only while a retry is still coming; once its attempt budget is spent nothing will pick it up
+again, and leaving the run in `PUBLISHING` would imply otherwise.
+
+| Attempt state | What automation may do |
+|---|---|
+| `SUCCEEDED` | nothing — never republished |
+| `PENDING` / `IN_PROGRESS` | nothing — it is in flight |
+| `FAILED_RETRYABLE`, retries left | nothing — the queue owns the retry |
+| `FAILED_RETRYABLE`, exhausted | nothing — a human must act |
+| `FAILED_FINAL` / `CANCELED` / `UNKNOWN` | nothing — no replacement, ever |
+| no attempt | allocate it |
+
+Completion is scoped to one target, and blind to who published: a clip uploaded by an operator
+and one uploaded by automation are both external successes. Who decided is a budget question.
+
+### Safe partial allocation
+
+With completion outstanding-aware, the budget no longer has to take a whole run or none of it.
+A four-clip run against a cap of two publishes two clips today and the other two tomorrow:
+
+```
+day 1   allocate 2   ->  2/4  READY_TO_PUBLISH
+day 2   allocate 2   ->  4/4  PUBLISHED
+```
+
+Deterministic by `video_index`, so a series publishes first clip first, and successes are never
+offered for allocation again. A manual publish of a subset behaves the same way: clips 3 and 4
+stay outstanding, and automation finishes what the operator started.
+
+```json
+{"completion": {"required": 4, "succeeded": 2, "outstanding": 2,
+                "in_flight": 0, "retry_pending": 0, "blocked": 0, "unresolved": 0}}
+```
+
 ## Publication budget
 
 `AUTOPUBLISH_MAX_PER_DAY` is enforced, not observed. It used to be read once and then spent,
@@ -1031,12 +1110,10 @@ The day is **UTC**, from a `budget_date` column written at creation — never a 
 `created_at`, whose naive default would resolve through the container's timezone and make the
 boundary mean different things to replicas in different zones.
 
-**A run is allocated whole.** If a run's outstanding clips exceed the remaining budget it waits
-for a tick that can take all of them, rather than publishing some. Publishing three of five and
-leaving the rest is not safe today: accepting a publication moves the run out of
-`READY_TO_PUBLISH`, and the publisher settles it to `PUBLISHED` once the attempts it can see
-have succeeded — so the unallocated clips would be silently dropped. The cost is real and named
-in the debt: a run with more clips than the daily cap needs a larger cap or a manual publish.
+**Partial allocation is safe** since PR-PUBLISH-COMPLETE-01. A run takes as much as the
+remaining budget allows and keeps the rest outstanding; see *Publication completion* above.
+Until then it had to take a whole run or none, because a partly published run was settled to
+`PUBLISHED` and its unallocated clips silently dropped.
 
 ## Publication spool hygiene
 

@@ -48,6 +48,7 @@ from app.publishing.contracts import (
     PublishRequest,
     PublishResult,
 )
+from app.publishing.manifest import ManifestService, ManifestUnavailableError
 from app.publishing.media_source import MediaUnavailableError, MinioMediaSource
 from app.publishing.publish_queue import PublishQueue, command_payload
 from app.publishing.metadata import MetadataValidationError, ResolvedMetadata, resolve
@@ -56,6 +57,10 @@ from app.publishing.youtube_publisher import YouTubePublisher
 from app.services import event_bus
 from app.services.artifact_content_service import ArtifactContentService
 from app.services.pipeline_state_machine import PipelineStateMachine
+from app.services.publication_completion import (
+    COMPLETE,
+    PublicationCompletionEvaluator,
+)
 from app.services.publish_target_service import (
     PublishTargetService,
     TargetNotPublishableError,
@@ -179,6 +184,8 @@ class PublishingService:
         self.media_source = media_source or MinioMediaSource()
         self.artifacts = artifacts or ArtifactContentService()
         self.state = state_machine or PipelineStateMachine()
+        self.manifests = ManifestService(artifacts=self.artifacts)
+        self.completion = PublicationCompletionEvaluator()
         self.queue = queue or PublishQueue()
         # Only used by the progress recorder, which needs a session of its own while the
         # caller's transaction is open. Injectable so a test can point it at the same
@@ -268,8 +275,8 @@ class PublishingService:
             if any(item.status == "queued" for item in report.items):
                 if job.state == PipelineState.READY_TO_PUBLISH:
                     self.state.start_publishing(db, job, actor=actor)
-            self._settle_job(db, job)
-            report.publication_status = job_publication_status(db, job)
+            result = self._settle_job(db, job, target=target)
+            report.publication_status = result.status if result else "none"
 
         report.job_state = job.state.value
         report.duration_ms = _elapsed(started)
@@ -645,7 +652,7 @@ class PublishingService:
             db, job=job, target=target, item=item, attempt=attempt,
             resolved=None, size=attempt.media_bytes or 0, actor=worker_id,
         )
-        self._settle_job(db, job)
+        self._settle_job(db, job, target=target)
         return outcome
 
     @staticmethod
@@ -1045,73 +1052,77 @@ class PublishingService:
 
     # ------------------------------------------------------------ job settlement
 
-    def _settle_job(self, db: Session, job: PipelineJob) -> None:
-        """Move the run according to every attempt it has, read from the database.
+    def _settle_job(self, db: Session, job: PipelineJob, *, target: PublishTarget):
+        """Move the run according to what it still OWES, not to what it has attempted.
 
-        **Rewritten for the async runtime.** It used to judge the run from the items in the
-        report it had just produced. That was correct while one request published every clip
-        in a loop; with a queue, a publisher executes exactly one attempt and sees exactly
-        one item, so a run with three clips would have been marked PUBLISHED by whichever
-        one happened to finish first. The siblings still queued would have been forgotten.
+        **The bug this replaces.** It used to ask ``all existing attempts succeeded?``. That
+        is true of a four-clip run with two attempts, and it marked such runs PUBLISHED with
+        two videos never uploaded and nothing left to say so. The required set is now
+        established separately, before anything is published, and the question is asked
+        against it.
 
-        The attempts table is the only complete answer, so it is the one consulted.
+        States, and why each is the honest one:
+
+            all required succeeded              PUBLISHED
+            something queued, uploading, or
+              waiting on a scheduled retry      PUBLISHING - work is live
+            outstanding items, nothing active   READY_TO_PUBLISH - more to allocate later
+            unresolved or blocked, none active  READY_TO_PUBLISH - a person must act, and
+                                                leaving it in PUBLISHING would imply
+                                                otherwise
+
+        Releasing a partially published run to READY_TO_PUBLISH is not a failure report. It
+        is how a run larger than a daily budget makes progress across days.
         """
-        attempts = (
-            db.query(PublishAttempt)
-            .filter(PublishAttempt.pipeline_job_id == job.id)
-            .all()
+        try:
+            manifest = self.manifests.resolve(db, job)
+        except ManifestUnavailableError as exc:
+            # Fail-closed: without a required set nothing may be concluded, least of all
+            # that the run is finished.
+            logger.warning(
+                "publication_manifest_unavailable",
+                extra={"pipeline_job_id": str(job.id), "detail": str(exc)},
+            )
+            return None
+
+        result = self.completion.evaluate(
+            db, job, manifest=manifest, target_id=target.id
         )
-        if not attempts:
-            return
+        self.completion.log(job, target.id, result)
 
-        succeeded = [a for a in attempts if a.status == PublishAttemptStatus.SUCCEEDED]
-        status = attempts_publication_status(attempts)
-
-        if status == "published":
+        if result.status == COMPLETE:
             if job.state == PipelineState.READY_TO_PUBLISH:
                 self.state.start_publishing(db, job, actor="publisher")
             if job.state == PipelineState.PUBLISHING:
                 self.state.mark_published(
-                    db, job,
-                    external_ids=[a.external_id for a in succeeded if a.external_id],
+                    db, job, external_ids=result.external_ids()
                 )
-        elif status in ("queued", "in_progress"):
-            # Work is still outstanding. The run stays in PUBLISHING rather than being
-            # released, so nothing invites a second publish request while a command is live.
+        elif result.has_active_work:
+            # Live work. The run stays in PUBLISHING so nothing invites a second request.
             pass
         elif job.state == PipelineState.PUBLISHING:
-            # Nothing is running any more and the run is not complete. Back to
-            # READY_TO_PUBLISH so the remainder can be retried - not FAILED, which would
-            # describe a production that is in fact intact.
-            self.state.publish_failed(db, job, reason=status)
+            # Nothing is running and the run is not finished. Back to READY_TO_PUBLISH so
+            # the outstanding items can be allocated on a later tick - not FAILED, which
+            # would describe a production that is in fact intact.
+            self.state.publish_failed(db, job, reason=result.status)
 
         metadata = dict(job.metadata_json or {})
-        metadata["publication_status"] = status
+        metadata["publication_status"] = result.status
         metadata["publication_summary"] = {
-            "total": len(attempts),
-            "published": len(succeeded),
-            "queued": sum(1 for a in attempts if a.status == PublishAttemptStatus.PENDING),
-            "in_progress": sum(
-                1 for a in attempts if a.status == PublishAttemptStatus.IN_PROGRESS
-            ),
-            "unresolved": sum(1 for a in attempts if a.needs_human),
-            "failed": sum(
-                1 for a in attempts
-                if a.status in (PublishAttemptStatus.FAILED_RETRYABLE,
-                                PublishAttemptStatus.FAILED_FINAL)
-            ),
+            **result.summary(),
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         job.metadata_json = metadata
         db.commit()
+        return result
 
     @staticmethod
     def _publication_status(items: list[ItemOutcome]) -> str:
         """A summary of the items in ONE report - a dry run, or one accept request.
 
-        Not the run's publication status: that is ``attempts_publication_status``, which
-        reads every attempt from the database. This one cannot see siblings it did not
-        touch, which is exactly the mistake the async runtime made it stop being used for.
+        Not the run's publication status: that is ``PublicationCompletionEvaluator``, which
+        asks against the required set. This one cannot see siblings it did not touch, nor
+        required media nobody has attempted at all.
         """
         if not items:
             return "none"
@@ -1306,26 +1317,25 @@ def _log(
 
 
 def attempts_publication_status(attempts: list[PublishAttempt]) -> str:
-    """What has happened to a run's publications, in one word that does not overstate.
+    """DEPRECATED. Describes the attempts, and cannot describe the run.
 
-    Ordered by what needs attention rather than by what is most common:
+    Its ``all(SUCCEEDED)`` test is true of a four-clip run with two attempts, which is how
+    runs were marked PUBLISHED with videos never uploaded. Completion is now
+    ``PublicationCompletionEvaluator``, which asks against the run's required set.
 
-    * ``unresolved`` outranks everything except nothing - it is the state that needs a
-      person, and burying it inside "partial" is how a duplicate video gets made later;
-    * ``in_progress`` / ``queued`` are reported as themselves so nobody reads work in
-      flight as work that failed and retries it;
-    * ``published`` requires every attempt to have succeeded, not most of them.
+    Kept only because it still answers a narrower question honestly - "what has happened to
+    the attempts that exist" - and nothing in the completion path calls it.
     """
     if not attempts:
         return "none"
-    if all(a.status == PublishAttemptStatus.SUCCEEDED for a in attempts):
-        return "published"
     if any(a.needs_human for a in attempts):
         return "unresolved"
     if any(a.status == PublishAttemptStatus.IN_PROGRESS for a in attempts):
         return "in_progress"
     if any(a.status == PublishAttemptStatus.PENDING for a in attempts):
         return "queued"
+    if all(a.status == PublishAttemptStatus.SUCCEEDED for a in attempts):
+        return "all_attempts_succeeded"
     if any(a.status == PublishAttemptStatus.SUCCEEDED for a in attempts):
         return "partial"
     return "failed"

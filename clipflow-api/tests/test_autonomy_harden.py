@@ -135,6 +135,46 @@ def test_allocation_outside_the_lock_is_a_programming_error(db, no_event_fanout)
         budget.allocatable(1)
 
 
+def test_the_lock_is_taken_on_its_own_connection(db, no_event_fanout):
+    """Regression: the lock used to be stranded on a pooled connection.
+
+    ``publish()`` commits several times, and SQLAlchemy returns a connection to the pool when
+    a transaction ends - so a session-scoped advisory lock taken on the ORM session's
+    connection could be released somewhere else and left held on a connection nobody was
+    looking at. The next allocation then found the budget permanently busy. The completion
+    smoke hit exactly that after three allocations in one process.
+    """
+    budget = AutopublishBudget(db, limit=3)
+    assert budget._lock_connection is None
+
+    with budget.hold():
+        # On PostgreSQL a dedicated connection is checked out; on the SQLite test harness
+        # the lock is a no-op and there is nothing to hold.
+        if db.bind is not None and db.bind.dialect.name == "postgresql":
+            assert budget._lock_connection is not None
+            assert budget._lock_connection is not db.connection()
+
+    assert budget._lock_connection is None, "the connection is released, not leaked"
+
+
+def test_repeated_allocations_do_not_wedge_the_budget(db, queue, monkeypatch,
+                                                       no_event_fanout):
+    """Three allocations in one process, each of which commits inside publish()."""
+    monkeypatch.setattr(settings, "autopublish_max_per_day", 10, raising=False)
+    target = autopublish_target(db)
+    topic = make_topic(db, target=target)
+    service = policy(queue)
+
+    for _ in range(3):
+        make_ready_job(db, topic)
+        report = service.run(db, dry_run=False)
+        assert "budget_locked" not in report.blocked_reasons, (
+            "a previous allocation left the lock held"
+        )
+
+    assert attempts_count(db) == 3
+
+
 def test_the_budget_recomputes_between_allocations(db, no_event_fanout):
     """Not decremented in memory: the number always comes from the publications."""
     target = autopublish_target(db)
@@ -154,25 +194,26 @@ def test_the_budget_recomputes_between_allocations(db, no_event_fanout):
 # ===========================================================================
 
 
-def test_a_run_needing_more_budget_than_remains_is_not_published_at_all(
+def test_a_run_larger_than_the_budget_publishes_what_it_can(
     db, queue, monkeypatch, no_event_fanout
 ):
-    """The bug: a cap of 1 used to publish a whole three-clip run.
+    """Partial allocation, restored by PR-PUBLISH-COMPLETE-01.
 
-    It is now refused rather than partly published, because a partly published run would be
-    settled to PUBLISHED by the publisher and the remaining clips silently lost.
+    PR-AUTONOMY-HARDEN-01 had to refuse this outright, because a partly published run would
+    have been settled to PUBLISHED and the remaining clips silently lost. Completion is now
+    outstanding-aware, so the run takes what the budget allows and keeps the rest.
     """
     monkeypatch.setattr(settings, "autopublish_max_per_day", 1, raising=False)
     monkeypatch.setattr(settings, "autopublish_max_per_tick", 5, raising=False)
     target = autopublish_target(db)
-    make_ready_job(db, make_topic(db, target=target))
+    job = make_ready_job(db, make_topic(db, target=target))
 
     report = policy(queue, artifacts=StubArtifacts(videos=3)).run(db, dry_run=False)
 
-    assert attempts_count(db) == 0, "one unit cannot buy a three-clip run"
-    assert report.candidates[0].reasons == [DAILY_LIMIT]
+    assert attempts_count(db) == 1, "one unit buys one clip"
     assert report.candidates[0].outstanding == 3
-    assert report.candidates[0].allowance == 1
+    assert report.candidates[0].deferred == 2
+    assert job.state != PipelineState.PUBLISHED
 
 
 def test_a_multi_clip_run_spends_one_unit_per_clip(db, queue, monkeypatch,
@@ -207,8 +248,8 @@ def test_the_per_tick_cap_also_counts_media_items(db, queue, monkeypatch,
     assert report.blocked_reasons.get(PER_RUN_LIMIT) == 1
 
 
-def test_a_four_clip_run_needs_four_units_of_the_tick_cap(db, queue, monkeypatch,
-                                                            no_event_fanout):
+def test_a_four_clip_run_takes_two_units_of_a_tick_cap_of_two(db, queue, monkeypatch,
+                                                                no_event_fanout):
     monkeypatch.setattr(settings, "autopublish_max_per_tick", 2, raising=False)
     monkeypatch.setattr(settings, "autopublish_max_per_day", 50, raising=False)
     target = autopublish_target(db)
@@ -216,8 +257,9 @@ def test_a_four_clip_run_needs_four_units_of_the_tick_cap(db, queue, monkeypatch
 
     report = policy(queue, artifacts=StubArtifacts(videos=4)).run(db, dry_run=False)
 
-    assert attempts_count(db) == 0, "four clips do not fit a tick cap of two"
-    assert report.candidates[0].reasons == [DAILY_LIMIT]
+    assert attempts_count(db) == 2, "the tick takes what it may and defers the rest"
+    assert report.queued == 2
+    assert report.candidates[0].deferred == 2
 
 
 def test_a_run_publishes_every_clip_in_declared_order(db, queue, monkeypatch,
@@ -235,20 +277,29 @@ def test_a_run_publishes_every_clip_in_declared_order(db, queue, monkeypatch,
     ]
 
 
-def test_a_run_too_large_for_today_waits_for_a_bigger_allowance(db, queue, monkeypatch,
-                                                                 no_event_fanout):
-    """Named debt: it waits rather than publishing half of itself."""
+def test_a_large_run_makes_progress_across_budgets(db, queue, monkeypatch,
+                                                    no_event_fanout):
+    """The P1 this PR closes: a run larger than the cap used to stall for ever."""
     monkeypatch.setattr(settings, "autopublish_max_per_day", 1, raising=False)
     target = autopublish_target(db)
     make_ready_job(db, make_topic(db, target=target))
     service = policy(queue, artifacts=StubArtifacts(videos=2))
 
     service.run(db, dry_run=False)
-    assert attempts_count(db) == 0
+    assert attempts_count(db) == 1, "one clip today"
+
+    # The publisher has to actually run it: while a publication is in flight the run is
+    # PUBLISHING, and a run that is publishing is not a candidate for more allocation.
+    _drain(db, queue, service)
 
     monkeypatch.setattr(settings, "autopublish_max_per_day", 2, raising=False)
     service.run(db, dry_run=False)
-    assert attempts_count(db) == 2, "both clips together, once the budget allows"
+    assert attempts_count(db) == 2, "the outstanding clip once the budget allows"
+
+    identities = sorted(a.media_identity for a in db.query(PublishAttempt).all())
+    assert identities == [
+        "final_clips/final_clip_01.mp4", "final_clips/final_clip_02.mp4"
+    ], "no clip was published twice"
 
 
 def test_a_run_with_nothing_outstanding_is_not_a_candidate(db, queue, no_event_fanout):
@@ -364,6 +415,45 @@ def test_the_status_read_model_uses_the_enforcement_query(db, queue, no_event_fa
 # ===========================================================================
 # Operational signals
 # ===========================================================================
+
+
+def _drain(db, queue, service, limit: int = 10) -> None:
+    """Execute whatever the policy queued, as the publisher container would.
+
+    The policy only creates commands; a run stays PUBLISHING until they are executed, which
+    is correct and is why a test about progress across budgets has to run them.
+    """
+    from app.publishing.identity import PublisherHeartbeat
+    from app.services.publish_runtime import PublisherRuntime
+
+    # Accepts either the policy service or the publishing service it wraps, so callers do
+    # not have to know which layer they are holding.
+    publishing = getattr(service, "publishing", service)
+    worker = PublisherRuntime(
+        worker_id="test-publisher",
+        queue=queue,
+        publishing=publishing,
+        heartbeat=PublisherHeartbeat("test-publisher", queue.redis),
+        session_factory=lambda: _KeepOpen(db),
+    )
+    for _ in range(limit):
+        if not queue.depths()["ready"]:
+            break
+        worker.tick()
+    db.expire_all()
+
+
+class _KeepOpen:
+    """The test session with ``close`` suppressed. Test-only scaffolding."""
+
+    def __init__(self, session):
+        self._session = session
+
+    def close(self):
+        return None
+
+    def __getattr__(self, name):
+        return getattr(self._session, name)
 
 
 def operations(queue, publishers=None, runners=None, clock=None) -> OperationsService:

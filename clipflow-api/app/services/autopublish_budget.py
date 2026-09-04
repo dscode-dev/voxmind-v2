@@ -20,8 +20,16 @@ Instead, allocation is serialised with a session-scoped advisory lock and the us
 transaction-scoped variant, and it would be wrong here: creating a publication commits several
 times inside ``PublishingService.publish``, and a transaction-scoped lock is released by the
 first of those commits — leaving the remaining allocations unprotected, which is precisely the
-window being closed. This one is held explicitly across the whole allocation and released in a
-``finally``. PostgreSQL also drops it if the backend dies, so a crash cannot wedge the budget.
+window being closed.
+
+**Why the lock lives on its own connection.** Those same internal commits are why it cannot be
+taken on the ORM session's connection either: SQLAlchemy returns a connection to the pool when
+a transaction ends, so after the first ``publish()`` commit the session may continue on a
+*different* connection — and a session-scoped advisory lock stays with the connection that
+took it. The unlock would then run somewhere else and the lock would be stranded on a pooled
+connection, where a ``ROLLBACK`` on return does not clear it. The next allocation would find
+the budget permanently busy. Found by the completion smoke, which runs several allocations in
+one process; a dedicated connection is checked out for the lock and closed at the end.
 
 **A unit is one logical external publication** — one media item, on one target, once. Retries,
 queue redeliveries, provider calls and manual publications spend nothing.
@@ -101,6 +109,7 @@ class AutopublishBudget:
         self.limit = max(0, int(limit))
         self._clock = clock
         self.date = utc_today(clock)
+        self._lock_connection = None
         self._locked = False
         # Only meaningful while locked; recomputed rather than trusted between allocations.
         self._used = 0
@@ -151,22 +160,21 @@ class AutopublishBudget:
                 self._locked = False
             return
 
+        # A connection of our own, checked out from the same engine. It is never committed
+        # on and never handed back mid-allocation, so the lock stays where it was taken.
+        connection = self.db.get_bind().connect()
         try:
-            self.db.execute(text(f"SET lock_timeout = '{LOCK_WAIT_SEC}s'"))
-            self.db.execute(
-                text("SELECT pg_advisory_lock(:key)"), {"key": BUDGET_LOCK_KEY}
+            connection.exec_driver_sql(f"SET lock_timeout = '{LOCK_WAIT_SEC}s'")
+            connection.exec_driver_sql(
+                f"SELECT pg_advisory_lock({BUDGET_LOCK_KEY})"
             )
         except (OperationalError, DBAPIError) as exc:
-            self.db.rollback()
+            connection.close()
             raise BudgetUnavailableError(
                 f"the autopublish budget was held by another replica ({type(exc).__name__})"
             ) from exc
-        finally:
-            try:
-                self.db.execute(text("SET lock_timeout = DEFAULT"))
-            except DBAPIError:
-                pass
 
+        self._lock_connection = connection
         self._locked = True
         try:
             self._used = self.used()
@@ -174,13 +182,17 @@ class AutopublishBudget:
         finally:
             self._locked = False
             try:
-                self.db.execute(
-                    text("SELECT pg_advisory_unlock(:key)"), {"key": BUDGET_LOCK_KEY}
+                # Belt and braces: unlock the key, then drop anything this connection still
+                # holds, so a bug above can never strand a lock on a pooled connection.
+                connection.exec_driver_sql(
+                    f"SELECT pg_advisory_unlock({BUDGET_LOCK_KEY})"
                 )
+                connection.exec_driver_sql("SELECT pg_advisory_unlock_all()")
             except DBAPIError:
-                # The lock is released when the backend disconnects, so a failure here
-                # cannot leak it permanently.
                 logger.warning("autopublish_budget_unlock_failed")
+            finally:
+                connection.close()
+                self._lock_connection = None
 
     def allocatable(self, wanted: int) -> int:
         """How many of ``wanted`` units may be spent right now.

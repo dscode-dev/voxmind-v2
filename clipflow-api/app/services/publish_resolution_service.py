@@ -42,6 +42,11 @@ from app.publishing.youtube_publisher import provider_reason
 from app.security.secret_box import SecretDecryptionError, secret_box
 from app.services import event_bus
 from app.services.pipeline_state_machine import PipelineStateMachine
+from app.publishing.manifest import ManifestService, ManifestUnavailableError
+from app.services.publication_completion import (
+    COMPLETE,
+    PublicationCompletionEvaluator,
+)
 from app.services.publish_target_service import PublishTargetService
 
 logger = logging.getLogger(__name__)
@@ -63,6 +68,8 @@ class PublishResolutionService:
     ) -> None:
         self.targets = targets or PublishTargetService()
         self.state = state_machine or PipelineStateMachine()
+        self.manifests = ManifestService()
+        self.completion = PublicationCompletionEvaluator()
         self._client = client
 
     # ---------------------------------------------------------------- reconcile
@@ -275,32 +282,47 @@ class PublishResolutionService:
                 "external_id": None}
 
     def _settle_job(self, db: Session, attempt: PublishAttempt) -> None:
-        """Promote the run to PUBLISHED if this was the last outstanding publication."""
+        """Promote the run only when every REQUIRED publication has succeeded.
+
+        This used to carry its own copy of ``all existing attempts succeeded`` - the same
+        wrong test the publishing service had, in a second place. Resolving the last
+        ambiguous attempt of a four-clip run with two attempts would have published it.
+        Both now ask the one evaluator, against the run's required set.
+        """
         job = attempt.job
         if job is None:
             return
 
-        siblings = (
-            db.query(PublishAttempt)
-            .filter(PublishAttempt.pipeline_job_id == job.id)
-            .all()
+        try:
+            manifest = self.manifests.resolve(db, job)
+        except ManifestUnavailableError as exc:
+            logger.warning(
+                "publication_manifest_unavailable",
+                extra={"pipeline_job_id": str(job.id), "detail": str(exc)},
+            )
+            return
+
+        result = self.completion.evaluate(
+            db, job, manifest=manifest, target_id=attempt.target_id
         )
-        all_done = all(a.status == PublishAttemptStatus.SUCCEEDED for a in siblings)
+        self.completion.log(job, attempt.target_id, result)
 
         metadata = dict(job.metadata_json or {})
-        metadata["publication_status"] = "published" if all_done else "partial"
+        metadata["publication_status"] = result.status
+        metadata["publication_summary"] = {
+            **result.summary(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
         job.metadata_json = metadata
 
-        if all_done:
+        if result.status == COMPLETE:
             if job.state == PipelineState.READY_TO_PUBLISH:
                 # The run was released when the ambiguous attempt ended; claim it again so
                 # the transition into PUBLISHED is the legal sequential one.
                 self.state.start_publishing(db, job, actor="resolution")
             if job.state == PipelineState.PUBLISHING:
                 self.state.mark_published(
-                    db, job,
-                    external_ids=[a.external_id for a in siblings if a.external_id],
-                    service="publisher",
+                    db, job, external_ids=result.external_ids(), service="publisher",
                 )
         db.flush()
 

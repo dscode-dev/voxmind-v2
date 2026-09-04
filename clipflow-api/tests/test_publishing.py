@@ -277,8 +277,6 @@ class DrainingPublishingService(PublishingService):
     @staticmethod
     def _restate(db, report, job):
         """Rewrite the report from the attempts, now that they have actually run."""
-        from app.services.publishing_service import attempts_publication_status
-
         db.expire_all()
         attempts = {
             a.media_identity: a
@@ -312,7 +310,11 @@ class DrainingPublishingService(PublishingService):
                 attempt.retryability.value if attempt.retryability else None
             )
 
-        report.publication_status = attempts_publication_status(list(attempts.values()))
+        # Read from the run rather than recomputed: `_settle_job` has already evaluated
+        # completion against the required set, and a second calculation here would be a
+        # second definition of done - exactly what this PR removed.
+        fresh = _reread_metadata(db, job)
+        report.publication_status = fresh.get("publication_status", report.publication_status)
         report.status = report.publication_status
         report.job_state = _reread_state(db, job)
         return report
@@ -329,6 +331,13 @@ class _UnclosableSession:
 
     def __getattr__(self, name):
         return getattr(self._session, name)
+
+
+def _reread_metadata(db, job) -> dict:
+    from app.models.pipeline_job import PipelineJob
+
+    fresh = db.query(PipelineJob).filter(PipelineJob.id == job.id).first()
+    return dict((fresh.metadata_json if fresh else None) or {})
 
 
 def _reread_state(db, job):
@@ -761,9 +770,9 @@ def test_missing_final_media_blocks_that_item(db):
         db, job=job, target=target, dry_run=False
     )
     assert report.items[0].blocked_by == ["final_media_unavailable"]
-    # No attempt was created, so there is nothing to report a publication status for -
-    # "none" rather than "failed", which would imply something was tried.
-    assert report.publication_status == "none"
+    # No attempt was created, so nothing has been started - not "failed", which would
+    # imply something was tried.
+    assert report.publication_status == "not_started"
     assert db.query(PublishAttempt).count() == 0
 
 
@@ -1327,7 +1336,8 @@ def test_all_outputs_succeeding_publishes_the_run(db):
         db, job=job, target=target, dry_run=False
     )
 
-    assert report.publication_status == "published"
+    # "complete" is the completion vocabulary: every REQUIRED publication succeeded.
+    assert report.publication_status == "complete"
     assert db.query(PublishAttempt).count() == 3
     assert _reread_state(db, job) == PipelineState.PUBLISHED.value
 
@@ -1349,13 +1359,15 @@ def test_a_partial_result_does_not_publish_the_run(db):
         db, job=job, target=target, dry_run=False
     )
 
-    assert report.publication_status == "partial"
-    assert _reread_state(db, job) == PipelineState.READY_TO_PUBLISH.value
+    # A retry is genuinely scheduled for the second clip, so the run is still publishing.
+    # What matters is that it is not PUBLISHED with one of two videos uploaded.
+    assert report.publication_status == "in_progress"
+    assert _reread_state(db, job) == PipelineState.PUBLISHING.value
+    assert _reread_state(db, job) != PipelineState.PUBLISHED.value
     # The success is kept, not rolled back.
     assert db.query(PublishAttempt).filter(
         PublishAttempt.status == PublishAttemptStatus.SUCCEEDED
     ).count() == 1
-    assert (job.metadata_json or {}).get("publication_status") == "partial"
 
 
 def test_one_unknown_among_successes_surfaces_as_unresolved(db):
@@ -1487,8 +1499,18 @@ def test_a_failed_publish_releases_the_run_rather_than_failing_it(db):
         db, job=job, target=target, dry_run=False
     )
 
-    assert report.job_state == PipelineState.READY_TO_PUBLISH.value
+    # Not FAILED: the render is intact and a retry is scheduled, so the run is still
+    # publishing rather than being declared broken.
     assert report.job_state != PipelineState.FAILED.value
+    assert report.job_state == PipelineState.PUBLISHING.value
+
+    # Once the retry budget is spent nothing will pick it up again, and the run is released
+    # so an operator can act - rather than sitting in PUBLISHING for ever.
+    attempt = db.query(PublishAttempt).one()
+    attempt.attempt_no = attempt.max_attempts
+    db.flush()
+    service(publisher=publisher)._settle_job(db, job, target=target)
+    assert _reread_state(db, job) == PipelineState.READY_TO_PUBLISH.value
 
 
 def test_the_published_transition_records_the_external_ids(db, no_event_fanout):

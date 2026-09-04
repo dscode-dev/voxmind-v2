@@ -503,10 +503,23 @@ def list_attempts(
         .all()
     )
     metadata = job.metadata_json or {}
+    completion = metadata.get("publication_summary") or {}
     return {
         "pipeline_job_id": str(job.id),
         "job_state": job.state.value,
         "publication_status": metadata.get("publication_status", "none"),
+        # What the run OWES against what it has done. Before PR-PUBLISH-COMPLETE-01 this
+        # could only be inferred from the attempt list, which cannot show a required
+        # publication that was never attempted - the very thing worth seeing.
+        "completion": {
+            "required": completion.get("required", 0),
+            "succeeded": completion.get("succeeded", 0),
+            "outstanding": completion.get("outstanding", 0),
+            "in_flight": completion.get("in_flight", 0),
+            "retry_pending": completion.get("retry_pending", 0),
+            "blocked": completion.get("blocked", 0),
+            "unresolved": completion.get("unresolved", 0),
+        },
         "publication_eligibility": metadata.get("publication_eligibility"),
         "attempts": [serialize_attempt(attempt) for attempt in attempts],
     }

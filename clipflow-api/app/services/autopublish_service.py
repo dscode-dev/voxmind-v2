@@ -44,6 +44,7 @@ from app.models.pipeline_job import PipelineJob
 from app.models.publish_attempt import PublishAttempt
 from app.models.publish_target import PublishTarget
 from app.publishing.identity import PublisherHeartbeat
+from app.publishing.manifest import ManifestUnavailableError
 from app.publishing.publish_queue import PublishQueue
 from app.services import event_bus
 from app.services.automation_service import AutomationConfig
@@ -93,6 +94,8 @@ PRIVACY_INVALID = "privacy_invalid"
 BUDGET_LOCKED = "budget_locked"
 # Nothing left to publish for this run: every media item is already accounted for.
 NOTHING_OUTSTANDING = "nothing_outstanding"
+# The run's required set cannot be established, so nothing may be allocated against it.
+MANIFEST_UNAVAILABLE = "publication_manifest_unavailable"
 
 # Reasons that are a *policy* pause, not a safety refusal. A run blocked for one of these may
 # still be published by a human — the system is declining to act on its own, not declaring
@@ -131,6 +134,9 @@ class Candidate:
     # so a partial allocation is visible rather than looking like a complete one.
     outstanding: int = 0
     allowance: int = 0
+    # Required items this tick could not take because the budget ran out. Reported so a
+    # deliberately paced large run is visible as progress rather than as a shortfall.
+    deferred: int = 0
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -143,6 +149,7 @@ class Candidate:
             "attempt_ids": self.attempt_ids,
             "outstanding_media": self.outstanding,
             "allowance": self.allowance,
+            "deferred_budget": self.deferred,
             # Said explicitly, because it is the question an operator asks next: may I
             # publish this by hand, or is the system telling me it is not fit to publish?
             "manual_publish_still_allowed": all(
@@ -521,6 +528,14 @@ class AutonomousPublicationService:
         # both caps exact for multi-clip runs.
         try:
             outstanding = self._outstanding_media(db, job, target)
+        except ManifestUnavailableError as exc:
+            # Fail-closed: without a required set there is nothing to allocate against.
+            logger.warning(
+                "autopublish_manifest_unavailable",
+                extra={"pipeline_job_id": str(job.id), "detail": str(exc)},
+            )
+            candidate.reasons.append(MANIFEST_UNAVAILABLE)
+            return candidate
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "autopublish_media_unreadable",
@@ -536,30 +551,25 @@ class AutonomousPublicationService:
             candidate.reasons.append(IN_FLIGHT if unsettled else NOTHING_OUTSTANDING)
             return candidate
 
-        # ---- all of a run, or none of it -------------------------------------
+        # ---- as much of the run as the budget allows --------------------------
         #
-        # A run is allocated whole. Publishing three clips of five and leaving the rest is not
-        # safe today: accepting a publication moves the run out of READY_TO_PUBLISH, and the
-        # publisher settles it to PUBLISHED once the attempts it can see have succeeded - so
-        # the two unallocated clips would be silently dropped, with the run reporting success.
+        # Partial allocation, restored now that completion is outstanding-aware. Until
+        # PR-PUBLISH-COMPLETE-01 this had to take a whole run or none of it: publishing three
+        # clips of five would move the run out of READY_TO_PUBLISH and the publisher would
+        # settle it to PUBLISHED, silently dropping the other two. The evaluator now knows
+        # what the run still owes, so an unfinished run returns to READY_TO_PUBLISH and its
+        # remaining clips are allocated on later ticks.
         #
-        # Making the settle logic outstanding-aware would fix that, but it means the publisher
-        # reading publish_package.json on every completion, which is a change to
-        # PR-PUBLISH-QUEUE-01's semantics that this PR is explicitly not making. So the
-        # explicit policy is: a run whose outstanding clips exceed the remaining budget waits
-        # for a tick that can take all of them.
-        #
-        # The cost is named in the report: a run with more clips than the daily cap never
-        # becomes eligible, and needs a larger cap or a manual publication.
-        if len(outstanding) > allowance:
+        # The consequence that matters: a run with more clips than the daily cap now makes
+        # progress across days instead of never becoming eligible at all.
+        selection = sorted(outstanding)[: max(0, allowance)]
+        if not selection:
             candidate.reasons.append(DAILY_LIMIT)
             candidate.outstanding = len(outstanding)
             candidate.allowance = allowance
             return candidate
 
-        # Deterministic, and the order the package declares them in, so a series publishes
-        # first clip first.
-        selection = sorted(outstanding)
+        candidate.deferred = len(outstanding) - len(selection)
 
         candidate.allowance = len(selection)
         candidate.outstanding = len(outstanding)
@@ -631,17 +641,17 @@ class AutonomousPublicationService:
     def _outstanding_media(
         self, db: Session, job: PipelineJob, target: PublishTarget
     ) -> list[int]:
-        """Video indexes of this run that have no publication yet.
+        """Video indexes this run still owes on this target.
 
-        An item already carrying an attempt of any kind is excluded: settled ones are done,
-        and unsettled ones are handled by the whole-run gate above. What remains is exactly
-        what a new allocation could create, which is what the budget must be measured
-        against.
+        Read from the manifest rather than from the artifact each time: the manifest is the
+        run's required set, fixed before anything was published, so an item cannot quietly
+        stop being required because a later re-render changed the package.
+
+        An item carrying an attempt of ANY kind is excluded. Succeeded ones are done;
+        retrying, unresolved, blocked and cancelled ones are somebody else's decision, and
+        creating a second logical publication for them is precisely what must not happen.
         """
-        items = self.publishing.resolve_media(db, job)
-        if not items:
-            return []
-
+        manifest = self.publishing.manifests.resolve(db, job)
         taken = {
             identity
             for (identity,) in db.query(PublishAttempt.media_identity).filter(
@@ -649,7 +659,11 @@ class AutonomousPublicationService:
                 PublishAttempt.target_id == target.id,
             )
         }
-        return [item.video_index for item in items if item.identity not in taken]
+        return [
+            item.video_index
+            for item in manifest.ordered()
+            if item.media_identity not in taken
+        ]
 
     # ------------------------------------------------------------- sub-policies
 

@@ -246,7 +246,7 @@ def test_a_real_publish_returns_the_external_url(client, db):
         json={"target_id": str(target.id), "dry_run": False, "privacy": "private"},
     ).json()
 
-    assert body["publication_status"] == "published"
+    assert body["publication_status"] == "complete"
     assert body["job_state"] == "published"
     assert body["items"][0]["external_url"].startswith("https://www.youtube.com/watch?v=")
 
@@ -308,7 +308,12 @@ def test_the_history_route_shows_attempts_without_secrets(client, db):
 
     body = client.get(f"/admin/pipeline-jobs/{job.id}/publish-attempts").json()
 
-    assert body["publication_status"] == "published"
+    # The completion vocabulary, shared with the evaluator: "complete" means every
+    # REQUIRED publication succeeded, not merely every attempt that happens to exist.
+    assert body["publication_status"] == "complete"
+    assert body["completion"]["required"] == 1
+    assert body["completion"]["succeeded"] == 1
+    assert body["completion"]["outstanding"] == 0
     assert len(body["attempts"]) == 1
     assert body["attempts"][0]["external_id"]
     assert body["attempts"][0]["metadata_snapshot"]["title"]
