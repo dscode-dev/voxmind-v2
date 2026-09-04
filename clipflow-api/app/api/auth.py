@@ -11,6 +11,7 @@ from app.models.enums import UserRole, UserStatus
 from app.models.user import User
 from app.security.access_control import can_bypass_credits
 from app.security.auth_middleware import get_current_user
+from app.security.bootstrap_auth import resolve_bootstrap_code
 from app.security.phone import normalize_phone_number
 from app.security.jwt_service import _fingerprint, generate_token
 from app.services.audit_service import AuditService
@@ -154,7 +155,14 @@ def start_auth(
             detail="Too many attempts. Try again later.",
         )
 
-    code = settings.resolve_fixed_otp() or generate_otp()
+    # The bootstrap admin's fixed code when this is that account on a development machine,
+    # a generated one otherwise. Scoped to a single phone by `resolve_bootstrap_code`; the
+    # verification path below is unchanged and checks the hash like any other code.
+    #
+    # This replaces `settings.resolve_fixed_otp()`, which returned the same fixed code for
+    # every login. Since this endpoint creates a user for an unknown number, that made the
+    # code a way to mint an account for any phone and sign in as it.
+    code = resolve_bootstrap_code(phone_number) or generate_otp()
     challenge_id = generate_challenge_id()
 
     user.otp_hash = hash_otp(code)

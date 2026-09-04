@@ -72,6 +72,28 @@ class Settings(BaseSettings):
     # worker and control-plane cannot talk to the API, so a missing value is a hard failure
     # rather than an open door.
     internal_api_token: str = Field(alias="INTERNAL_API_TOKEN")
+    # =====================================
+    # Local bootstrap login (PR-LOCAL-ACCESS-01)
+    # -------------------------------------------------------------------------------
+    # Lets the first admin sign in on a machine with no SMS delivery, WITHOUT becoming a
+    # way into anyone else's account: the fixed code below is accepted for exactly one
+    # phone — DEFAULT_ADMIN_PHONE_NUMBER, the account the bootstrap creates — and only in
+    # a development environment. It replaces FIXED_TEST_OTP on the login path, which
+    # applied to every phone and, because /auth/start creates unknown users, was a way to
+    # mint an account for any number at all.
+    #
+    # Off by default. A deployment that does nothing gets nothing.
+    # =====================================
+
+    bootstrap_admin_enabled: bool = Field(
+        default=False, alias="BOOTSTRAP_ADMIN_ENABLED"
+    )
+    # Never returned, never logged, never persisted: it is compared against the submitted
+    # code and hashed like any other OTP if it is ever stored.
+    bootstrap_admin_auth_code: str | None = Field(
+        default=None, alias="BOOTSTRAP_ADMIN_AUTH_CODE"
+    )
+
     default_admin_phone_number: str = Field(
         default="+5581999912985",
         alias="DEFAULT_ADMIN_PHONE_NUMBER",
@@ -241,6 +263,11 @@ class Settings(BaseSettings):
     # Policy (weights, caps, thresholds) is NOT here: it belongs to the editorial intention
     # and lives in ContentTopic.metadata_json["selection"].
     # =====================================
+
+    # The account-wide key. Feature-scoped names below fall back to it, so a deployment
+    # can set one variable instead of three, and a feature that needs its own key (a
+    # separate billing project, a different rate limit) can still have one.
+    openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
 
     selection_openai_api_key: str | None = Field(
         default=None, alias="SELECTION_OPENAI_API_KEY"
@@ -504,6 +531,40 @@ class Settings(BaseSettings):
     # Validation
     # =====================================
 
+    # =====================================
+    # Publication metadata generation (PR-LOCAL-ACCESS-01)
+    # =====================================
+
+    # Off unless a key exists; see `metadata_generation_available`. Three short editorial
+    # fields do not need a frontier model, and this runs once per clip on every
+    # publication - a small model is the right cost for the job.
+    publication_metadata_model: str = Field(
+        default="gpt-4o-mini", alias="PUBLICATION_METADATA_MODEL"
+    )
+    publication_metadata_timeout_sec: float = Field(
+        default=30.0, alias="PUBLICATION_METADATA_TIMEOUT_SEC"
+    )
+
+    def resolve_openai_key(self, scoped: str | None = None) -> str | None:
+        """A feature's own key if it has one, otherwise the account-wide key."""
+        for candidate in (scoped, self.openai_api_key):
+            value = str(candidate or "").strip()
+            if value:
+                return value
+        return None
+
+    def resolve_bootstrap_auth_code(self) -> str | None:
+        """The fixed login code, or None when one must not be honoured.
+
+        Three conditions, all required: the feature switched on, an explicit code, and a
+        development environment. The last one is the fail-safe — a production deployment
+        that sets the first two is refused at startup by the validator below, and this
+        second check means even a mis-detected environment cannot turn it on.
+        """
+        if not self.bootstrap_admin_enabled or not self.is_development:
+            return None
+        return str(self.bootstrap_admin_auth_code or "").strip() or None
+
     @field_validator("jwt_secret", "internal_api_token")
     @classmethod
     def _reject_placeholder_secrets(cls, value: str, info) -> str:
@@ -518,6 +579,30 @@ class Settings(BaseSettings):
                 f"{info.field_name} must be at least 16 characters."
             )
         return candidate
+
+    @model_validator(mode="after")
+    def _reject_bootstrap_login_outside_development(self) -> "Settings":
+        """A fixed login code in production is a shared password. Refuse to start.
+
+        Caught at boot rather than at login, because the failure mode otherwise is a
+        deployment that looks healthy and accepts a constant as an admin credential.
+        """
+        if self.bootstrap_admin_enabled and not self.is_development:
+            raise ValueError(
+                "BOOTSTRAP_ADMIN_ENABLED is true but ENVIRONMENT is not a development "
+                "environment. A fixed admin login code must never be reachable in "
+                f"production — set BOOTSTRAP_ADMIN_ENABLED=false, or set ENVIRONMENT to "
+                f"one of: {sorted(DEVELOPMENT_ENVIRONMENTS)}."
+            )
+        if self.bootstrap_admin_enabled and not str(
+            self.bootstrap_admin_auth_code or ""
+        ).strip():
+            raise ValueError(
+                "BOOTSTRAP_ADMIN_ENABLED is true but BOOTSTRAP_ADMIN_AUTH_CODE is empty. "
+                "Enabling the bootstrap login without a code would leave it silently "
+                "inert; set a code or disable the feature."
+            )
+        return self
 
     @model_validator(mode="after")
     def _reject_fixed_otp_outside_development(self) -> "Settings":

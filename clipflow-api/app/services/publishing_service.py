@@ -57,6 +57,7 @@ from app.publishing.youtube_publisher import YouTubePublisher
 from app.services import event_bus
 from app.services.artifact_content_service import ArtifactContentService
 from app.services.pipeline_state_machine import PipelineStateMachine
+from app.services.publication_metadata_service import PublicationMetadataService
 from app.services.publication_completion import (
     COMPLETE,
     PublicationCompletionEvaluator,
@@ -178,6 +179,7 @@ class PublishingService:
         artifacts: ArtifactContentService | None = None,
         state_machine: PipelineStateMachine | None = None,
         queue: PublishQueue | None = None,
+        metadata_generator=None,
         session_factory=None,
     ) -> None:
         self.targets = targets or PublishTargetService()
@@ -187,6 +189,11 @@ class PublishingService:
         self.manifests = ManifestService(artifacts=self.artifacts)
         self.completion = PublicationCompletionEvaluator()
         self.queue = queue or PublishQueue()
+        # Built lazily inside the service so it reads settings at call time and so a test can
+        # substitute a stub generator without reaching for the network.
+        self.metadata_generator = metadata_generator or PublicationMetadataService(
+            artifacts=self.artifacts
+        )
         # Only used by the progress recorder, which needs a session of its own while the
         # caller's transaction is open. Injectable so a test can point it at the same
         # database the test is reading.
@@ -255,10 +262,23 @@ class PublishingService:
             return report
 
         package = self._package(job)
+
+        # Editorial metadata for each clip, generated here and nowhere later: this is before
+        # any attempt row exists and long before a byte moves, so a slow or failed model
+        # delays a decision rather than an upload. Idempotent and cached on the run, so a
+        # retry republishes under the title the first attempt was committed to.
+        #
+        # It feeds the SAME slot the worker's editorial text uses, so the precedence the
+        # publishing contract already documents is untouched:
+        #   explicit request > publish_package (worker post, else generated) > target > system
+        # An explicit override still wins, and a run the worker described keeps its own words.
+        editorial = self._editorial_metadata(db, job, items, dry_run=dry_run)
         for item in items:
             report.items.append(
                 self._publish_item(
-                    db, job=job, target=target, item=item, package=package,
+                    db, job=job, target=target,
+                    item=_with_editorial(item, editorial.get(item.video_index)),
+                    package=package,
                     overrides=overrides, dry_run=dry_run, actor=actor,
                     initiator=initiator, provenance=provenance,
                     budget_date=budget_date,
@@ -450,6 +470,25 @@ class PublishingService:
     def _package(self, job: PipelineJob) -> dict[str, Any]:
         data = self.artifacts.load_json(f"jobs/{job.worker_job_id}/publish_package.json")
         return data if isinstance(data, dict) else {}
+
+    def _editorial_metadata(
+        self, db: Session, job: PipelineJob, items: list[MediaItem], *, dry_run: bool
+    ) -> dict[int, dict]:
+        """Generated titles and descriptions per clip, or an empty map.
+
+        Never raises. Metadata is an improvement on the technical fallback, and a run must
+        publish without it rather than fail because a model was unreachable.
+        """
+        try:
+            return self.metadata_generator.ensure(db, job, items)
+        except Exception:  # noqa: BLE001
+            # Only the type: a provider error can carry the request, and the request carries
+            # the key.
+            logger.warning(
+                "publication_metadata_generation_skipped",
+                extra={"pipeline_job_id": str(job.id)},
+            )
+            return {}
 
     # ---------------------------------------------------------------- one item
 
@@ -1360,3 +1399,34 @@ def job_publication_status(db: Session, job: PipelineJob) -> str:
         db.query(PublishAttempt).filter(PublishAttempt.pipeline_job_id == job.id).all()
     )
     return attempts_publication_status(attempts)
+
+
+def _with_editorial(item: MediaItem, generated: dict[str, Any] | None) -> MediaItem:
+    """Put generated text where the worker's editorial text would have been.
+
+    Only fills what is absent. A clip the worker already titled keeps that title: the model
+    exists to write metadata nobody wrote, not to overrule an upstream stage a person may
+    have reviewed.
+    """
+    if not generated:
+        return item
+
+    video = dict(item.video or {})
+    post = dict(video.get("post") or {})
+    if not str(post.get("title") or "").strip():
+        post["title"] = generated.get("title")
+    if not str(post.get("description") or "").strip():
+        post["description"] = generated.get("description")
+    if not post.get("hashtags"):
+        # `hashtags` and not `tags`: the publishing contract reads
+        # `post["hashtags"] or package["hashtags"]`, so anything written under `tags` is
+        # silently dropped on the way to YouTube.
+        post["hashtags"] = list(generated.get("tags") or [])
+    video["post"] = post
+
+    return MediaItem(
+        identity=item.identity,
+        storage_key=item.storage_key,
+        video_index=item.video_index,
+        video=video,
+    )
