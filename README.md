@@ -1272,6 +1272,169 @@ and a real run spends the channel's YouTube quota.
 Collection is off by default (`METRICS_COLLECTION_ENABLED=false`), like every other autonomous
 behaviour here.
 
+## Evaluation dataset
+
+Snapshots alone are not comparable. A hundred views one hour after publication and a hundred
+views two weeks later are not the same fact, and the collector records whichever moments it
+happened to be awake for. This layer asks every publication the *same* question, so two videos
+can be put beside each other without the comparison secretly being about their ages.
+
+**Evaluation, not optimization.** Nothing here changes discovery, relevance, trend, selection,
+admission, clip planning, QA, publication eligibility, the autopublish policy or the
+publication budget. It reads; it never writes. As with ingestion, that is enforced by the
+import graph — no production module imports `app.evaluation`, and
+`test_evaluation_package_is_not_imported_by_the_production_path` fails if one ever does.
+
+### The unit is one published video
+
+One `PublishAttempt` that succeeded is one row. Not one run: a run can render four clips,
+upload all four, and get four different audiences. Aggregating at the run would average away
+the only comparison the data exists to support — which cut of the same match did better — and
+no later analysis could recover it.
+
+### Canonical windows
+
+Five, one per regime a short video actually passes through:
+
+| Window | Tolerance | Rule |
+| --- | ---: | --- |
+| 1h | 1h | earliest measuring snapshot with age in [1h, 2h] |
+| 6h | 2h | earliest measuring snapshot with age in [6h, 8h] |
+| 24h | 8h | earliest measuring snapshot with age in [24h, 32h] |
+| 72h | 12h | earliest measuring snapshot with age in [72h, 84h] |
+| 7d | 30h | earliest measuring snapshot with age in [168h, 198h] |
+
+The tolerances are **measured**, not assumed. Replaying the shipped ingestion cadence (hourly
+under 24h, 6-hourly to 7d, daily after) against a 15-minute collection tick gives the earliest
+observation at or after each target:
+
+| Window | First observation | Lag |
+| --- | ---: | ---: |
+| 1h | 1h00m | 0h00m |
+| 6h | 6h00m | 0h00m |
+| 24h | 29h00m | 5h00m |
+| 72h | 77h00m | 5h00m |
+| 7d | 191h00m | 23h00m |
+
+The 24h, 72h and 7d lags are not noise. The collection interval widens *at* those ages, so the
+schedule steps straight over the boundary it was asked about: a 24-hour-old video becomes due
+again six hours later, not one, and nothing is captured between 24h and 29h. Tolerances are
+therefore the measured need plus real margin. `views_24h` honestly means "views at the first
+observation from 24h onward", and every row carries the lag that says how much later that was.
+
+### Four rules the resolver keeps
+
+- **At or after the target.** An observation at 23h cannot answer "what did 24h look like",
+  however close it feels — accepting it would make the column mean 23 hours of exposure for
+  some videos and 24 for others.
+- **Bounded, never nearest-available.** Without an upper bound a 24h window would happily
+  answer with a snapshot from day nine.
+- **No interpolation.** View growth is not linear, so a straight line between 23h and 25h is a
+  fabrication indistinguishable from a measurement once written down. If no acceptable
+  observation exists, the answer is unavailable.
+- **A real measurement wins.** One `not_returned` blip at 24h05 does not discard a good
+  observation at 24h30.
+
+### Availability, not NULL
+
+| State | Meaning |
+| --- | --- |
+| `available` | measured, inside the acceptance interval |
+| `not_mature` | the interval has not closed yet as of the cut-off — an observation may still arrive |
+| `missing_snapshot` | the interval closed and nothing fell inside it — a statement about the collector |
+| `video_not_returned` | a snapshot exists but the provider did not return the video |
+
+"Too early to know" and "we should have known and did not" call for opposite responses, so they
+are never collapsed into one another. Maturity is judged against the dataset's `as_of` rather
+than the wall clock, or the same dataset would answer differently every time it was rebuilt.
+
+### Reproducibility, without a second copy
+
+Every build takes an `as_of`: snapshots captured after it are invisible, in SQL and again in
+the resolver. That is the whole look-ahead guard — a dataset rebuilt next week, with a week of
+new observations in the table, returns identical rows.
+
+Because of it, nothing is materialized. Snapshots are append-only and never backfilled, so
+`(as_of, semantic version, window policy, filters)` already determines the output exactly; a
+stored copy would only add a second truth that can drift from the series it came from. What is
+emitted instead is a manifest, and a `dataset_id` that is a digest of those same inputs — so
+the same request names the same dataset, and changing any input changes the id. Asking for an
+id that does not match the parameters returns 404 rather than quietly handing back something
+else.
+
+### Decision context, publication context, outcomes
+
+Three groups, kept apart structurally and prefixed `dc_` / `pub_` / `out_` once flattened.
+
+`dc_` is what was knowable *before* the video existed, read from the provenance admission
+froze onto the job — the selection score the decision actually saw, not whatever the candidate
+says today. `out_` is what happened afterwards. `pub_` is neither: privacy and initiator were
+fixed at upload, and they are confounders to condition on rather than features or results.
+
+The separation is not cosmetic. The obvious future use of this dataset is to learn something
+from it, and a table that mixes the two invites a model trained on `views_24h` to predict
+`views_24h`. Leakage now has to be introduced on purpose.
+
+### Derived fields
+
+Absolute counters are preserved as observed, including decreases — YouTube removes spam views,
+so monotonicity is not an invariant. On top of them, only exact arithmetic:
+
+- `views_per_hour_{1h,6h,24h}` — divided by the observation's **actual** age, not the nominal
+  window. 1,100 views seen at 29h is 37.9/hour, not the 45.8 that dividing by 24 would claim.
+- `likes_per_view_24h`, `comments_per_view_24h`.
+
+A ratio is NULL when its numerator was not disclosed (a hidden like count is unknown, and 0.0
+would report the video as having no engagement) and NULL when views are zero ("0 likes out of
+0 views" is not 0% engagement; it is a question nobody has asked yet).
+
+There is deliberately **no** viral score, quality score, performance score or ranking. Each
+would need an empirical definition nobody has yet, and once such a column exists somebody will
+sort on it.
+
+### Data quality
+
+Every considered publication is either a row or a counted exclusion — `considered = included +
+excluded`, with reasons (`missing_lineage`, `missing_published_at`, `missing_external_id`).
+Coverage is reported per window as available over mature. It measures the **collector**, not
+the content: low 24h coverage means the loop was not running, never that the videos did badly.
+
+### Endpoints
+
+All admin-only, all read-only, and none of them calls YouTube — ingestion talks to the
+provider, evaluation talks to the database.
+
+```
+GET  /admin/published-videos/{attempt_id}/evaluation      one publication, with its trace
+POST /admin/metrics/evaluation-datasets?dry_run=true      build/preview: manifest, summary, quality
+GET  /admin/metrics/evaluation-datasets/{dataset_id}      paginated rows, id must match params
+GET  /admin/metrics/evaluation-datasets/{id}/export.csv   the whole dataset, streamed
+GET  /admin/metrics/evaluation-schema                     window policy and column contract
+```
+
+`dry_run` defaults to true, which here means "tell me what this dataset would contain" — that
+is the question worth asking first, because a dataset whose 24h coverage is 30% is not one to
+start analysing. The CSV has declared, versioned columns (NULL is the empty field) and carries
+its manifest in `X-Dataset-*` headers.
+
+### What this dataset cannot tell you
+
+It is observational, and it is small. Stated plainly, because the temptation to read more into
+it than it supports will only grow as it fills:
+
+- **Views are exposure-dependent.** They measure distribution as much as content.
+- **Privacy is a confounder.** A `private` upload has no public distribution at all, so private
+  and public videos must never be compared as though they had the same exposure. Privacy is
+  preserved as a dimension and deliberately not corrected for.
+- **Topics and source channels differ**, in audience size and in baseline interest.
+- **Canonical windows reduce age bias; they do not eliminate it.** A 24h observation is really
+  a first-observation-from-24h-onward, and its lag varies.
+- **Channel-size normalization is not possible yet.** Nothing has ever recorded a subscriber
+  count, and using today's would leak future information into a past publication.
+- **No causal claim is available.** Even a strong correlation between selection score and views
+  would not show that the score *causes* views: the same score also decides what gets produced,
+  when, and on which topic. Historical performance does not imply future performance.
+
 ## Job state
 
 A run's state is the result of a validated transition, never an inference from which objects

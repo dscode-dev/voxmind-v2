@@ -4,6 +4,7 @@ from app.api import auth
 from app.api import admin
 from app.api import automation
 from app.api import discovery
+from app.api import evaluation
 from app.api import internal_worker
 from app.api import job_events
 from app.api import jobs
@@ -62,6 +63,13 @@ api_router.include_router(operations.router)
 # ==========================================
 
 api_router.include_router(metrics.router)
+
+
+# ==========================================
+# Evaluation (canonical windows, reproducible performance dataset)
+# ==========================================
+
+api_router.include_router(evaluation.router)
 
 
 # ==========================================
