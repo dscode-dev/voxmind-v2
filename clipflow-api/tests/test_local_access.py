@@ -77,6 +77,19 @@ def bootstrap_config(monkeypatch):
     monkeypatch.setattr(settings, "default_admin_credits", 100, raising=False)
 
 
+@pytest.fixture()
+def own_session(db):
+    """The factory the metadata service persists through.
+
+    Generation commits on a session of its own — see `_commit_results` — because the caller
+    may be a dry run that never commits. Binding it to the test's engine keeps that real
+    without letting it reach for the deployment database.
+    """
+    from sqlalchemy.orm import sessionmaker
+
+    return sessionmaker(bind=db.get_bind(), future=True, expire_on_commit=False)
+
+
 # ===========================================================================
 # Bootstrap
 # ===========================================================================
@@ -293,7 +306,7 @@ class StubArtifacts:
         return self._package
 
 
-def test_each_clip_of_a_run_gets_its_own_metadata(db, no_event_fanout):
+def test_each_clip_of_a_run_gets_its_own_metadata(db, own_session, no_event_fanout):
     """Three cuts of one match are three subjects.
 
     One description applied to all of them would be wrong about at least two.
@@ -301,7 +314,9 @@ def test_each_clip_of_a_run_gets_its_own_metadata(db, no_event_fanout):
     job = make_run(db, state=PipelineState.READY_TO_PUBLISH)
     db.commit()
     generator = StubGenerator()
-    service = PublicationMetadataService(generator=generator, artifacts=StubArtifacts())
+    service = PublicationMetadataService(
+        generator=generator, artifacts=StubArtifacts(), session_factory=own_session
+    )
 
     items = [
         _item(1, {"post": {"hook": "o gol de empate"}}),
@@ -318,13 +333,16 @@ def test_each_clip_of_a_run_gets_its_own_metadata(db, no_event_fanout):
     ]
 
 
-def test_generation_is_not_repeated_for_a_clip_that_already_has_metadata(db,
-                                                                        no_event_fanout):
+def test_generation_is_not_repeated_for_a_clip_that_already_has_metadata(
+    db, own_session, no_event_fanout
+):
     """A retry must republish under the title the first attempt committed to."""
     job = make_run(db, state=PipelineState.READY_TO_PUBLISH)
     db.commit()
     generator = StubGenerator()
-    service = PublicationMetadataService(generator=generator, artifacts=StubArtifacts())
+    service = PublicationMetadataService(
+        generator=generator, artifacts=StubArtifacts(), session_factory=own_session
+    )
 
     service.ensure(db, job, [_item(1)])
     first = dict((job.metadata_json or {})[METADATA_KEY]["1"])
@@ -334,7 +352,7 @@ def test_generation_is_not_repeated_for_a_clip_that_already_has_metadata(db,
     assert (job.metadata_json or {})[METADATA_KEY]["1"] == first
 
 
-def test_context_is_built_from_persisted_facts(db, no_event_fanout):
+def test_context_is_built_from_persisted_facts(db, own_session, no_event_fanout):
     from app.models.content_topic import ContentTopic
     from app.models.enums import VideoCandidateStatus
     from app.models.video_candidate import VideoCandidate
@@ -353,9 +371,9 @@ def test_context_is_built_from_persisted_facts(db, no_event_fanout):
     db.commit()
 
     generator = StubGenerator()
-    PublicationMetadataService(generator=generator, artifacts=StubArtifacts()).ensure(
-        db, job, [_item(1, {"transcript": "o Milan abriu o placar aos 12 minutos"})]
-    )
+    PublicationMetadataService(
+        generator=generator, artifacts=StubArtifacts(), session_factory=own_session
+    ).ensure(db, job, [_item(1, {"transcript": "o Milan abriu o placar aos 12 minutos"})])
 
     context = generator.contexts[0]
     assert context.topic_name == "Serie A"
@@ -378,7 +396,7 @@ def test_a_clip_with_no_context_is_flagged_as_thin():
     "result_status, error",
     [(UNAVAILABLE, "no_api_key"), ("failed", "ConnectTimeout"), (INVALID, "ValidationError")],
 )
-def test_a_generation_failure_leaves_the_run_publishable(db, no_event_fanout,
+def test_a_generation_failure_leaves_the_run_publishable(db, own_session, no_event_fanout,
                                                          result_status, error):
     """The video is rendered and valid. A missing title cannot be a reason to lose it."""
     from app.publishing.metadata_ai import MetadataResult
@@ -388,7 +406,9 @@ def test_a_generation_failure_leaves_the_run_publishable(db, no_event_fanout,
     generator = StubGenerator(
         answers=[MetadataResult(status=result_status, error=error)]
     )
-    service = PublicationMetadataService(generator=generator, artifacts=StubArtifacts())
+    service = PublicationMetadataService(
+        generator=generator, artifacts=StubArtifacts(), session_factory=own_session
+    )
 
     result = service.ensure(db, job, [_item(1)])
 
@@ -397,11 +417,14 @@ def test_a_generation_failure_leaves_the_run_publishable(db, no_event_fanout,
     assert METADATA_KEY not in (job.metadata_json or {})
 
 
-def test_an_unconfigured_deployment_generates_nothing_and_says_so(db, no_event_fanout):
+def test_an_unconfigured_deployment_generates_nothing_and_says_so(db, own_session,
+                                                                 no_event_fanout):
     job = make_run(db, state=PipelineState.READY_TO_PUBLISH)
     db.commit()
     service = PublicationMetadataService(
-        generator=NullMetadataGenerator(), artifacts=StubArtifacts()
+        generator=NullMetadataGenerator(),
+        artifacts=StubArtifacts(),
+        session_factory=own_session,
     )
 
     assert service.ensure(db, job, [_item(1)]) == {}
@@ -465,16 +488,97 @@ def test_a_provider_error_body_is_never_carried_out():
     assert FAKE_OPENAI_KEY not in str(result.provenance())
 
 
-def test_the_api_key_never_reaches_a_stored_row(db, no_event_fanout, monkeypatch):
+def test_the_api_key_never_reaches_a_stored_row(db, own_session, no_event_fanout,
+                                               monkeypatch):
     monkeypatch.setattr(settings, "openai_api_key", FAKE_OPENAI_KEY, raising=False)
     job = make_run(db, state=PipelineState.READY_TO_PUBLISH)
     db.commit()
 
     PublicationMetadataService(
-        generator=StubGenerator(), artifacts=StubArtifacts()
+        generator=StubGenerator(), artifacts=StubArtifacts(), session_factory=own_session
     ).ensure(db, job, [_item(1)])
 
     assert FAKE_OPENAI_KEY not in json.dumps(job.metadata_json or {})
+
+
+# --------------------------------------------------------------- persistence
+
+
+def test_a_generation_survives_a_caller_that_never_commits(tmp_path, no_event_fanout):
+    """The regression a real run found.
+
+    Preparing a publication runs a dry pass first, and that pass decides nothing — so it
+    correctly never commits. Written through the caller, the metadata that had really been
+    generated and the record of the call that produced it were both rolled back with it: the
+    next real publish paid OpenAI again for the same clips, and `/admin/ai/status` reported
+    `last_execution: null` about a call that had definitely happened.
+
+    Two real connections here, not the shared in-memory one — on a single connection a
+    rollback and a commit are indistinguishable and the test would pass either way.
+    """
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    import app.models  # noqa: F401 - registers every mapper
+    from app.db.base import Base
+    from app.models.ai_execution import AIExecution
+    from app.models.pipeline_job import PipelineJob
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'ops.db'}", future=True)
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, future=True, expire_on_commit=False)
+
+    setup = factory()
+    job_id = make_run(setup, state=PipelineState.READY_TO_PUBLISH).id
+    setup.commit()
+    setup.close()
+
+    caller = factory()
+    caller_job = caller.query(PipelineJob).filter(PipelineJob.id == job_id).one()
+    PublicationMetadataService(
+        generator=StubGenerator(), artifacts=StubArtifacts(), session_factory=factory
+    ).ensure(caller, caller_job, [_item(1)])
+    caller.rollback()  # what a dry run does
+    caller.close()
+
+    reader = factory()
+    try:
+        stored = reader.query(PipelineJob).filter(PipelineJob.id == job_id).one()
+        assert METADATA_KEY in (stored.metadata_json or {})
+        executions = reader.query(AIExecution).all()
+        assert len(executions) == 1
+        assert executions[0].purpose == "publication_metadata"
+    finally:
+        reader.close()
+        engine.dispose()
+
+
+def test_every_call_is_recorded_including_the_ones_that_failed(db, own_session,
+                                                              no_event_fanout):
+    """"Is the AI working?" is answered from calls, not from configuration.
+
+    A failed call is the more informative of the two, so it is recorded with the same care —
+    with the provider, the model and a sanitised reason, and never the prompt or the answer.
+    """
+    from app.models.ai_execution import AIExecution
+    from app.models.enums import AIExecutionStatus
+    from app.publishing.metadata_ai import MetadataResult
+
+    job = make_run(db, state=PipelineState.READY_TO_PUBLISH)
+    db.commit()
+
+    PublicationMetadataService(
+        generator=StubGenerator(
+            answers=[MetadataResult(status="failed", error="ConnectTimeout", provider="openai")]
+        ),
+        artifacts=StubArtifacts(),
+        session_factory=own_session,
+    ).ensure(db, job, [_item(1)])
+
+    execution = db.query(AIExecution).one()
+    assert execution.status == AIExecutionStatus.FAILED
+    assert execution.error_message == "ConnectTimeout"
+    assert execution.payload_json.get("video_index") == 1
 
 
 # ------------------------------------------------------------------ validation

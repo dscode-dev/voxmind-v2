@@ -12,6 +12,7 @@ from app.api import metrics
 from app.api import ops_stream
 from app.api import pipeline_runs
 from app.api import operations
+from app.api import operations_read
 from app.api import publishing
 from app.api import products
 from app.api import purchases
@@ -56,6 +57,13 @@ api_router.include_router(publishing.router)
 # ==========================================
 
 api_router.include_router(operations.router)
+
+
+# ==========================================
+# Operational read models (AI status, production runs)
+# ==========================================
+
+api_router.include_router(operations_read.router)
 
 
 # ==========================================

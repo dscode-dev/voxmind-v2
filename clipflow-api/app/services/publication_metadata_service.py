@@ -27,6 +27,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.core.settings import settings
+from app.models.ai_execution import AIExecution
 from app.models.content_topic import ContentTopic
 from app.models.pipeline_job import PipelineJob
 from app.models.video_candidate import VideoCandidate
@@ -37,7 +38,7 @@ from app.publishing.metadata_ai import (
     build_metadata_generator,
 )
 from app.services import event_bus
-from app.models.enums import PipelineEventType
+from app.models.enums import AIExecutionStatus, PipelineEventType
 
 logger = logging.getLogger(__name__)
 
@@ -51,9 +52,11 @@ MAX_TRANSCRIPT_CHARS = 2400
 
 
 class PublicationMetadataService:
-    def __init__(self, generator=None, artifacts=None) -> None:
+    def __init__(self, generator=None, artifacts=None, session_factory=None) -> None:
         self._generator = generator
         self._artifacts = artifacts
+        # Only used to persist results; see `_commit_results`.
+        self._session_factory = session_factory
 
     @property
     def generator(self):
@@ -94,12 +97,14 @@ class PublicationMetadataService:
 
         package = self._package(job)
         shared = self._shared_context(db, job)
-        self._emit(db, job, "metadata_generation_started", {"clips": len(missing)})
 
         generated = 0
+        outcomes: list[tuple[int, Any]] = []
         for item in missing:
             context = self._clip_context(item, shared, package, total=len(items))
             result = self.generator.generate(context)
+            outcomes.append((item.video_index, result))
+
             if not result.ok:
                 # Reported, not raised. The publication proceeds on the fallback.
                 logger.warning(
@@ -111,11 +116,6 @@ class PublicationMetadataService:
                         "reason": result.error,
                     },
                 )
-                self._emit(db, job, "metadata_generation_failed", {
-                    "video_index": item.video_index,
-                    "status": result.status,
-                    "reason": result.error,
-                })
                 continue
 
             stored[str(item.video_index)] = {
@@ -127,15 +127,120 @@ class PublicationMetadataService:
             }
             generated += 1
 
+        # Committed on a session of its own, deliberately. A dry run never commits — it
+        # decides nothing — so writing through the caller would discard metadata that was
+        # really generated and paid for, and the next real publish would call OpenAI again
+        # for the same clips. It would also mean a recorded call never reaches ai_executions,
+        # leaving the operations console unable to show evidence of a call that happened.
+        self._commit_results(job.id, stored if generated else None, outcomes, generated)
+
         if generated:
-            self._persist(db, job, stored)
-            self._emit(db, job, "metadata_generation_succeeded", {"clips": generated})
+            # Keep the caller's in-memory view consistent with what was just written, so a
+            # publish in the same request sees its own metadata.
+            metadata = dict(job.metadata_json or {})
+            metadata[METADATA_KEY] = stored
+            job.metadata_json = metadata
             logger.info(
                 "publication_metadata_generated",
                 extra={"pipeline_job_id": str(job.id), "clips": generated},
             )
 
         return {int(k): v for k, v in stored.items()}
+
+    def _commit_results(
+        self,
+        job_id: Any,
+        stored: dict[str, dict] | None,
+        outcomes: list[tuple[int, Any]],
+        generated: int,
+    ) -> None:
+        """Write the metadata, the AI executions and the events, and commit them.
+
+        The whole record of the generation lands here, including the ``started`` event: the
+        three rows are written in order but share one commit, so the feed reads correctly
+        while nothing about the generation can be persisted half-way.
+
+        Never raises: everything here is a record of work already done, and losing the record
+        must not lose the work.
+        """
+        from app.db.session import SessionLocal
+
+        factory = self._session_factory or SessionLocal
+        db = factory()
+        try:
+            job = db.query(PipelineJob).filter(PipelineJob.id == job_id).first()
+            if job is None:
+                return
+
+            if stored is not None:
+                metadata = dict(job.metadata_json or {})
+                metadata[METADATA_KEY] = stored
+                job.metadata_json = metadata
+
+            self._emit(db, job, "metadata_generation_started", {"clips": len(outcomes)})
+            for index, result in outcomes:
+                self._record_execution(db, job, result, index)
+                self._emit(
+                    db,
+                    job,
+                    "metadata_generation_succeeded" if result.ok
+                    else "metadata_generation_failed",
+                    {
+                        "video_index": index,
+                        "status": result.status,
+                        **({} if result.ok else {"reason": result.error}),
+                    },
+                )
+            db.commit()
+        except Exception:  # noqa: BLE001
+            db.rollback()
+            logger.warning(
+                "publication_metadata_not_persisted",
+                extra={"pipeline_job_id": str(job_id), "clips": generated},
+            )
+        finally:
+            db.close()
+
+    # ------------------------------------------------------------- observability
+
+    PURPOSE = "publication_metadata"
+
+    def _record_execution(self, db: Session, job: PipelineJob, result, index: int) -> None:
+        """One AIExecution row per call, succeeded or failed.
+
+        The table already exists and is what the operations surface reads to answer "is the
+        AI working?". Writing here means that question is answered from recorded calls rather
+        than from configuration — a key being present says nothing about whether it works.
+
+        Never the prompt, never the response, never the key: provider, model, outcome and how
+        long it took.
+        """
+        try:
+            db.add(
+                AIExecution(
+                    pipeline_job_id=job.id,
+                    provider=result.provider or "openai",
+                    model=result.model,
+                    purpose=self.PURPOSE,
+                    status=(
+                        AIExecutionStatus.SUCCEEDED if result.ok
+                        else AIExecutionStatus.FAILED
+                    ),
+                    latency_ms=result.latency_ms,
+                    # A code or an exception class name, already sanitised by the adapter.
+                    error_message=None if result.ok else result.error,
+                    payload_json={
+                        "video_index": index,
+                        "schema_version": SCHEMA_VERSION,
+                    },
+                )
+            )
+        except Exception:  # noqa: BLE001
+            # Observability about the generation must not be able to fail the generation.
+            logger.warning(
+                "publication_metadata_execution_not_recorded",
+                extra={"pipeline_job_id": str(job.id)},
+            )
 
     # ----------------------------------------------------------------- context
 
@@ -217,13 +322,6 @@ class PublicationMetadataService:
     def _load(job: PipelineJob) -> dict[str, dict]:
         raw = (job.metadata_json or {}).get(METADATA_KEY)
         return dict(raw) if isinstance(raw, dict) else {}
-
-    @staticmethod
-    def _persist(db: Session, job: PipelineJob, stored: dict[str, dict]) -> None:
-        metadata = dict(job.metadata_json or {})
-        metadata[METADATA_KEY] = stored
-        job.metadata_json = metadata
-        db.flush()
 
     def _emit(self, db: Session, job: PipelineJob, stage: str, payload: dict) -> None:
         try:
