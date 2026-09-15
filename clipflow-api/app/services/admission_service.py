@@ -41,7 +41,7 @@ from sqlalchemy import func, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models.content_topic import ContentTopic
+from app.models.pipeline import Pipeline
 from app.models.enums import PipelineEventType, PipelineState, VideoCandidateStatus
 from app.models.pipeline_job import PipelineJob
 from app.models.video_candidate import VideoCandidate
@@ -56,7 +56,7 @@ logger = logging.getLogger(__name__)
 # a timestamp would make every retry a new identity, which is the opposite of idempotency.
 ADMISSION_PROFILE = "v1"
 
-# Nothing beyond this may run at once, whatever the configuration says. A topic that sets
+# Nothing beyond this may run at once, whatever the configuration says. A pipeline that sets
 # max_active_jobs to 10000 is a mistake, and this is where it stops being one.
 HARD_MAX_ACTIVE_JOBS = 20
 HARD_MAX_ADMISSIONS_PER_RUN = 10
@@ -102,7 +102,7 @@ class AdmissionConfig:
     """Capacity, independent of the selection caps.
 
     Selection limits how much is *chosen*; this limits how much is *started*. They are
-    different budgets: a topic may reasonably select five candidates a day while only two
+    different budgets: a pipeline may reasonably select five candidates a day while only two
     productions can run at once.
     """
 
@@ -161,7 +161,7 @@ class AdmissionDecision:
 @dataclass
 class AdmissionRunReport:
     run_id: str
-    topic_id: str | None
+    pipeline_id: str | None
     dry_run: bool
     capacity_limit: int = 0
     active_jobs: int = 0
@@ -177,7 +177,7 @@ class AdmissionRunReport:
     def as_dict(self) -> dict[str, Any]:
         return {
             "admission_run_id": self.run_id,
-            "topic_id": self.topic_id,
+            "pipeline_id": self.pipeline_id,
             "dry_run": self.dry_run,
             "selected_waiting": self.selected_waiting,
             "capacity_limit": self.capacity_limit,
@@ -230,7 +230,7 @@ class ProductionAdmissionService:
         self,
         db: Session,
         *,
-        topic: ContentTopic | None,
+        pipeline: Pipeline | None,
         limit: int | None = None,
         dry_run: bool = True,
         now: datetime | None = None,
@@ -238,16 +238,16 @@ class ProductionAdmissionService:
     ) -> AdmissionRunReport:
         now = now or datetime.now(timezone.utc)
         started = time.monotonic()
-        config = self._config_for(topic)
+        config = self._config_for(pipeline)
 
         if not dry_run:
             # Serialise committed admission runs. Without it two runs both read the same
             # active count, both find slots free, and the capacity limit is exceeded while
             # each run believes it obeyed it. Transaction-scoped, released on commit.
-            self._lock(db, topic.id if topic else None)
+            self._lock(db, pipeline.id if pipeline else None)
 
-        active = self._active_jobs(db, topic)
-        admitted_today = self._admitted_today(db, topic, now)
+        active = self._active_jobs(db, pipeline)
+        admitted_today = self._admitted_today(db, pipeline, now)
         slots = max(0, config.max_active_jobs - active)
         day_slots = max(0, config.max_admissions_per_day - admitted_today)
         requested = config.max_admissions_per_run if limit is None else max(0, min(
@@ -256,7 +256,7 @@ class ProductionAdmissionService:
 
         report = AdmissionRunReport(
             run_id=str(uuid.uuid4()),
-            topic_id=str(topic.id) if topic else None,
+            pipeline_id=str(pipeline.id) if pipeline else None,
             dry_run=dry_run,
             capacity_limit=config.max_active_jobs,
             active_jobs=active,
@@ -264,7 +264,7 @@ class ProductionAdmissionService:
             requested_limit=requested,
         )
 
-        waiting = self._selected_waiting(db, topic)
+        waiting = self._selected_waiting(db, pipeline)
         report.selected_waiting = len(waiting)
 
         budget = min(requested, slots, day_slots)
@@ -295,7 +295,7 @@ class ProductionAdmissionService:
                 day_slots -= 1
 
         report.duration_ms = int((time.monotonic() - started) * 1000)
-        self._emit_run(db, topic, report)
+        self._emit_run(db, pipeline, report)
         self._log_run(report)
         return report
 
@@ -336,11 +336,11 @@ class ProductionAdmissionService:
             return decision
 
         if not skip_capacity_check:
-            topic = db.query(ContentTopic).filter(
-                ContentTopic.id == candidate.topic_id
+            pipeline = db.query(Pipeline).filter(
+                Pipeline.id == candidate.pipeline_id
             ).first()
-            config = self._config_for(topic)
-            if self._active_jobs(db, topic) >= config.max_active_jobs:
+            config = self._config_for(pipeline)
+            if self._active_jobs(db, pipeline) >= config.max_active_jobs:
                 decision.outcome = TEMPORARILY_BLOCKED
                 decision.reasons = [CAPACITY_LIMIT]
                 return decision
@@ -363,8 +363,8 @@ class ProductionAdmissionService:
         now: datetime,
         actor: str | None,
     ) -> AdmissionDecision:
-        topic = db.query(ContentTopic).filter(ContentTopic.id == candidate.topic_id).first()
-        snapshot = self._snapshot(candidate, topic, now)
+        pipeline = db.query(Pipeline).filter(Pipeline.id == candidate.pipeline_id).first()
+        snapshot = self._snapshot(candidate, pipeline, now)
         worker_job_id = str(uuid.uuid4())
 
         try:
@@ -385,14 +385,14 @@ class ProductionAdmissionService:
                         },
                         # Provenance: which candidate, which selection, which score version.
                         "provenance": snapshot["provenance"],
-                        # Frozen inputs. The topic's defaults can be edited an hour from now;
+                        # Frozen inputs. The pipeline's defaults can be edited an hour from now;
                         # a run already in flight must not change shape underneath the worker.
                         "snapshot": snapshot["frozen"],
                     },
                     commit=False,
                 )
                 run.admission_key = key
-                run.topic_id = candidate.topic_id
+                run.pipeline_id = candidate.pipeline_id
                 run.candidate_id = candidate.id
                 db.flush()
         except IntegrityError:
@@ -600,32 +600,32 @@ class ProductionAdmissionService:
             return PERMANENTLY_BLOCKED, [MISSING_SOURCE_URL]
         return None
 
-    def _config_for(self, topic: ContentTopic | None) -> AdmissionConfig:
-        overrides = ((topic.metadata_json or {}).get("admission") if topic else None)
+    def _config_for(self, pipeline: Pipeline | None) -> AdmissionConfig:
+        overrides = ((pipeline.metadata_json or {}).get("admission") if pipeline else None)
         return AdmissionConfig().with_overrides(overrides)
 
-    def _active_jobs(self, db: Session, topic: ContentTopic | None) -> int:
+    def _active_jobs(self, db: Session, pipeline: Pipeline | None) -> int:
         query = db.query(func.count(PipelineJob.id)).filter(
             PipelineJob.state.in_(list(ACTIVE_STATES))
         )
-        if topic is not None:
-            query = query.filter(PipelineJob.topic_id == topic.id)
+        if pipeline is not None:
+            query = query.filter(PipelineJob.pipeline_id == pipeline.id)
         return query.scalar() or 0
 
     def _admitted_today(
-        self, db: Session, topic: ContentTopic | None, now: datetime
+        self, db: Session, pipeline: Pipeline | None, now: datetime
     ) -> int:
         midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
         query = db.query(func.count(PipelineJob.id)).filter(
             PipelineJob.admission_key.isnot(None),
             PipelineJob.created_at >= midnight,
         )
-        if topic is not None:
-            query = query.filter(PipelineJob.topic_id == topic.id)
+        if pipeline is not None:
+            query = query.filter(PipelineJob.pipeline_id == pipeline.id)
         return query.scalar() or 0
 
     @staticmethod
-    def _selected_waiting(db: Session, topic: ContentTopic | None) -> list[VideoCandidate]:
+    def _selected_waiting(db: Session, pipeline: Pipeline | None) -> list[VideoCandidate]:
         """Selected candidates awaiting admission, in a deterministic order.
 
         Highest score first, then oldest selection — never the database's arbitrary order, or
@@ -634,8 +634,8 @@ class ProductionAdmissionService:
         query = db.query(VideoCandidate).filter(
             VideoCandidate.status == VideoCandidateStatus.SELECTED
         )
-        if topic is not None:
-            query = query.filter(VideoCandidate.topic_id == topic.id)
+        if pipeline is not None:
+            query = query.filter(VideoCandidate.pipeline_id == pipeline.id)
         return query.order_by(
             VideoCandidate.relevance_score.desc().nullslast(),
             VideoCandidate.selected_at.asc().nullsfirst(),
@@ -646,11 +646,11 @@ class ProductionAdmissionService:
 
     @staticmethod
     def _snapshot(
-        candidate: VideoCandidate, topic: ContentTopic | None, now: datetime
+        candidate: VideoCandidate, pipeline: Pipeline | None, now: datetime
     ) -> dict[str, Any]:
         """Freeze the inputs this production will run on.
 
-        A run reads its configuration once, at admission. Editing the topic's defaults an hour
+        A run reads its configuration once, at admission. Editing the pipeline's defaults an hour
         later must not reshape a job already in flight — the worker would then produce
         something nobody asked for, with no record of why.
 
@@ -661,22 +661,22 @@ class ProductionAdmissionService:
         scores = dict(candidate.scores_json or {})
         return {
             "source_url": candidate.url,
-            "clip_mode": (topic.default_clip_mode if topic else "short_serie"),
-            "video_ratio": (topic.default_video_ratio if topic else "portrait"),
+            "clip_mode": (pipeline.default_clip_mode if pipeline else "short_serie"),
+            "video_ratio": (pipeline.default_video_ratio if pipeline else "portrait"),
             "frozen": {
                 "source_url": candidate.url,
-                "clip_mode": (topic.default_clip_mode if topic else "short_serie"),
-                "video_ratio": (topic.default_video_ratio if topic else "portrait"),
+                "clip_mode": (pipeline.default_clip_mode if pipeline else "short_serie"),
+                "video_ratio": (pipeline.default_video_ratio if pipeline else "portrait"),
                 "build_ia": bool(
-                    ((topic.metadata_json or {}).get("admission") or {}).get("build_ia", True)
-                    if topic else True
+                    ((pipeline.metadata_json or {}).get("admission") or {}).get("build_ia", True)
+                    if pipeline else True
                 ),
-                "topic_name": topic.name if topic else None,
+                "topic_name": pipeline.name if pipeline else None,
                 "frozen_at": now.isoformat(),
             },
             "provenance": {
                 "video_candidate_id": str(candidate.id),
-                "topic_id": str(candidate.topic_id) if candidate.topic_id else None,
+                "pipeline_id": str(candidate.pipeline_id) if candidate.pipeline_id else None,
                 "external_id": candidate.external_id,
                 "selection_method": selection.get("method"),
                 "selection_run_id": selection.get("selection_run_id"),
@@ -697,7 +697,7 @@ class ProductionAdmissionService:
         putting them on the queue would grow every message for data the worker never reads.
         """
         frozen = dict(snapshot.get("frozen") or {})
-        return {
+        payload = {
             "job_id": run.worker_job_id,
             "pipeline_job_id": str(run.id),
             "video_url": frozen.get("source_url") or run.source_url,
@@ -708,11 +708,22 @@ class ProductionAdmissionService:
             "manual_response": None,
             "origin": "admission",
         }
+        # Which chat this run reports to. Per pipeline rather than per deployment: two
+        # pipelines feeding two channels are usually watched by two different people, and one
+        # global chat turns both streams into one unreadable one.
+        #
+        # Absent when the pipeline has none — the worker then stays silent rather than
+        # falling back to whatever chat the environment happens to name, which would be some
+        # other pipeline's.
+        chat_id = getattr(run.pipeline, "telegram_chat_id", None) if run.pipeline_id else None
+        if chat_id:
+            payload["telegram_chat_id"] = chat_id
+        return payload
 
     # -------------------------------------------------------- observability
 
     @staticmethod
-    def _lock(db: Session, topic_id) -> None:
+    def _lock(db: Session, pipeline_id) -> None:
         """Serialise committed admission runs.
 
         PostgreSQL advisory lock, transaction-scoped. A no-op on other backends: the test
@@ -720,11 +731,11 @@ class ProductionAdmissionService:
         """
         if db.bind is None or db.bind.dialect.name != "postgresql":
             return
-        key = int(uuid.UUID(str(topic_id)).int % (2**31)) if topic_id else 7_777_001
+        key = int(uuid.UUID(str(pipeline_id)).int % (2**31)) if pipeline_id else 7_777_001
         db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": key})
 
     def _emit_run(
-        self, db: Session, topic: ContentTopic | None, report: AdmissionRunReport
+        self, db: Session, pipeline: Pipeline | None, report: AdmissionRunReport
     ) -> None:
         payload = report.as_dict()
         event_bus.publish_event(
@@ -739,7 +750,7 @@ class ProductionAdmissionService:
             ),
             payload={
                 "admission_run_id": report.run_id,
-                "topic_id": report.topic_id,
+                "pipeline_id": report.pipeline_id,
                 "dry_run": report.dry_run,
                 "selected_waiting": report.selected_waiting,
                 "capacity_limit": report.capacity_limit,
@@ -780,7 +791,7 @@ class ProductionAdmissionService:
             "admission_run",
             extra={
                 "admission_run_id": report.run_id,
-                "topic_id": report.topic_id,
+                "pipeline_id": report.pipeline_id,
                 "dry_run": report.dry_run,
                 "selected_waiting": report.selected_waiting,
                 "capacity_limit": report.capacity_limit,

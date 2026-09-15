@@ -17,7 +17,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.models.content_topic import ContentTopic
+from app.models.pipeline import Pipeline
 from app.models.discovery_source import DiscoverySource
 from app.models.pipeline_job import PipelineJob
 from app.models.publish_attempt import PublishAttempt
@@ -29,25 +29,25 @@ class ContentLineageService:
     # ------------------------------------------------------------------ lineage
 
     def lineage(self, db: Session, attempt: PublishAttempt) -> dict[str, Any]:
-        """The full chain: source, candidate, topic, job, publication, video.
+        """The full chain: source, candidate, pipeline, job, publication, video.
 
         Walked backwards from the publication, because that is the direction the question is
         always asked in: someone is looking at a video and wants to know how it got there.
         """
         job: PipelineJob | None = attempt.job
         candidate: VideoCandidate | None = job.candidate if job else None
-        topic: ContentTopic | None = None
+        pipeline: Pipeline | None = None
         source: DiscoverySource | None = None
 
         if candidate is not None:
-            topic = candidate.topic
+            pipeline = candidate.pipeline
             source = candidate.source
-        elif job is not None and job.topic_id is not None:
-            # The job knows its topic even when the candidate link is missing (a manually
+        elif job is not None and job.pipeline_id is not None:
+            # The job knows its pipeline even when the candidate link is missing (a manually
             # created job, for instance). Reported as the partial truth it is.
-            topic = db.get(ContentTopic, job.topic_id)
+            pipeline = db.get(Pipeline, job.pipeline_id)
 
-        complete = all(item is not None for item in (job, candidate, topic))
+        complete = all(item is not None for item in (job, candidate, pipeline))
 
         return {
             "publish_attempt_id": str(attempt.id),
@@ -57,7 +57,7 @@ class ContentLineageService:
             "complete": complete,
             "source": self._source(source),
             "candidate": self._candidate(candidate),
-            "topic": self._topic(topic),
+            "pipeline": self._pipeline(pipeline),
             "job": self._job(job),
             "publication": self._publication(attempt),
         }
@@ -96,10 +96,10 @@ class ContentLineageService:
         }
 
     @staticmethod
-    def _topic(topic: ContentTopic | None) -> dict[str, Any] | None:
-        if topic is None:
+    def _pipeline(pipeline: Pipeline | None) -> dict[str, Any] | None:
+        if pipeline is None:
             return None
-        return {"content_topic_id": str(topic.id), "name": topic.name}
+        return {"pipeline_id": str(pipeline.id), "name": pipeline.name}
 
     @staticmethod
     def _job(job: PipelineJob | None) -> dict[str, Any] | None:

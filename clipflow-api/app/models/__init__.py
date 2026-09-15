@@ -16,7 +16,7 @@ from app.models.audit_log import AuditLog
 # The autonomous flow: find → select → produce → publish → measure.
 from app.models.automation_state import AutomationState
 from app.models.oauth_state import OAuthState
-from app.models.content_topic import ContentTopic
+from app.models.pipeline import Pipeline
 from app.models.discovery_source import DiscoverySource
 from app.models.video_candidate import VideoCandidate
 from app.models.pipeline_job import PipelineJob
@@ -37,7 +37,7 @@ __all__ = [
     "AuditLog",
     "AutomationState",
     "OAuthState",
-    "ContentTopic",
+    "Pipeline",
     "DiscoverySource",
     "VideoCandidate",
     "PipelineJob",

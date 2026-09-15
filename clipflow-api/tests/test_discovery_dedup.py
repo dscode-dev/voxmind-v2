@@ -10,7 +10,7 @@ import pytest
 
 from app.discovery import identity
 from app.discovery.contracts import DiscoveredVideo, DiscoveryFetch, DiscoveryRequest
-from app.models.content_topic import ContentTopic
+from app.models.pipeline import Pipeline
 from app.models.discovery_source import DiscoverySource
 from app.models.enums import DiscoverySourceKind, VideoCandidateStatus
 from app.models.video_candidate import VideoCandidate
@@ -105,21 +105,21 @@ def test_canonical_url_normalises_youtube_and_passes_others_through():
 
 
 @pytest.fixture()
-def topic(db):
-    topic = ContentTopic(
+def pipeline(db):
+    pipeline = Pipeline(
         name="Futebol brasileiro",
         keywords_json=["futebol entrevista", "futebol coletiva"],
         metadata_json={"language": "pt", "region": "BR"},
     )
-    db.add(topic)
+    db.add(pipeline)
     db.flush()
-    return topic
+    return pipeline
 
 
 @pytest.fixture()
-def source(db, topic):
+def source(db, pipeline):
     source = DiscoverySource(
-        topic_id=topic.id,
+        pipeline_id=pipeline.id,
         kind=DiscoverySourceKind.YOUTUBE_SEARCH,
         name="YouTube search",
         is_active=True,
@@ -177,10 +177,10 @@ def candidates(db):
 # ==========================================================================
 
 
-def test_the_same_video_twice_in_one_run_yields_one_row(db, topic, source, no_event_fanout):
+def test_the_same_video_twice_in_one_run_yields_one_row(db, pipeline, source, no_event_fanout):
     svc, _ = service([[video("aaaaaaaaaaa"), video("aaaaaaaaaaa")]])
 
-    result = svc.run_source(db, topic=topic, source=source, commit=False)
+    result = svc.run_source(db, pipeline=pipeline, source=source, commit=False)
 
     assert len(candidates(db)) == 1
     assert result.results_received == 2
@@ -188,12 +188,12 @@ def test_the_same_video_twice_in_one_run_yields_one_row(db, topic, source, no_ev
     assert result.existing_candidates == 1
 
 
-def test_running_the_same_discovery_again_updates_rather_than_duplicates(db, topic, source, no_event_fanout):
+def test_running_the_same_discovery_again_updates_rather_than_duplicates(db, pipeline, source, no_event_fanout):
     svc, _ = service([[video("aaaaaaaaaaa", view_count=100)],
                       [video("aaaaaaaaaaa", view_count=500)]])
 
-    first = svc.run_source(db, topic=topic, source=source, commit=False)
-    second = svc.run_source(db, topic=topic, source=source, commit=False)
+    first = svc.run_source(db, pipeline=pipeline, source=source, commit=False)
+    second = svc.run_source(db, pipeline=pipeline, source=source, commit=False)
 
     rows = candidates(db)
     assert len(rows) == 1
@@ -202,35 +202,35 @@ def test_running_the_same_discovery_again_updates_rather_than_duplicates(db, top
     assert rows[0].metadata_json["normalized"]["view_count"] == 500, "mutable metadata refreshes"
 
 
-def test_a_different_url_for_the_same_youtube_id_is_the_same_row(db, topic, source, no_event_fanout):
+def test_a_different_url_for_the_same_youtube_id_is_the_same_row(db, pipeline, source, no_event_fanout):
     """A shorts URL and a watch URL are one video."""
     svc, _ = service([
         [video("aaaaaaaaaaa", canonical_url="https://www.youtube.com/shorts/aaaaaaaaaaa")],
         [video("aaaaaaaaaaa", canonical_url="https://youtu.be/aaaaaaaaaaa")],
     ])
 
-    svc.run_source(db, topic=topic, source=source, commit=False)
-    svc.run_source(db, topic=topic, source=source, commit=False)
+    svc.run_source(db, pipeline=pipeline, source=source, commit=False)
+    svc.run_source(db, pipeline=pipeline, source=source, commit=False)
 
     assert len(candidates(db)) == 1
 
 
-def test_two_different_videos_with_the_same_title_are_two_rows(db, topic, source, no_event_fanout):
+def test_two_different_videos_with_the_same_title_are_two_rows(db, pipeline, source, no_event_fanout):
     """Titles are not identity: two channels cover the same match with the same words."""
     svc, _ = service([[
         video("aaaaaaaaaaa", title="Entrevista completa do tecnico"),
         video("bbbbbbbbbbb", title="Entrevista completa do tecnico"),
     ]])
 
-    svc.run_source(db, topic=topic, source=source, commit=False)
+    svc.run_source(db, pipeline=pipeline, source=source, commit=False)
 
     assert len(candidates(db)) == 2
 
 
-def test_a_video_found_by_two_different_sources_is_one_row(db, topic, source, no_event_fanout):
+def test_a_video_found_by_two_different_sources_is_one_row(db, pipeline, source, no_event_fanout):
     """The YouTube channel feed and YouTube search return the same video."""
     feed = DiscoverySource(
-        topic_id=topic.id, kind=DiscoverySourceKind.RSS, name="Channel feed",
+        pipeline_id=pipeline.id, kind=DiscoverySourceKind.RSS, name="Channel feed",
         is_active=True, config_json={"feed_url": "https://example/feed"},
     )
     db.add(feed)
@@ -240,8 +240,8 @@ def test_a_video_found_by_two_different_sources_is_one_row(db, topic, source, no
         youtube_provider=StubProvider([[video("aaaaaaaaaaa")]]),
         rss_provider=StubProvider([[video("aaaaaaaaaaa")]]),
     )
-    svc.run_source(db, topic=topic, source=source, commit=False)
-    svc.run_source(db, topic=topic, source=feed, commit=False)
+    svc.run_source(db, pipeline=pipeline, source=source, commit=False)
+    svc.run_source(db, pipeline=pipeline, source=feed, commit=False)
 
     rows = candidates(db)
     assert len(rows) == 1
@@ -254,80 +254,80 @@ def test_a_video_found_by_two_different_sources_is_one_row(db, topic, source, no
 # ==========================================================================
 
 
-def test_first_discovery_time_is_never_rewritten(db, topic, source, no_event_fanout):
+def test_first_discovery_time_is_never_rewritten(db, pipeline, source, no_event_fanout):
     """A video rediscovered on its fifth day is not new."""
     svc, _ = service([[video("aaaaaaaaaaa")], [video("aaaaaaaaaaa")]])
 
-    svc.run_source(db, topic=topic, source=source, commit=False)
+    svc.run_source(db, pipeline=pipeline, source=source, commit=False)
     original = candidates(db)[0].created_at
 
-    svc.run_source(db, topic=topic, source=source, commit=False)
+    svc.run_source(db, pipeline=pipeline, source=source, commit=False)
 
     assert candidates(db)[0].created_at == original
 
 
-def test_last_seen_moves_on_every_sighting(db, topic, source, no_event_fanout):
+def test_last_seen_moves_on_every_sighting(db, pipeline, source, no_event_fanout):
     svc, _ = service([[video("aaaaaaaaaaa")], [video("aaaaaaaaaaa")]])
 
-    svc.run_source(db, topic=topic, source=source, commit=False)
+    svc.run_source(db, pipeline=pipeline, source=source, commit=False)
     first_seen = candidates(db)[0].last_seen_at
     assert first_seen is not None
 
-    svc.run_source(db, topic=topic, source=source, commit=False)
+    svc.run_source(db, pipeline=pipeline, source=source, commit=False)
 
     assert candidates(db)[0].last_seen_at >= first_seen
 
 
-def test_a_rediscovery_does_not_un_reject_a_candidate(db, topic, source, no_event_fanout):
+def test_a_rediscovery_does_not_un_reject_a_candidate(db, pipeline, source, no_event_fanout):
     """A human's decision is not undone because a feed repeated itself."""
     svc, _ = service([[video("aaaaaaaaaaa")], [video("aaaaaaaaaaa")]])
-    svc.run_source(db, topic=topic, source=source, commit=False)
+    svc.run_source(db, pipeline=pipeline, source=source, commit=False)
 
     row = candidates(db)[0]
     row.status = VideoCandidateStatus.REJECTED
     db.flush()
 
-    svc.run_source(db, topic=topic, source=source, commit=False)
+    svc.run_source(db, pipeline=pipeline, source=source, commit=False)
 
     assert candidates(db)[0].status == VideoCandidateStatus.REJECTED
 
 
-def test_a_rediscovery_does_not_un_select_a_candidate(db, topic, source, no_event_fanout):
+def test_a_rediscovery_does_not_un_select_a_candidate(db, pipeline, source, no_event_fanout):
     svc, _ = service([[video("aaaaaaaaaaa")], [video("aaaaaaaaaaa")]])
-    svc.run_source(db, topic=topic, source=source, commit=False)
+    svc.run_source(db, pipeline=pipeline, source=source, commit=False)
 
     row = candidates(db)[0]
     row.status = VideoCandidateStatus.SELECTED
     db.flush()
 
-    svc.run_source(db, topic=topic, source=source, commit=False)
+    svc.run_source(db, pipeline=pipeline, source=source, commit=False)
 
     assert candidates(db)[0].status == VideoCandidateStatus.SELECTED
 
 
-def test_metadata_refresh_updates_title_and_duration(db, topic, source, no_event_fanout):
+def test_metadata_refresh_updates_title_and_duration(db, pipeline, source, no_event_fanout):
     svc, _ = service([
         [video("aaaaaaaaaaa", title="Titulo antigo", duration_sec=None)],
         [video("aaaaaaaaaaa", title="Titulo corrigido", duration_sec=900)],
     ])
 
-    svc.run_source(db, topic=topic, source=source, commit=False)
-    svc.run_source(db, topic=topic, source=source, commit=False)
+    svc.run_source(db, pipeline=pipeline, source=source, commit=False)
+    svc.run_source(db, pipeline=pipeline, source=source, commit=False)
 
     row = candidates(db)[0]
     assert row.title == "Titulo corrigido"
     assert row.duration_sec == 900
 
 
-def test_a_refresh_never_blanks_a_field_it_no_longer_knows(db, topic, source, no_event_fanout):
+def test_a_refresh_never_blanks_a_field_it_no_longer_knows(db, pipeline, source, no_event_fanout):
     """A degraded second lookup must not erase what the first one learned."""
     svc, _ = service([
         [video("aaaaaaaaaaa", duration_sec=750)],
         [video("aaaaaaaaaaa", duration_sec=None, title=None)],
     ])
 
-    svc.run_source(db, topic=topic, source=source, commit=False)
-    svc.run_source(db, topic=topic, source=source, commit=False)
+    svc.run_source(db, pipeline=pipeline, source=source, commit=False)
+    svc.run_source(db, pipeline=pipeline, source=source, commit=False)
 
     row = candidates(db)[0]
     assert row.duration_sec == 750
@@ -339,29 +339,29 @@ def test_a_refresh_never_blanks_a_field_it_no_longer_knows(db, topic, source, no
 # ==========================================================================
 
 
-def test_every_new_candidate_is_discovered_not_selected(db, topic, source, no_event_fanout):
+def test_every_new_candidate_is_discovered_not_selected(db, pipeline, source, no_event_fanout):
     svc, _ = service([[video("aaaaaaaaaaa"), video("bbbbbbbbbbb")]])
 
-    svc.run_source(db, topic=topic, source=source, commit=False)
+    svc.run_source(db, pipeline=pipeline, source=source, commit=False)
 
     assert {row.status for row in candidates(db)} == {VideoCandidateStatus.DISCOVERED}
     assert all(row.selected_at is None for row in candidates(db))
 
 
-def test_discovery_creates_no_pipeline_job(db, topic, source, no_event_fanout):
+def test_discovery_creates_no_pipeline_job(db, pipeline, source, no_event_fanout):
     """The boundary this PR exists to preserve."""
     from app.models.pipeline_job import PipelineJob
 
     svc, _ = service([[video("aaaaaaaaaaa")]])
-    svc.run_source(db, topic=topic, source=source, commit=False)
+    svc.run_source(db, pipeline=pipeline, source=source, commit=False)
 
     assert db.query(PipelineJob).count() == 0
 
 
-def test_no_scores_are_written(db, topic, source, no_event_fanout):
+def test_no_scores_are_written(db, pipeline, source, no_event_fanout):
     """Scoring is the next PR. Empty columns are not an invitation."""
     svc, _ = service([[video("aaaaaaaaaaa")]])
-    svc.run_source(db, topic=topic, source=source, commit=False)
+    svc.run_source(db, pipeline=pipeline, source=source, commit=False)
 
     row = candidates(db)[0]
     assert row.relevance_score is None
@@ -375,13 +375,13 @@ def test_no_scores_are_written(db, topic, source, no_event_fanout):
 # ==========================================================================
 
 
-def test_unmodelled_fields_are_stored_without_inventing_columns(db, topic, source, no_event_fanout):
+def test_unmodelled_fields_are_stored_without_inventing_columns(db, pipeline, source, no_event_fanout):
     svc, _ = service([[video(
         "aaaaaaaaaaa", description="Descricao", channel_id="UC1",
         language="pt-BR", live_status="none", view_count=15234, is_short=False,
     )]])
 
-    svc.run_source(db, topic=topic, source=source, commit=False)
+    svc.run_source(db, pipeline=pipeline, source=source, commit=False)
 
     normalized = candidates(db)[0].metadata_json["normalized"]
     assert normalized["description"] == "Descricao"
@@ -390,20 +390,20 @@ def test_unmodelled_fields_are_stored_without_inventing_columns(db, topic, sourc
     assert normalized["view_count"] == 15234
 
 
-def test_an_unknown_value_is_stored_as_null_not_zero(db, topic, source, no_event_fanout):
+def test_an_unknown_value_is_stored_as_null_not_zero(db, pipeline, source, no_event_fanout):
     svc, _ = service([[video("aaaaaaaaaaa", view_count=None, duration_sec=None)]])
 
-    svc.run_source(db, topic=topic, source=source, commit=False)
+    svc.run_source(db, pipeline=pipeline, source=source, commit=False)
 
     row = candidates(db)[0]
     assert row.duration_sec is None
     assert row.metadata_json["normalized"]["view_count"] is None
 
 
-def test_an_unavailable_video_is_recorded_not_dropped(db, topic, source, no_event_fanout):
+def test_an_unavailable_video_is_recorded_not_dropped(db, pipeline, source, no_event_fanout):
     svc, _ = service([[video("aaaaaaaaaaa", available=False, unavailable_reason="private")]])
 
-    result = svc.run_source(db, topic=topic, source=source, commit=False)
+    result = svc.run_source(db, pipeline=pipeline, source=source, commit=False)
 
     rows = candidates(db)
     assert len(rows) == 1
@@ -411,9 +411,9 @@ def test_an_unavailable_video_is_recorded_not_dropped(db, topic, source, no_even
     assert result.unavailable_candidates == 1
 
 
-def test_a_long_title_is_truncated_to_the_column(db, topic, source, no_event_fanout):
+def test_a_long_title_is_truncated_to_the_column(db, pipeline, source, no_event_fanout):
     svc, _ = service([[video("aaaaaaaaaaa", title="x" * 900)]])
-    svc.run_source(db, topic=topic, source=source, commit=False)
+    svc.run_source(db, pipeline=pipeline, source=source, commit=False)
     assert len(candidates(db)[0].title) == 500
 
 
@@ -422,51 +422,51 @@ def test_a_long_title_is_truncated_to_the_column(db, topic, source, no_event_fan
 # ==========================================================================
 
 
-def test_queries_come_from_configuration_not_from_the_provider(db, topic, source):
-    request = DiscoveryService().build_request(topic, source)
+def test_queries_come_from_configuration_not_from_the_provider(db, pipeline, source):
+    request = DiscoveryService().build_request(pipeline, source)
     assert request.queries == ["futebol entrevista"]
 
 
-def test_a_source_without_queries_falls_back_to_the_topic_keywords(db, topic):
+def test_a_source_without_queries_falls_back_to_the_pipeline_keywords(db, pipeline):
     bare = DiscoverySource(
-        topic_id=topic.id, kind=DiscoverySourceKind.YOUTUBE_SEARCH, config_json={}
+        pipeline_id=pipeline.id, kind=DiscoverySourceKind.YOUTUBE_SEARCH, config_json={}
     )
-    request = DiscoveryService().build_request(topic, bare)
+    request = DiscoveryService().build_request(pipeline, bare)
     assert request.queries == ["futebol entrevista", "futebol coletiva"]
 
 
-def test_a_curated_feed_can_declare_that_it_wants_everything(db, topic):
+def test_a_curated_feed_can_declare_that_it_wants_everything(db, pipeline):
     """An empty `queries` list is a decision, not an omission.
 
-    A channel feed is already curated — the channel IS the filter — so inheriting the topic's
+    A channel feed is already curated — the channel IS the filter — so inheriting the pipeline's
     keywords there would throw away most of what it publishes. Found by the live smoke, where
     a real channel feed returned 0 of its 15 entries.
     """
     feed = DiscoverySource(
-        topic_id=topic.id,
+        pipeline_id=pipeline.id,
         kind=DiscoverySourceKind.RSS,
         config_json={"feed_url": "https://example/feed", "queries": []},
     )
-    request = DiscoveryService().build_request(topic, feed)
+    request = DiscoveryService().build_request(pipeline, feed)
     assert request.queries == []
 
 
-def test_freshness_defaults_to_a_recent_window(db, topic, source):
-    request = DiscoveryService(default_freshness_days=7).build_request(topic, source)
+def test_freshness_defaults_to_a_recent_window(db, pipeline, source):
+    request = DiscoveryService(default_freshness_days=7).build_request(pipeline, source)
     assert request.published_after is not None
     age = datetime.now(timezone.utc) - request.published_after
     assert timedelta(days=6, hours=23) < age < timedelta(days=7, hours=1)
 
 
-def test_a_source_can_override_freshness(db, topic, source):
+def test_a_source_can_override_freshness(db, pipeline, source):
     source.config_json = {**source.config_json, "freshness_days": 1}
-    request = DiscoveryService().build_request(topic, source)
+    request = DiscoveryService().build_request(pipeline, source)
     age = datetime.now(timezone.utc) - request.published_after
     assert age < timedelta(days=1, hours=1)
 
 
-def test_language_and_region_come_from_the_topic(db, topic, source):
-    request = DiscoveryService().build_request(topic, source)
+def test_language_and_region_come_from_the_pipeline(db, pipeline, source):
+    request = DiscoveryService().build_request(pipeline, source)
     assert request.language == "pt"
     assert request.region == "BR"
 
@@ -489,67 +489,67 @@ class FailingProvider:
         raise self.error
 
 
-def test_a_provider_error_is_reported_not_raised(db, topic, source, no_event_fanout):
+def test_a_provider_error_is_reported_not_raised(db, pipeline, source, no_event_fanout):
     from app.discovery.contracts import QUOTA_EXCEEDED, ProviderError
 
     svc = DiscoveryService(
         youtube_provider=FailingProvider(ProviderError(QUOTA_EXCEEDED, "spent"))
     )
-    result = svc.run_source(db, topic=topic, source=source, commit=False)
+    result = svc.run_source(db, pipeline=pipeline, source=source, commit=False)
 
     assert result.status == "failed"
     assert result.errors[0]["error_type"] == QUOTA_EXCEEDED
     assert result.errors[0]["retryable"] is False
 
 
-def test_an_unconfigured_provider_is_unavailable_not_failed(db, topic, source, no_event_fanout):
+def test_an_unconfigured_provider_is_unavailable_not_failed(db, pipeline, source, no_event_fanout):
     from app.discovery.contracts import ProviderUnavailable
 
     svc = DiscoveryService(youtube_provider=FailingProvider(ProviderUnavailable("no key")))
-    result = svc.run_source(db, topic=topic, source=source, commit=False)
+    result = svc.run_source(db, pipeline=pipeline, source=source, commit=False)
 
     assert result.status == "unavailable"
     assert result.errors[0]["error_type"] == "not_configured"
     assert candidates(db) == []
 
 
-def test_an_unexpected_provider_crash_does_not_leak_its_message(db, topic, source, no_event_fanout):
+def test_an_unexpected_provider_crash_does_not_leak_its_message(db, pipeline, source, no_event_fanout):
     """A provider that interpolates its request into an exception would leak the key."""
     svc = DiscoveryService(
         youtube_provider=FailingProvider(RuntimeError("boom key=SECRET-KEY-VALUE"))
     )
-    result = svc.run_source(db, topic=topic, source=source, commit=False)
+    result = svc.run_source(db, pipeline=pipeline, source=source, commit=False)
 
     assert result.status == "failed"
     assert "SECRET-KEY-VALUE" not in str(result.errors)
 
 
-def test_a_source_kind_with_no_provider_is_reported(db, topic, no_event_fanout):
-    news = DiscoverySource(topic_id=topic.id, kind=DiscoverySourceKind.NEWS, config_json={})
+def test_a_source_kind_with_no_provider_is_reported(db, pipeline, no_event_fanout):
+    news = DiscoverySource(pipeline_id=pipeline.id, kind=DiscoverySourceKind.NEWS, config_json={})
     db.add(news)
     db.flush()
 
-    result = DiscoveryService().run_source(db, topic=topic, source=news, commit=False)
+    result = DiscoveryService().run_source(db, pipeline=pipeline, source=news, commit=False)
 
     assert result.status == "unsupported"
 
 
-def test_one_failing_source_does_not_stop_the_others(db, topic, source, no_event_fanout):
+def test_one_failing_source_does_not_stop_the_others(db, pipeline, source, no_event_fanout):
     from app.discovery.contracts import ProviderError, UPSTREAM_ERROR
 
     feed = DiscoverySource(
-        topic_id=topic.id, kind=DiscoverySourceKind.RSS, is_active=True,
+        pipeline_id=pipeline.id, kind=DiscoverySourceKind.RSS, is_active=True,
         config_json={"feed_url": "https://example/feed"},
     )
     db.add(feed)
     db.flush()
-    db.refresh(topic)
+    db.refresh(pipeline)
 
     svc = DiscoveryService(
         youtube_provider=FailingProvider(ProviderError(UPSTREAM_ERROR, "down")),
         rss_provider=StubProvider([[video("bbbbbbbbbbb")]]),
     )
-    results = svc.run_topic(db, topic=topic, commit=False)
+    results = svc.run_pipeline(db, pipeline=pipeline, commit=False)
 
     statuses = {r.source_kind: r.status for r in results}
     assert statuses["youtube_search"] == "failed"
@@ -557,13 +557,13 @@ def test_one_failing_source_does_not_stop_the_others(db, topic, source, no_event
     assert len(candidates(db)) == 1
 
 
-def test_an_inactive_source_is_skipped(db, topic, source, no_event_fanout):
+def test_an_inactive_source_is_skipped(db, pipeline, source, no_event_fanout):
     source.is_active = False
     db.flush()
-    db.refresh(topic)
+    db.refresh(pipeline)
 
-    results = DiscoveryService(youtube_provider=StubProvider([[video("a" * 11)]])).run_topic(
-        db, topic=topic, commit=False
+    results = DiscoveryService(youtube_provider=StubProvider([[video("a" * 11)]])).run_pipeline(
+        db, pipeline=pipeline, commit=False
     )
 
     assert results == []
@@ -574,10 +574,10 @@ def test_an_inactive_source_is_skipped(db, topic, source, no_event_fanout):
 # ==========================================================================
 
 
-def test_a_run_reports_the_counters_an_operator_asks_for(db, topic, source, no_event_fanout):
+def test_a_run_reports_the_counters_an_operator_asks_for(db, pipeline, source, no_event_fanout):
     svc, _ = service([[video("aaaaaaaaaaa"), video("bbbbbbbbbbb"), video("aaaaaaaaaaa")]])
 
-    result = svc.run_source(db, topic=topic, source=source, commit=False)
+    result = svc.run_source(db, pipeline=pipeline, source=source, commit=False)
     payload = result.as_dict()
 
     assert payload["results_received"] == 3
@@ -589,23 +589,23 @@ def test_a_run_reports_the_counters_an_operator_asks_for(db, topic, source, no_e
     assert payload["discovery_run_id"]
 
 
-def test_a_run_emits_one_event_per_run_not_one_per_candidate(db, topic, source, no_event_fanout):
+def test_a_run_emits_one_event_per_run_not_one_per_candidate(db, pipeline, source, no_event_fanout):
     """Fifty candidate events would bury the feed to say what the counters already say."""
     from app.models.pipeline_event import PipelineEvent
 
     svc, _ = service([[video(f"vid{index:07d}") for index in range(20)]])
-    svc.run_source(db, topic=topic, source=source, commit=False)
+    svc.run_source(db, pipeline=pipeline, source=source, commit=False)
 
     events = db.query(PipelineEvent).filter(PipelineEvent.service == "discovery").all()
     assert len(events) == 2, "started + completed"
     assert {event.stage for event in events} == {"discovery.started", "discovery.completed"}
 
 
-def test_discovery_events_are_not_attached_to_a_pipeline_job(db, topic, source, no_event_fanout):
+def test_discovery_events_are_not_attached_to_a_pipeline_job(db, pipeline, source, no_event_fanout):
     from app.models.pipeline_event import PipelineEvent
 
     svc, _ = service([[video("aaaaaaaaaaa")]])
-    svc.run_source(db, topic=topic, source=source, commit=False)
+    svc.run_source(db, pipeline=pipeline, source=source, commit=False)
 
     events = db.query(PipelineEvent).filter(PipelineEvent.service == "discovery").all()
     assert all(event.pipeline_job_id is None for event in events)
@@ -616,7 +616,7 @@ def test_discovery_events_are_not_attached_to_a_pipeline_job(db, topic, source, 
 # ==========================================================================
 
 
-def test_a_concurrent_insert_of_the_same_video_yields_one_row(db, topic, source, no_event_fanout, monkeypatch):
+def test_a_concurrent_insert_of_the_same_video_yields_one_row(db, pipeline, source, no_event_fanout, monkeypatch):
     """Two runs finding the same video at the same moment.
 
     Both look up the identity, both see nothing, both insert. Only a database constraint can
@@ -625,7 +625,7 @@ def test_a_concurrent_insert_of_the_same_video_yields_one_row(db, topic, source,
     pre-check is blinded, so the insert reaches the unique index and takes the recovery path.
     """
     svc, _ = service([[video("aaaaaaaaaaa")]])
-    svc.run_source(db, topic=topic, source=source, commit=False)
+    svc.run_source(db, pipeline=pipeline, source=source, commit=False)
     assert len(candidates(db)) == 1
 
     real_query = db.query
@@ -650,7 +650,7 @@ def test_a_concurrent_insert_of_the_same_video_yields_one_row(db, topic, source,
     monkeypatch.setattr(db, "query", blinded)
 
     svc2, _ = service([[video("aaaaaaaaaaa", view_count=999)]])
-    result = svc2.run_source(db, topic=topic, source=source, commit=False)
+    result = svc2.run_source(db, pipeline=pipeline, source=source, commit=False)
 
     monkeypatch.undo()
     rows = candidates(db)
@@ -671,14 +671,14 @@ def test_the_dedup_index_is_unique():
     assert [column.name for column in dedup.columns] == ["dedup_hash"]
 
 
-def test_two_rows_cannot_share_a_dedup_hash(db, topic, source):
+def test_two_rows_cannot_share_a_dedup_hash(db, pipeline, source):
     """The database refuses it, whatever the service does."""
     from sqlalchemy.exc import IntegrityError
 
     shared = identity.dedup_hash("youtube", "aaaaaaaaaaa")
     for suffix in ("a", "b"):
         db.add(VideoCandidate(
-            topic_id=topic.id, source_id=source.id, external_id=f"x{suffix}",
+            pipeline_id=pipeline.id, source_id=source.id, external_id=f"x{suffix}",
             url=f"https://example/{suffix}", dedup_hash=shared,
             status=VideoCandidateStatus.DISCOVERED,
         ))

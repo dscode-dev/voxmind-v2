@@ -8,7 +8,13 @@ from app.settings import settings
 
 class TelegramSender:
 
-    def __init__(self):
+    def __init__(self, chat_id: str | None = None):
+        """`chat_id` overrides the deployment default for this run.
+
+        A pipeline names the chat it reports to, and the payload carries it here. Without one
+        the environment default still applies, which is what a studio job — a video that
+        belongs to no pipeline — should use.
+        """
         self.logger = get_logger(__name__)
 
         if settings.telegram_disable_notifications:
@@ -19,11 +25,12 @@ class TelegramSender:
         if not settings.telegram_bot_token:
             raise RuntimeError("TELEGRAM_BOT_TOKEN not configured")
 
-        if not settings.telegram_chat_id:
+        resolved = str(chat_id or "").strip() or settings.telegram_chat_id
+        if not resolved:
             raise RuntimeError("TELEGRAM_CHAT_ID not configured")
 
         self.base_url = f"https://api.telegram.org/bot{settings.telegram_bot_token}"
-        self.chat_id = settings.telegram_chat_id
+        self.chat_id = resolved
 
     @retry(
         retry=retry_if_exception_type(requests.RequestException),

@@ -3,7 +3,7 @@
 **Per clip, not per run.** A four-clip run is four videos with four subjects, and one
 description applied to all of them would be wrong about at least three. The context assembled
 below is the clip's — its own working title, hook and transcript — with the run's shared facts
-(topic, source video, channel) around it.
+(pipeline, source video, channel) around it.
 
 **Before the attempt, never during the upload.** Generation happens while the publication is
 being prepared, so a slow model delays a decision rather than a byte stream, and a failed one
@@ -28,7 +28,7 @@ from sqlalchemy.orm import Session
 
 from app.core.settings import settings
 from app.models.ai_execution import AIExecution
-from app.models.content_topic import ContentTopic
+from app.models.pipeline import Pipeline
 from app.models.pipeline_job import PipelineJob
 from app.models.video_candidate import VideoCandidate
 from app.publishing.metadata_ai import (
@@ -251,15 +251,15 @@ class PublicationMetadataService:
             if job.candidate_id
             else None
         )
-        topic = (
-            db.query(ContentTopic).filter(ContentTopic.id == job.topic_id).first()
-            if job.topic_id
+        pipeline = (
+            db.query(Pipeline).filter(Pipeline.id == job.pipeline_id).first()
+            if job.pipeline_id
             else None
         )
         frozen = dict((job.metadata_json or {}).get("snapshot") or {})
         return {
-            "topic_name": (topic.name if topic else None) or frozen.get("topic_name"),
-            "topic_keywords": list(topic.keywords_json or []) if topic else None,
+            "topic_name": (pipeline.name if pipeline else None) or frozen.get("topic_name"),
+            "topic_keywords": list(pipeline.keywords_json or []) if pipeline else None,
             "source_title": candidate.title if candidate else None,
             "source_channel": candidate.channel if candidate else None,
             "clip_mode": frozen.get("clip_mode") or job.clip_mode,

@@ -22,7 +22,7 @@ from app.discovery.contracts import (
     ProviderError,
     ProviderUnavailable,
 )
-from app.models.content_topic import ContentTopic
+from app.models.pipeline import Pipeline
 from app.models.discovery_source import DiscoverySource
 from app.models.enums import DiscoverySourceKind, UserRole, UserStatus, VideoCandidateStatus
 from app.models.user import User
@@ -101,17 +101,17 @@ def stub_service(monkeypatch):
 
 
 @pytest.fixture()
-def topic(db):
-    topic = ContentTopic(name="Futebol brasileiro", keywords_json=["futebol entrevista"])
-    db.add(topic)
+def pipeline(db):
+    pipeline = Pipeline(name="Futebol brasileiro", keywords_json=["futebol entrevista"])
+    db.add(pipeline)
     db.flush()
-    return topic
+    return pipeline
 
 
 @pytest.fixture()
-def source(db, topic):
+def source(db, pipeline):
     source = DiscoverySource(
-        topic_id=topic.id,
+        pipeline_id=pipeline.id,
         kind=DiscoverySourceKind.YOUTUBE_SEARCH,
         name="YouTube search",
         is_active=True,
@@ -127,22 +127,23 @@ def source(db, topic):
 # ==========================================================================
 
 
-def test_a_topic_can_be_created_with_its_queries(client, db):
-    response = client.post("/admin/content-topics", json={
+def test_a_pipeline_can_be_created_with_its_queries(client, db):
+    """Creation moved to `/admin/pipelines` with the rest of the CRUD."""
+    response = client.post("/admin/pipelines", json={
         "name": "Futebol quente",
         "keywords": ["futebol entrevista", "futebol polemica", "futebol coletiva"],
         "language": "pt-BR",
     })
 
-    assert response.status_code == 200
+    assert response.status_code == 201
     body = response.json()
     assert body["keywords"] == ["futebol entrevista", "futebol polemica", "futebol coletiva"]
     assert body["metadata"]["language"] == "pt-BR"
 
 
-def test_a_source_carries_its_own_query_configuration(client, topic):
+def test_a_source_carries_its_own_query_configuration(client, pipeline):
     response = client.post("/admin/discovery-sources", json={
-        "topic_id": str(topic.id),
+        "pipeline_id": str(pipeline.id),
         "kind": "youtube_search",
         "name": "Buscas de futebol",
         "config": {"queries": ["coletiva pos jogo"], "max_results": 10},
@@ -152,9 +153,9 @@ def test_a_source_carries_its_own_query_configuration(client, topic):
     assert response.json()["config"]["queries"] == ["coletiva pos jogo"]
 
 
-def test_a_source_for_an_unknown_topic_is_rejected(client):
+def test_a_source_for_an_unknown_pipeline_is_rejected(client):
     response = client.post("/admin/discovery-sources", json={
-        "topic_id": str(uuid.uuid4()), "kind": "youtube_search", "config": {},
+        "pipeline_id": str(uuid.uuid4()), "kind": "youtube_search", "config": {},
     })
     assert response.status_code == 404
 
@@ -164,10 +165,10 @@ def test_a_source_for_an_unknown_topic_is_rejected(client):
 # ==========================================================================
 
 
-def test_running_discovery_persists_candidates(client, db, topic, source, stub_service):
+def test_running_discovery_persists_candidates(client, db, pipeline, source, stub_service):
     stub_service["provider"] = StubProvider([video("aaaaaaaaaaa"), video("bbbbbbbbbbb")])
 
-    response = client.post("/admin/discovery/run", json={"topic_id": str(topic.id)})
+    response = client.post("/admin/discovery/run", json={"pipeline_id": str(pipeline.id)})
 
     assert response.status_code == 200
     body = response.json()
@@ -175,11 +176,11 @@ def test_running_discovery_persists_candidates(client, db, topic, source, stub_s
     assert db.query(VideoCandidate).count() == 2
 
 
-def test_running_discovery_twice_creates_nothing_new(client, db, topic, source, stub_service):
+def test_running_discovery_twice_creates_nothing_new(client, db, pipeline, source, stub_service):
     stub_service["provider"] = StubProvider([video("aaaaaaaaaaa")])
 
-    first = client.post("/admin/discovery/run", json={"topic_id": str(topic.id)}).json()
-    second = client.post("/admin/discovery/run", json={"topic_id": str(topic.id)}).json()
+    first = client.post("/admin/discovery/run", json={"pipeline_id": str(pipeline.id)}).json()
+    second = client.post("/admin/discovery/run", json={"pipeline_id": str(pipeline.id)}).json()
 
     assert first["totals"]["new_candidates"] == 1
     assert second["totals"]["new_candidates"] == 0
@@ -187,22 +188,22 @@ def test_running_discovery_twice_creates_nothing_new(client, db, topic, source, 
     assert db.query(VideoCandidate).count() == 1
 
 
-def test_a_single_source_can_be_run(client, db, topic, source, stub_service):
+def test_a_single_source_can_be_run(client, db, pipeline, source, stub_service):
     stub_service["provider"] = StubProvider([video("aaaaaaaaaaa")])
 
     response = client.post("/admin/discovery/run", json={
-        "topic_id": str(topic.id), "source_id": str(source.id),
+        "pipeline_id": str(pipeline.id), "source_id": str(source.id),
     })
 
     assert response.status_code == 200
     assert len(response.json()["runs"]) == 1
 
 
-def test_an_unconfigured_provider_answers_explicitly(client, db, topic, source, stub_service):
+def test_an_unconfigured_provider_answers_explicitly(client, db, pipeline, source, stub_service):
     """Configuration required is a reportable state, not a crash and not fake data."""
     stub_service["provider"] = StubProvider(error=ProviderUnavailable("YOUTUBE_API_KEY is not set"))
 
-    response = client.post("/admin/discovery/run", json={"topic_id": str(topic.id)})
+    response = client.post("/admin/discovery/run", json={"pipeline_id": str(pipeline.id)})
 
     assert response.status_code == 200
     run = response.json()["runs"][0]
@@ -211,28 +212,28 @@ def test_an_unconfigured_provider_answers_explicitly(client, db, topic, source, 
     assert db.query(VideoCandidate).count() == 0
 
 
-def test_a_quota_error_is_visible_in_the_response(client, topic, source, stub_service):
+def test_a_quota_error_is_visible_in_the_response(client, pipeline, source, stub_service):
     stub_service["provider"] = StubProvider(error=ProviderError(QUOTA_EXCEEDED, "spent"))
 
-    run = client.post("/admin/discovery/run", json={"topic_id": str(topic.id)}).json()["runs"][0]
+    run = client.post("/admin/discovery/run", json={"pipeline_id": str(pipeline.id)}).json()["runs"][0]
 
     assert run["status"] == "failed"
     assert run["errors"][0]["error_type"] == QUOTA_EXCEEDED
     assert run["errors"][0]["retryable"] is False
 
 
-def test_running_an_unknown_topic_is_a_404(client, stub_service):
-    response = client.post("/admin/discovery/run", json={"topic_id": str(uuid.uuid4())})
+def test_running_an_unknown_pipeline_is_a_404(client, stub_service):
+    response = client.post("/admin/discovery/run", json={"pipeline_id": str(uuid.uuid4())})
     assert response.status_code == 404
 
 
-def test_running_a_source_from_another_topic_is_a_404(client, db, topic, source, stub_service):
-    other = ContentTopic(name="Outro tema")
+def test_running_a_source_from_another_pipeline_is_a_404(client, db, pipeline, source, stub_service):
+    other = Pipeline(name="Outro tema")
     db.add(other)
     db.flush()
 
     response = client.post("/admin/discovery/run", json={
-        "topic_id": str(other.id), "source_id": str(source.id),
+        "pipeline_id": str(other.id), "source_id": str(source.id),
     })
     assert response.status_code == 404
 
@@ -243,14 +244,14 @@ def test_running_a_source_from_another_topic_is_a_404(client, db, topic, source,
 
 
 @pytest.fixture()
-def populated(client, db, topic, source, stub_service):
+def populated(client, db, pipeline, source, stub_service):
     stub_service["provider"] = StubProvider([
         video("aaaaaaaaaaa", title="Mais recente", published_at=NOW),
         video("bbbbbbbbbbb", title="Do meio", published_at=NOW - timedelta(days=2)),
         video("ccccccccccc", title="Mais antigo", published_at=NOW - timedelta(days=5)),
     ])
-    client.post("/admin/discovery/run", json={"topic_id": str(topic.id)})
-    return topic
+    client.post("/admin/discovery/run", json={"pipeline_id": str(pipeline.id)})
+    return pipeline
 
 
 def test_candidates_are_listed_newest_first(client, populated):
@@ -274,13 +275,13 @@ def test_the_page_size_is_capped(client, populated):
     assert client.get("/admin/video-candidates?limit=5000").status_code == 422
 
 
-def test_candidates_can_be_filtered_by_topic(client, db, populated):
-    other = ContentTopic(name="Outro")
+def test_candidates_can_be_filtered_by_pipeline(client, db, populated):
+    other = Pipeline(name="Outro")
     db.add(other)
     db.flush()
 
-    assert client.get(f"/admin/video-candidates?topic_id={populated.id}").json()["total"] == 3
-    assert client.get(f"/admin/video-candidates?topic_id={other.id}").json()["total"] == 0
+    assert client.get(f"/admin/video-candidates?pipeline_id={populated.id}").json()["total"] == 3
+    assert client.get(f"/admin/video-candidates?pipeline_id={other.id}").json()["total"] == 0
 
 
 def test_candidates_can_be_filtered_by_status(client, db, populated):
@@ -406,11 +407,11 @@ def test_promotion_is_audited(client, db, populated):
     assert "admin.discovery.candidate.select" in actions
 
 
-def test_a_manual_discovery_run_is_audited(client, db, topic, source, stub_service):
+def test_a_manual_discovery_run_is_audited(client, db, pipeline, source, stub_service):
     from app.models.audit_log import AuditLog
 
     stub_service["provider"] = StubProvider([video("aaaaaaaaaaa")])
-    client.post("/admin/discovery/run", json={"topic_id": str(topic.id)})
+    client.post("/admin/discovery/run", json={"pipeline_id": str(pipeline.id)})
 
     actions = {entry.action for entry in db.query(AuditLog).all()}
     assert "admin.discovery.run" in actions
@@ -435,7 +436,7 @@ def anonymous_client(db, no_event_fanout):
     "method,path",
     [
         ("get", "/admin/video-candidates"),
-        ("get", "/admin/content-topics"),
+        ("get", "/admin/pipelines"),
         ("get", "/admin/discovery-sources"),
         ("post", "/admin/discovery/run"),
     ],
@@ -443,6 +444,6 @@ def anonymous_client(db, no_event_fanout):
 def test_discovery_routes_require_authentication(anonymous_client, method, path):
     call = getattr(anonymous_client, method)
     response = (
-        call(path, json={"topic_id": str(uuid.uuid4())}) if method == "post" else call(path)
+        call(path, json={"pipeline_id": str(uuid.uuid4())}) if method == "post" else call(path)
     )
     assert response.status_code in (401, 403), f"{path} answered {response.status_code}"

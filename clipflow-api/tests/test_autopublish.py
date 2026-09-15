@@ -17,7 +17,7 @@ import fakeredis
 import pytest
 
 from app.core.settings import settings
-from app.models.content_topic import ContentTopic
+from app.models.pipeline import Pipeline
 from app.models.enums import (
     PipelineState,
     PublishAttemptStatus,
@@ -48,8 +48,8 @@ from app.services.autopublish_service import (
     TARGET_DISCONNECTED,
     TARGET_INACTIVE,
     TARGET_NOT_CONFIGURED,
-    TOPIC_AUTOMATION_DISABLED,
-    TOPIC_AUTOPUBLISH_DISABLED,
+    PIPELINE_AUTOMATION_DISABLED,
+    PIPELINE_AUTOPUBLISH_DISABLED,
     UNRESOLVED_ATTEMPT,
     AutonomousPublicationService,
 )
@@ -107,7 +107,7 @@ def policy(queue, publisher=None, artifacts=None, workers=ALIVE) -> AutonomousPu
     )
 
 
-def make_topic(db, *, target=None, autopublish=True, enabled=True, **automation) -> ContentTopic:
+def make_pipeline(db, *, target=None, autopublish=True, enabled=True, **automation) -> Pipeline:
     config = {
         "enabled": enabled,
         "autopublish_enabled": autopublish,
@@ -117,7 +117,7 @@ def make_topic(db, *, target=None, autopublish=True, enabled=True, **automation)
         config["publish_target_id"] = str(target.id)
     config.update(automation)
 
-    topic = ContentTopic(
+    pipeline = Pipeline(
         name=f"Topic {uuid.uuid4().hex[:8]}",
         keywords_json=["futebol"],
         default_clip_mode="short_serie",
@@ -125,12 +125,12 @@ def make_topic(db, *, target=None, autopublish=True, enabled=True, **automation)
         is_active=True,
         metadata_json={"automation": config},
     )
-    db.add(topic)
+    db.add(pipeline)
     db.flush()
-    return topic
+    return pipeline
 
 
-def make_ready_job(db, topic=None, *, ready_at=None, eligible=True, **overrides):
+def make_ready_job(db, pipeline=None, *, ready_at=None, eligible=True, **overrides):
     """A run that finished and cleared the technical gate."""
     when = ready_at or datetime.now(timezone.utc)
     metadata = {
@@ -146,8 +146,8 @@ def make_ready_job(db, topic=None, *, ready_at=None, eligible=True, **overrides)
         "metadata_json": metadata,
         "finished_at": when,
     }
-    if topic is not None:
-        fields["topic_id"] = topic.id
+    if pipeline is not None:
+        fields["pipeline_id"] = pipeline.id
     fields.update(overrides)
     return make_run(db, **fields)
 
@@ -174,7 +174,7 @@ def test_the_global_publishing_switch_blocks_everything(db, queue, monkeypatch,
                                                         no_event_fanout):
     monkeypatch.setattr(settings, "publishing_enabled", False, raising=False)
     target = autopublish_target(db)
-    make_ready_job(db, make_topic(db, target=target))
+    make_ready_job(db, make_pipeline(db, target=target))
 
     report = policy(queue).run(db, dry_run=False)
 
@@ -190,7 +190,7 @@ def test_the_global_autopublish_switch_blocks_automatic_publication(
     """Manual publishing stays on; only the automatic path stops."""
     monkeypatch.setattr(settings, "autopublish_enabled", False, raising=False)
     target = autopublish_target(db)
-    make_ready_job(db, make_topic(db, target=target))
+    make_ready_job(db, make_pipeline(db, target=target))
 
     report = policy(queue).run(db, dry_run=False)
 
@@ -207,40 +207,40 @@ def test_autopublish_defaults_to_off():
     assert Settings.model_fields["autopublish_public_enabled"].default is False
 
 
-def test_a_topic_with_automation_off_is_never_autopublished(db, queue, no_event_fanout):
+def test_a_pipeline_with_automation_off_is_never_autopublished(db, queue, no_event_fanout):
     target = autopublish_target(db)
-    topic = make_topic(db, target=target, enabled=False)
-    make_ready_job(db, topic)
+    pipeline = make_pipeline(db, target=target, enabled=False)
+    make_ready_job(db, pipeline)
 
     report = policy(queue).run(db, dry_run=False)
 
-    assert report.candidates[0].reasons == [TOPIC_AUTOMATION_DISABLED]
+    assert report.candidates[0].reasons == [PIPELINE_AUTOMATION_DISABLED]
     assert attempts_count(db) == 0
 
 
-def test_a_topic_with_autopublish_off_is_never_autopublished(db, queue, no_event_fanout):
+def test_a_pipeline_with_autopublish_off_is_never_autopublished(db, queue, no_event_fanout):
     target = autopublish_target(db)
-    topic = make_topic(db, target=target, autopublish=False)
-    make_ready_job(db, topic)
+    pipeline = make_pipeline(db, target=target, autopublish=False)
+    make_ready_job(db, pipeline)
 
     report = policy(queue).run(db, dry_run=False)
 
-    assert report.candidates[0].reasons == [TOPIC_AUTOPUBLISH_DISABLED]
+    assert report.candidates[0].reasons == [PIPELINE_AUTOPUBLISH_DISABLED]
     assert attempts_count(db) == 0
 
 
-def test_a_topic_defaults_to_autopublish_off(db):
-    """An existing topic does not gain automation because this PR shipped."""
+def test_a_pipeline_defaults_to_autopublish_off(db):
+    """An existing pipeline does not gain automation because this PR shipped."""
     from app.services.automation_service import AutomationConfig
 
-    topic = ContentTopic(name="legacy", metadata_json={"automation": {"enabled": True}})
-    assert AutomationConfig.from_topic(topic).autopublish_enabled is False
+    pipeline = Pipeline(name="legacy", metadata_json={"automation": {"enabled": True}})
+    assert AutomationConfig.from_pipeline(pipeline).autopublish_enabled is False
 
 
 def test_a_target_with_autopublish_off_is_never_autopublished(db, queue, no_event_fanout):
     """is_active is not consent to publish without a human."""
     target = autopublish_target(db, autopublish_enabled=False)
-    make_ready_job(db, make_topic(db, target=target))
+    make_ready_job(db, make_pipeline(db, target=target))
 
     report = policy(queue).run(db, dry_run=False)
 
@@ -250,7 +250,7 @@ def test_a_target_with_autopublish_off_is_never_autopublished(db, queue, no_even
 
 def test_an_inactive_target_is_never_autopublished(db, queue, no_event_fanout):
     target = autopublish_target(db, is_active=False)
-    make_ready_job(db, make_topic(db, target=target))
+    make_ready_job(db, make_pipeline(db, target=target))
 
     assert policy(queue).run(db, dry_run=False).candidates[0].reasons == [TARGET_INACTIVE]
     assert attempts_count(db) == 0
@@ -260,7 +260,7 @@ def test_a_disconnected_target_is_never_autopublished(db, queue, no_event_fanout
     target = autopublish_target(
         db, connection_status=PublishTargetConnectionStatus.RECONNECT_REQUIRED
     )
-    make_ready_job(db, make_topic(db, target=target))
+    make_ready_job(db, make_pipeline(db, target=target))
 
     assert policy(queue).run(db, dry_run=False).candidates[0].reasons == [TARGET_DISCONNECTED]
     assert attempts_count(db) == 0
@@ -271,10 +271,10 @@ def test_a_disconnected_target_is_never_autopublished(db, queue, no_event_fanout
 # ===========================================================================
 
 
-def test_a_topic_without_a_configured_target_is_blocked(db, queue, no_event_fanout):
+def test_a_pipeline_without_a_configured_target_is_blocked(db, queue, no_event_fanout):
     """No implicit channel: guessing one risks a video on the wrong audience."""
     autopublish_target(db)  # a perfectly good target exists, and is NOT used
-    make_ready_job(db, make_topic(db, target=None))
+    make_ready_job(db, make_pipeline(db, target=None))
 
     report = policy(queue).run(db, dry_run=False)
 
@@ -285,7 +285,7 @@ def test_a_topic_without_a_configured_target_is_blocked(db, queue, no_event_fano
 def test_the_configured_target_is_the_one_used(db, queue, no_event_fanout):
     autopublish_target(db, channel_id="UC_wrong", name="Wrong channel")
     right = autopublish_target(db, channel_id="UC_right", name="Right channel")
-    make_ready_job(db, make_topic(db, target=right))
+    make_ready_job(db, make_pipeline(db, target=right))
 
     report = policy(queue).run(db, dry_run=False)
 
@@ -300,7 +300,7 @@ def test_the_configured_target_is_the_one_used(db, queue, no_event_fanout):
 
 def test_a_run_awaiting_review_is_never_autopublished(db, queue, no_event_fanout):
     target = autopublish_target(db)
-    make_ready_job(db, make_topic(db, target=target), state=PipelineState.REVIEW_REQUIRED)
+    make_ready_job(db, make_pipeline(db, target=target), state=PipelineState.REVIEW_REQUIRED)
 
     report = policy(queue).run(db, dry_run=False)
 
@@ -311,7 +311,7 @@ def test_a_run_awaiting_review_is_never_autopublished(db, queue, no_event_fanout
 def test_an_ineligible_run_is_never_autopublished(db, queue, no_event_fanout):
     """State and eligibility disagreeing is exactly when to refuse."""
     target = autopublish_target(db)
-    make_ready_job(db, make_topic(db, target=target), eligible=False)
+    make_ready_job(db, make_pipeline(db, target=target), eligible=False)
 
     assert policy(queue).run(db, dry_run=False).candidates[0].reasons == [
         PUBLICATION_INELIGIBLE
@@ -322,7 +322,7 @@ def test_an_ineligible_run_is_never_autopublished(db, queue, no_event_fanout):
 def test_a_run_with_no_eligibility_record_is_refused(db, queue, no_event_fanout):
     """Fail-closed: an unmeasured gate is not a passed gate."""
     target = autopublish_target(db)
-    make_ready_job(db, make_topic(db, target=target), metadata_json={})
+    make_ready_job(db, make_pipeline(db, target=target), metadata_json={})
 
     assert policy(queue).run(db, dry_run=False).candidates[0].reasons == [
         ELIGIBILITY_MISSING
@@ -336,7 +336,7 @@ def test_a_run_with_no_eligibility_record_is_refused(db, queue, no_event_fanout)
 )
 def test_only_ready_runs_are_candidates(db, queue, state, no_event_fanout):
     target = autopublish_target(db)
-    make_ready_job(db, make_topic(db, target=target), state=state)
+    make_ready_job(db, make_pipeline(db, target=target), state=state)
 
     report = policy(queue).run(db, dry_run=False)
 
@@ -351,7 +351,7 @@ def test_only_ready_runs_are_candidates(db, queue, state, no_event_fanout):
 
 def test_private_is_the_default_and_is_allowed(db, queue, no_event_fanout):
     target = autopublish_target(db)
-    make_ready_job(db, make_topic(db, target=target))
+    make_ready_job(db, make_pipeline(db, target=target))
 
     report = policy(queue).run(db, dry_run=False)
 
@@ -365,7 +365,7 @@ def test_a_public_target_default_cannot_route_around_the_global_guard(
 ):
     """Checked on the resolved value, so a target preference cannot bypass it."""
     target = autopublish_target(db, config_json={"default_privacy": "public"})
-    make_ready_job(db, make_topic(db, target=target))
+    make_ready_job(db, make_pipeline(db, target=target))
 
     report = policy(queue).run(db, dry_run=False)
 
@@ -377,7 +377,7 @@ def test_public_is_allowed_only_with_its_own_switch(db, queue, monkeypatch,
                                                     no_event_fanout):
     monkeypatch.setattr(settings, "autopublish_public_enabled", True, raising=False)
     target = autopublish_target(db, config_json={"default_privacy": "public"})
-    make_ready_job(db, make_topic(db, target=target))
+    make_ready_job(db, make_pipeline(db, target=target))
 
     report = policy(queue).run(db, dry_run=False)
 
@@ -387,7 +387,7 @@ def test_public_is_allowed_only_with_its_own_switch(db, queue, monkeypatch,
 
 def test_unlisted_requires_explicit_target_configuration(db, queue, no_event_fanout):
     target = autopublish_target(db, config_json={"default_privacy": "unlisted"})
-    make_ready_job(db, make_topic(db, target=target))
+    make_ready_job(db, make_pipeline(db, target=target))
 
     report = policy(queue).run(db, dry_run=False)
 
@@ -406,7 +406,7 @@ def test_a_run_ready_before_the_cutoff_is_not_autopublished(db, queue, no_event_
         db, autopublish_enabled_at=datetime.now(timezone.utc) - timedelta(hours=1)
     )
     make_ready_job(
-        db, make_topic(db, target=target),
+        db, make_pipeline(db, target=target),
         ready_at=datetime.now(timezone.utc) - timedelta(days=30),
     )
 
@@ -423,7 +423,7 @@ def test_a_run_ready_after_the_cutoff_is_autopublished(db, queue, no_event_fanou
         db, autopublish_enabled_at=datetime.now(timezone.utc) - timedelta(hours=2)
     )
     make_ready_job(
-        db, make_topic(db, target=target),
+        db, make_pipeline(db, target=target),
         ready_at=datetime.now(timezone.utc) - timedelta(minutes=5),
     )
 
@@ -431,15 +431,15 @@ def test_a_run_ready_after_the_cutoff_is_autopublished(db, queue, no_event_fanou
 
 
 def test_the_strictest_cutoff_wins(db, queue, no_event_fanout):
-    """A topic and a target may each have one; the later of the two applies."""
+    """A pipeline and a target may each have one; the later of the two applies."""
     target = autopublish_target(
         db, autopublish_enabled_at=datetime.now(timezone.utc) - timedelta(days=10)
     )
-    topic = make_topic(
+    pipeline = make_pipeline(
         db, target=target,
         autopublish_enabled_at=(datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
     )
-    make_ready_job(db, topic, ready_at=datetime.now(timezone.utc) - timedelta(days=2))
+    make_ready_job(db, pipeline, ready_at=datetime.now(timezone.utc) - timedelta(days=2))
 
     assert policy(queue).run(db, dry_run=False).candidates[0].reasons == [HISTORICAL]
 
@@ -487,7 +487,7 @@ def _attempt(db, job, target, status, media="final_clips/final_clip_01.mp4", **o
 def test_an_unresolved_attempt_stops_any_replacement(db, queue, no_event_fanout):
     """The invariant, one level up: never publish over a publication nobody can account for."""
     target = autopublish_target(db)
-    job = make_ready_job(db, make_topic(db, target=target))
+    job = make_ready_job(db, make_pipeline(db, target=target))
     _attempt(db, job, target, PublishAttemptStatus.UNKNOWN)
 
     publisher = StubPublisher()
@@ -503,7 +503,7 @@ def test_an_unresolved_attempt_stops_any_replacement(db, queue, no_event_fanout)
 def test_a_needs_manual_resolution_attempt_also_stops_replacement(db, queue,
                                                                  no_event_fanout):
     target = autopublish_target(db)
-    job = make_ready_job(db, make_topic(db, target=target))
+    job = make_ready_job(db, make_pipeline(db, target=target))
     _attempt(db, job, target, PublishAttemptStatus.NEEDS_MANUAL_RESOLUTION)
 
     assert policy(queue).run(db, dry_run=False).candidates[0].reasons == [UNRESOLVED_ATTEMPT]
@@ -512,7 +512,7 @@ def test_a_needs_manual_resolution_attempt_also_stops_replacement(db, queue,
 
 def test_a_final_failure_is_not_recreated_every_tick(db, queue, no_event_fanout):
     target = autopublish_target(db)
-    job = make_ready_job(db, make_topic(db, target=target))
+    job = make_ready_job(db, make_pipeline(db, target=target))
     _attempt(db, job, target, PublishAttemptStatus.FAILED_FINAL)
 
     service = policy(queue)
@@ -525,7 +525,7 @@ def test_a_final_failure_is_not_recreated_every_tick(db, queue, no_event_fanout)
 
 def test_a_canceled_attempt_is_treated_as_an_operator_veto(db, queue, no_event_fanout):
     target = autopublish_target(db)
-    job = make_ready_job(db, make_topic(db, target=target))
+    job = make_ready_job(db, make_pipeline(db, target=target))
     _attempt(db, job, target, PublishAttemptStatus.CANCELED)
 
     assert policy(queue).run(db, dry_run=False).candidates[0].reasons == [OPERATOR_CANCELED]
@@ -538,7 +538,7 @@ def test_a_canceled_attempt_is_treated_as_an_operator_veto(db, queue, no_event_f
 def test_a_publication_already_in_flight_is_not_duplicated(db, queue, status,
                                                            no_event_fanout):
     target = autopublish_target(db)
-    job = make_ready_job(db, make_topic(db, target=target))
+    job = make_ready_job(db, make_pipeline(db, target=target))
     _attempt(db, job, target, status)
 
     assert policy(queue).run(db, dry_run=False).candidates[0].reasons == [IN_FLIGHT]
@@ -550,7 +550,7 @@ def test_only_the_unpublished_clips_of_a_partly_published_run_are_queued(
 ):
     """Three clips, one and three already done. Only the second is created."""
     target = autopublish_target(db)
-    job = make_ready_job(db, make_topic(db, target=target))
+    job = make_ready_job(db, make_pipeline(db, target=target))
     _attempt(db, job, target, PublishAttemptStatus.SUCCEEDED,
              media="final_clips/final_clip_01.mp4", external_id="vid_1")
     _attempt(db, job, target, PublishAttemptStatus.SUCCEEDED,
@@ -575,15 +575,15 @@ def test_the_daily_cap_counts_logical_publications(db, queue, monkeypatch,
                                                    no_event_fanout):
     monkeypatch.setattr(settings, "autopublish_max_per_day", 3, raising=False)
     target = autopublish_target(db)
-    topic = make_topic(db, target=target)
+    pipeline = make_pipeline(db, target=target)
 
     # Three automatic publications already made today.
     for index in range(3):
-        job = make_ready_job(db, topic, state=PipelineState.PUBLISHED)
+        job = make_ready_job(db, pipeline, state=PipelineState.PUBLISHED)
         _attempt(db, job, target, PublishAttemptStatus.SUCCEEDED,
                  media=f"final_clips/done_{index}.mp4", external_id=f"vid_{index}")
 
-    make_ready_job(db, topic)
+    make_ready_job(db, pipeline)
     report = policy(queue).run(db, dry_run=False)
 
     assert report.daily_used == 3
@@ -596,14 +596,14 @@ def test_a_retry_does_not_spend_the_cap_again(db, queue, monkeypatch, no_event_f
     """One row per logical publication; retries increment attempt_no, not the count."""
     monkeypatch.setattr(settings, "autopublish_max_per_day", 3, raising=False)
     target = autopublish_target(db)
-    topic = make_topic(db, target=target)
-    job = make_ready_job(db, topic, state=PipelineState.PUBLISHED)
+    pipeline = make_pipeline(db, target=target)
+    job = make_ready_job(db, pipeline, state=PipelineState.PUBLISHED)
     attempt = _attempt(db, job, target, PublishAttemptStatus.FAILED_RETRYABLE)
 
     attempt.attempt_no = 3  # retried twice
     db.flush()
 
-    make_ready_job(db, topic)
+    make_ready_job(db, pipeline)
     before = policy(queue)._published_today(db)
     report = policy(queue).run(db, dry_run=False)
 
@@ -618,12 +618,12 @@ def test_manual_publications_do_not_consume_the_automatic_cap(db, queue, monkeyp
                                                               no_event_fanout):
     monkeypatch.setattr(settings, "autopublish_max_per_day", 1, raising=False)
     target = autopublish_target(db)
-    topic = make_topic(db, target=target)
-    done = make_ready_job(db, topic, state=PipelineState.PUBLISHED)
+    pipeline = make_pipeline(db, target=target)
+    done = make_ready_job(db, pipeline, state=PipelineState.PUBLISHED)
     _attempt(db, done, target, PublishAttemptStatus.SUCCEEDED, initiator="manual",
              external_id="vid_manual")
 
-    make_ready_job(db, topic)
+    make_ready_job(db, pipeline)
     report = policy(queue).run(db, dry_run=False)
 
     # The cap is 1 and a manual publication already exists. Had manual spent the budget this
@@ -635,9 +635,9 @@ def test_manual_publications_do_not_consume_the_automatic_cap(db, queue, monkeyp
 def test_the_per_tick_cap_bounds_one_run(db, queue, monkeypatch, no_event_fanout):
     monkeypatch.setattr(settings, "autopublish_max_per_tick", 2, raising=False)
     target = autopublish_target(db)
-    topic = make_topic(db, target=target)
+    pipeline = make_pipeline(db, target=target)
     for _ in range(10):
-        make_ready_job(db, topic)
+        make_ready_job(db, pipeline)
 
     report = policy(queue).run(db, dry_run=False)
 
@@ -651,9 +651,9 @@ def test_absurd_caps_are_clamped_server_side(db, queue, monkeypatch, no_event_fa
     monkeypatch.setattr(settings, "autopublish_max_per_tick", 100000, raising=False)
     monkeypatch.setattr(settings, "autopublish_max_per_day", 100000, raising=False)
     target = autopublish_target(db)
-    topic = make_topic(db, target=target)
+    pipeline = make_pipeline(db, target=target)
     for _ in range(12):
-        make_ready_job(db, topic)
+        make_ready_job(db, pipeline)
 
     report = policy(queue).run(db, dry_run=False)
 
@@ -667,11 +667,11 @@ def test_the_oldest_ready_run_goes_first(db, queue, monkeypatch, no_event_fanout
     """Deterministic ordering from persisted state, not database order."""
     monkeypatch.setattr(settings, "autopublish_max_per_tick", 1, raising=False)
     target = autopublish_target(db)
-    topic = make_topic(db, target=target)
+    pipeline = make_pipeline(db, target=target)
 
-    newest = make_ready_job(db, topic, ready_at=datetime.now(timezone.utc))
+    newest = make_ready_job(db, pipeline, ready_at=datetime.now(timezone.utc))
     oldest = make_ready_job(
-        db, topic, ready_at=datetime.now(timezone.utc) - timedelta(hours=3)
+        db, pipeline, ready_at=datetime.now(timezone.utc) - timedelta(hours=3)
     )
 
     report = policy(queue).run(db, dry_run=False)
@@ -689,7 +689,7 @@ def test_the_oldest_ready_run_goes_first(db, queue, monkeypatch, no_event_fanout
 def test_no_publisher_alive_means_nothing_is_queued(db, queue, no_event_fanout):
     """Otherwise a dead fleet accumulates a day of uploads that all arrive at once."""
     target = autopublish_target(db)
-    make_ready_job(db, make_topic(db, target=target))
+    make_ready_job(db, make_pipeline(db, target=target))
 
     report = policy(queue, workers=[]).run(db, dry_run=False)
 
@@ -703,7 +703,7 @@ def test_unreadable_liveness_blocks_rather_than_assumes(db, queue, no_event_fano
         raise RuntimeError("redis is down")
 
     target = autopublish_target(db)
-    make_ready_job(db, make_topic(db, target=target))
+    make_ready_job(db, make_pipeline(db, target=target))
 
     service = policy(queue)
     service._heartbeat_reader = explode
@@ -716,7 +716,7 @@ def test_unreadable_liveness_blocks_rather_than_assumes(db, queue, no_event_fano
 def test_a_saturated_queue_pauses_automation(db, queue, monkeypatch, no_event_fanout):
     monkeypatch.setattr(settings, "autopublish_max_queue_backlog", 2, raising=False)
     target = autopublish_target(db)
-    make_ready_job(db, make_topic(db, target=target))
+    make_ready_job(db, make_pipeline(db, target=target))
     for _ in range(3):
         queue.enqueue({"version": 1, "publish_attempt_id": str(uuid.uuid4()),
                        "pipeline_job_id": "j", "target_id": "t", "media_identity": "m"})
@@ -731,7 +731,7 @@ def test_a_pile_of_dead_letters_pauses_automation(db, queue, monkeypatch,
                                                   no_event_fanout):
     monkeypatch.setattr(settings, "autopublish_max_dead_letter", 2, raising=False)
     target = autopublish_target(db)
-    make_ready_job(db, make_topic(db, target=target))
+    make_ready_job(db, make_pipeline(db, target=target))
     for _ in range(2):
         queue.redis.lpush(queue.dead_key, "{}")
 
@@ -745,7 +745,7 @@ def test_one_old_dead_letter_does_not_stop_publishing_forever(db, queue, monkeyp
     """Not zero-tolerance, deliberately."""
     monkeypatch.setattr(settings, "autopublish_max_dead_letter", 10, raising=False)
     target = autopublish_target(db)
-    make_ready_job(db, make_topic(db, target=target))
+    make_ready_job(db, make_pipeline(db, target=target))
     queue.redis.lpush(queue.dead_key, "{}")
 
     assert policy(queue).run(db, dry_run=False).queued == 1
@@ -758,7 +758,7 @@ def test_one_old_dead_letter_does_not_stop_publishing_forever(db, queue, monkeyp
 
 def test_a_dry_run_creates_nothing(db, queue, no_event_fanout):
     target = autopublish_target(db)
-    make_ready_job(db, make_topic(db, target=target))
+    make_ready_job(db, make_pipeline(db, target=target))
     publisher = StubPublisher()
 
     report = policy(queue, publisher=publisher).run(db, dry_run=True)
@@ -772,7 +772,7 @@ def test_a_dry_run_creates_nothing(db, queue, no_event_fanout):
 
 def test_a_dry_run_reports_the_operational_picture(db, queue, no_event_fanout):
     target = autopublish_target(db)
-    make_ready_job(db, make_topic(db, target=target))
+    make_ready_job(db, make_pipeline(db, target=target))
 
     report = policy(queue).run(db, dry_run=True).as_dict()
 
@@ -784,8 +784,8 @@ def test_a_dry_run_reports_the_operational_picture(db, queue, no_event_fanout):
 
 def test_an_automatic_publication_records_its_provenance(db, queue, no_event_fanout):
     target = autopublish_target(db)
-    topic = make_topic(db, target=target)
-    make_ready_job(db, topic)
+    pipeline = make_pipeline(db, target=target)
+    make_ready_job(db, pipeline)
 
     policy(queue).run(db, dry_run=False, automation_run_id="run-42")
 
@@ -794,7 +794,7 @@ def test_an_automatic_publication_records_its_provenance(db, queue, no_event_fan
     assert attempt.initiator == "automatic"
     assert provenance["policy_version"] == POLICY_VERSION
     assert provenance["automation_run_id"] == "run-42"
-    assert provenance["topic_id"] == str(topic.id)
+    assert provenance["pipeline_id"] == str(pipeline.id)
     assert provenance["autopublish_run_id"]
 
 
@@ -816,7 +816,7 @@ def test_a_manual_publication_is_marked_manual(db, queue, no_event_fanout):
 def test_the_policy_never_uploads(db, queue, no_event_fanout):
     """§79: a tick queues commands. The provider is the publisher's business."""
     target = autopublish_target(db)
-    make_ready_job(db, make_topic(db, target=target))
+    make_ready_job(db, make_pipeline(db, target=target))
     publisher = StubPublisher()
 
     report = policy(queue, publisher=publisher).run(db, dry_run=False)
@@ -833,7 +833,7 @@ def test_the_policy_never_uploads(db, queue, no_event_fanout):
 
 def test_the_status_endpoint_reports_the_whole_picture(db, queue, no_event_fanout):
     target = autopublish_target(db)
-    make_ready_job(db, make_topic(db, target=target))
+    make_ready_job(db, make_pipeline(db, target=target))
 
     status = policy(queue).status(db)
 
@@ -879,7 +879,7 @@ def test_no_run_reports_a_bare_blocked(db, queue, monkeypatch, no_event_fanout):
     """Every refusal names itself."""
     monkeypatch.setattr(settings, "autopublish_enabled", False, raising=False)
     target = autopublish_target(db)
-    make_ready_job(db, make_topic(db, target=target))
+    make_ready_job(db, make_pipeline(db, target=target))
 
     report = policy(queue).run(db, dry_run=False)
 
@@ -905,14 +905,14 @@ def test_the_automation_report_carries_a_publication_stage(db, queue, no_event_f
     from app.services.automation_service import AutonomousPipelineService
 
     target = autopublish_target(db)
-    topic = make_topic(db, target=target)
-    make_ready_job(db, topic)
+    pipeline = make_pipeline(db, target=target)
+    make_ready_job(db, pipeline)
 
     service = AutonomousPipelineService(
         discovery=StubDiscovery(), selection=StubSelection(), admission=StubAdmission(),
         publication=policy(queue),
     )
-    report = service.run_topic(db, topic=topic)
+    report = service.run_pipeline(db, pipeline=pipeline)
 
     assert report.publication.status == "ok"
     assert report.publication.counts["queued"] == 1
@@ -928,13 +928,13 @@ def test_a_publication_failure_does_not_abort_the_earlier_stages(db, queue,
             raise RuntimeError("policy blew up")
 
     target = autopublish_target(db)
-    topic = make_topic(db, target=target)
+    pipeline = make_pipeline(db, target=target)
 
     service = AutonomousPipelineService(
         discovery=StubDiscovery(), selection=StubSelection(), admission=StubAdmission(),
         publication=Exploding(),
     )
-    report = service.run_topic(db, topic=topic)
+    report = service.run_pipeline(db, pipeline=pipeline)
 
     assert report.discovery.status == "ok"
     assert report.selection.status == "ok"
@@ -944,17 +944,17 @@ def test_a_publication_failure_does_not_abort_the_earlier_stages(db, queue,
     assert report.status == "partial", "a failed stage does not fail the whole run"
 
 
-def test_a_topic_without_autopublish_skips_the_stage(db, queue, no_event_fanout):
+def test_a_pipeline_without_autopublish_skips_the_stage(db, queue, no_event_fanout):
     from app.services.automation_service import AutonomousPipelineService
 
     target = autopublish_target(db)
-    topic = make_topic(db, target=target, autopublish=False)
+    pipeline = make_pipeline(db, target=target, autopublish=False)
 
     service = AutonomousPipelineService(
         discovery=StubDiscovery(), selection=StubSelection(), admission=StubAdmission(),
         publication=policy(queue),
     )
-    report = service.run_topic(db, topic=topic)
+    report = service.run_pipeline(db, pipeline=pipeline)
 
     assert report.publication.status == "disabled"
 
@@ -974,8 +974,8 @@ def test_two_policy_runs_at_once_do_not_duplicate_a_publication(db, queue,
     equivalent, and the assertion is the same one that matters - one logical publication.
     """
     target = autopublish_target(db)
-    topic = make_topic(db, target=target)
-    make_ready_job(db, topic)
+    pipeline = make_pipeline(db, target=target)
+    make_ready_job(db, pipeline)
 
     publisher = StubPublisher()
     first = policy(queue, publisher=publisher)
@@ -994,9 +994,9 @@ def test_a_second_run_respects_the_cap_the_first_consumed(db, queue, monkeypatch
                                                           no_event_fanout):
     monkeypatch.setattr(settings, "autopublish_max_per_day", 1, raising=False)
     target = autopublish_target(db)
-    topic = make_topic(db, target=target)
-    make_ready_job(db, topic)
-    make_ready_job(db, topic)
+    pipeline = make_pipeline(db, target=target)
+    make_ready_job(db, pipeline)
+    make_ready_job(db, pipeline)
 
     service = policy(queue)
     first = service.run(db, dry_run=False)
@@ -1064,7 +1064,7 @@ def test_the_autopublish_routes_require_an_admin(db, no_event_fanout):
 
 def test_the_run_endpoint_defaults_to_a_dry_run(client, db, queue):
     target = autopublish_target(db)
-    make_ready_job(db, make_topic(db, target=target))
+    make_ready_job(db, make_pipeline(db, target=target))
 
     body = client.post("/admin/autopublish/run", json={}).json()
 
@@ -1078,7 +1078,7 @@ def test_the_run_endpoint_can_act_and_is_audited(client, db, queue):
     from app.models.audit_log import AuditLog
 
     target = autopublish_target(db)
-    make_ready_job(db, make_topic(db, target=target))
+    make_ready_job(db, make_pipeline(db, target=target))
 
     body = client.post("/admin/autopublish/run", json={"dry_run": False}).json()
 
@@ -1097,7 +1097,7 @@ def test_a_dry_run_is_not_audited(client, db):
 
 def test_the_status_endpoint_answers_whether_the_system_may_publish(client, db):
     target = autopublish_target(db)
-    make_ready_job(db, make_topic(db, target=target))
+    make_ready_job(db, make_pipeline(db, target=target))
 
     body = client.get("/admin/autopublish/status").json()
 

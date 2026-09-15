@@ -180,12 +180,12 @@ def engagement_rate(
 
 
 # ---------------------------------------------------------------------------
-# Deterministic topic relevance
+# Deterministic pipeline relevance
 # ---------------------------------------------------------------------------
 
 _WORD = re.compile(r"\w+", re.UNICODE)
 # Portuguese and English function words. They appear in every text, so counting them as
-# topical overlap would make every candidate look relevant to every topic.
+# topical overlap would make every candidate look relevant to every pipeline.
 _STOPWORDS = frozenset(
     """
     a o e de da do das dos em no na nos nas um uma uns umas para por com que se ao aos as os
@@ -219,22 +219,22 @@ def deterministic_relevance(
     description: str | None,
     discovery_query: str | None = None,
 ) -> Signal:
-    """Keyword overlap between the topic and the candidate's text.
+    """Keyword overlap between the pipeline and the candidate's text.
 
     A cheap, explainable baseline — and the fallback when no semantic evaluator is available.
-    It is not trying to understand the video; it is asking whether the words the topic is
-    about appear where they would if the video were on-topic.
+    It is not trying to understand the video; it is asking whether the words the pipeline is
+    about appear where they would if the video were on-pipeline.
 
     The title is weighted above the description because a description is often boilerplate
     (channel links, sponsor text) that mentions everything the channel ever covers.
 
-    Deliberately not a list of football regexes: the terms come from the ContentTopic, so the
+    Deliberately not a list of football regexes: the terms come from the Pipeline, so the
     engine works for any subject.
     """
     terms = {normalize_text(term) for term in (topic_keywords or []) if str(term or "").strip()}
     topic_tokens = tokenize(topic_name)
     if not terms and not topic_tokens:
-        return unmeasurable("topic_has_no_keywords")
+        return unmeasurable("pipeline_has_no_keywords")
 
     title_tokens = tokenize(title)
     description_tokens = tokenize(description)
@@ -264,11 +264,11 @@ def deterministic_relevance(
 
     # Saturating, NOT a fraction of the keyword list.
     #
-    # Dividing by len(terms) treats keywords as a conjunction: a topic listing six terms
+    # Dividing by len(terms) treats keywords as a conjunction: a pipeline listing six terms
     # would need a video to match most of them. But keywords are alternatives — "futebol" OR
-    # "entrevista" OR "polemica" — and a video squarely about one of them is on topic. Real
+    # "entrevista" OR "polemica" — and a video squarely about one of them is on pipeline. Real
     # feed data made this obvious: news items whose titles clearly matched "futebol" scored
-    # 0.167 and were blocked by the relevance floor, purely because the topic happened to
+    # 0.167 and were blocked by the relevance floor, purely because the pipeline happened to
     # list six keywords instead of two. Adding keywords made every candidate look less
     # relevant, which is exactly backwards.
     #
@@ -278,7 +278,7 @@ def deterministic_relevance(
     weighted_hits = title_hits * 1.0 + description_hits * 0.5
     coverage = 1.0 - (0.6 ** weighted_hits) if weighted_hits > 0 else 0.0
 
-    # Loose token overlap with the topic's own name, as a weak secondary signal.
+    # Loose token overlap with the pipeline's own name, as a weak secondary signal.
     name_overlap = 0.0
     if topic_tokens:
         name_overlap = len(topic_tokens & (title_tokens | description_tokens)) / len(topic_tokens)

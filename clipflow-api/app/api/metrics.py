@@ -158,7 +158,7 @@ def video_lineage(
     db: Session = Depends(get_db),
     admin: User = Depends(get_current_admin),
 ):
-    """Where this video came from: source, candidate, topic, job, publication.
+    """Where this video came from: source, candidate, pipeline, job, publication.
 
     ``complete`` says whether every link is a real foreign key. Links that were never
     recorded come back as ``null`` rather than being reconstructed by matching on titles or

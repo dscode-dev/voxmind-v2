@@ -1,6 +1,6 @@
-"""Runs discovery for a topic: fetch, normalise, deduplicate, persist.
+"""Runs discovery for a pipeline: fetch, normalise, deduplicate, persist.
 
-    ContentTopic ─ queries, language, freshness
+    Pipeline ─ queries, language, freshness
          └─> DiscoverySource ─ kind + config
                   └─> Provider ──> DiscoveredVideo[]
                                         └─> dedup ──> VideoCandidate
@@ -42,7 +42,7 @@ from app.discovery.contracts import (
 )
 from app.discovery.rss_provider import RssDiscoveryProvider
 from app.discovery.youtube_provider import YouTubeSearchProvider
-from app.models.content_topic import ContentTopic
+from app.models.pipeline import Pipeline
 from app.models.discovery_source import DiscoverySource
 from app.models.enums import (
     DiscoverySourceKind,
@@ -68,7 +68,7 @@ class DiscoveryRunResult:
     """What one source-run did. The unit an operator asks questions about."""
 
     run_id: str
-    topic_id: str
+    pipeline_id: str
     source_id: str
     source_kind: str
     provider: str
@@ -85,7 +85,7 @@ class DiscoveryRunResult:
     def as_dict(self) -> dict[str, Any]:
         return {
             "discovery_run_id": self.run_id,
-            "topic_id": self.topic_id,
+            "pipeline_id": self.pipeline_id,
             "source_id": self.source_id,
             "source_kind": self.source_kind,
             "provider": self.provider,
@@ -125,7 +125,7 @@ class DiscoveryService:
         self,
         db: Session,
         *,
-        topic: ContentTopic,
+        pipeline: Pipeline,
         source: DiscoverySource,
         max_results: int | None = None,
         published_after: datetime | None = None,
@@ -134,13 +134,13 @@ class DiscoveryService:
         """Discover for one source. Never raises: a failed source is a reported outcome.
 
         A source that throws must not take down a run over the other sources of the same
-        topic, and must not vanish either — the failure is classified, logged and returned.
+        pipeline, and must not vanish either — the failure is classified, logged and returned.
         """
         started = time.monotonic()
         provider_name = _PROVIDER_FOR_KIND.get(source.kind)
         result = DiscoveryRunResult(
             run_id=str(uuid.uuid4()),
-            topic_id=str(topic.id),
+            pipeline_id=str(pipeline.id),
             source_id=str(source.id),
             source_kind=source.kind.value,
             provider=provider_name or "none",
@@ -154,27 +154,27 @@ class DiscoveryService:
                 "message": f"no provider implements source kind '{source.kind.value}'",
                 "retryable": False,
             })
-            self._finish(db, topic, source, result, started, commit)
+            self._finish(db, pipeline, source, result, started, commit)
             return result
 
         request = self.build_request(
-            topic, source, max_results=max_results, published_after=published_after
+            pipeline, source, max_results=max_results, published_after=published_after
         )
         result.queries = list(request.queries)
 
-        self._emit(db, topic, source, result, "discovery.started", PipelineEventType.INFO)
+        self._emit(db, pipeline, source, result, "discovery.started", PipelineEventType.INFO)
 
         try:
             fetch = provider.discover(request)
         except ProviderUnavailable as exc:
             result.status = "unavailable"
             result.errors.append(exc.as_dict())
-            self._finish(db, topic, source, result, started, commit)
+            self._finish(db, pipeline, source, result, started, commit)
             return result
         except ProviderError as exc:
             result.status = "failed"
             result.errors.append(exc.as_dict())
-            self._finish(db, topic, source, result, started, commit)
+            self._finish(db, pipeline, source, result, started, commit)
             return result
         except Exception as exc:  # noqa: BLE001 - an unclassified provider bug
             result.status = "failed"
@@ -186,10 +186,10 @@ class DiscoveryService:
                 "retryable": False,
             })
             logger.exception("discovery_provider_crashed", extra={"provider": result.provider})
-            self._finish(db, topic, source, result, started, commit)
+            self._finish(db, pipeline, source, result, started, commit)
             return result
 
-        self._persist(db, topic, source, fetch, result)
+        self._persist(db, pipeline, source, fetch, result)
         result.api_calls = fetch.api_calls
         result.errors.extend(fetch.errors)
         if fetch.errors and not fetch.videos:
@@ -197,24 +197,24 @@ class DiscoveryService:
         elif fetch.errors:
             result.status = "partial"
 
-        self._finish(db, topic, source, result, started, commit)
+        self._finish(db, pipeline, source, result, started, commit)
         return result
 
-    def run_topic(
+    def run_pipeline(
         self,
         db: Session,
         *,
-        topic: ContentTopic,
+        pipeline: Pipeline,
         max_results: int | None = None,
         published_after: datetime | None = None,
         commit: bool = True,
     ) -> list[DiscoveryRunResult]:
-        """Discover across every active source of a topic."""
-        sources = [source for source in topic.sources if source.is_active]
+        """Discover across every active source of a pipeline."""
+        sources = [source for source in pipeline.sources if source.is_active]
         results = [
             self.run_source(
                 db,
-                topic=topic,
+                pipeline=pipeline,
                 source=source,
                 max_results=max_results,
                 published_after=published_after,
@@ -222,7 +222,7 @@ class DiscoveryService:
             )
             for source in sources
         ]
-        topic.last_run_at = datetime.now(timezone.utc)
+        pipeline.last_run_at = datetime.now(timezone.utc)
         if commit:
             db.commit()
         return results
@@ -231,26 +231,26 @@ class DiscoveryService:
 
     def build_request(
         self,
-        topic: ContentTopic,
+        pipeline: Pipeline,
         source: DiscoverySource,
         *,
         max_results: int | None = None,
         published_after: datetime | None = None,
     ) -> DiscoveryRequest:
-        """Assemble the provider request from the topic and the source config.
+        """Assemble the provider request from the pipeline and the source config.
 
         Queries come from configuration, never from the provider. A term compiled into the
         fetching code cannot be changed without a deploy, and 'football' would quietly become
         the only thing the system can find.
         """
         config = dict(source.config_json or {})
-        topic_metadata = dict(topic.metadata_json or {})
+        pipeline_metadata = dict(pipeline.metadata_json or {})
 
         # A source that declares `queries` owns them, INCLUDING an empty list. That is how a
         # curated feed says "take everything": the channel itself is the filter, and falling
-        # back to the topic's keywords there would silently discard most of what it publishes.
-        # Only a source that is silent on the matter inherits the topic's keywords.
-        raw_queries = config["queries"] if "queries" in config else topic.keywords_json
+        # back to the pipeline's keywords there would silently discard most of what it publishes.
+        # Only a source that is silent on the matter inherits the pipeline's keywords.
+        raw_queries = config["queries"] if "queries" in config else pipeline.keywords_json
         queries = [
             str(item).strip()
             for item in (raw_queries or [])
@@ -258,7 +258,7 @@ class DiscoveryService:
         ]
 
         freshness_days = _positive_int(
-            config.get("freshness_days") or topic_metadata.get("freshness_days"),
+            config.get("freshness_days") or pipeline_metadata.get("freshness_days"),
             self.default_freshness_days,
         )
         if published_after is None:
@@ -268,8 +268,8 @@ class DiscoveryService:
             queries=queries,
             published_after=published_after,
             published_before=None,
-            language=config.get("language") or topic_metadata.get("language"),
-            region=config.get("region") or topic_metadata.get("region"),
+            language=config.get("language") or pipeline_metadata.get("language"),
+            region=config.get("region") or pipeline_metadata.get("region"),
             max_results=_positive_int(
                 max_results or config.get("max_results"), self.default_max_results
             ),
@@ -281,7 +281,7 @@ class DiscoveryService:
     def _persist(
         self,
         db: Session,
-        topic: ContentTopic,
+        pipeline: Pipeline,
         source: DiscoverySource,
         fetch: DiscoveryFetch,
         result: DiscoveryRunResult,
@@ -299,7 +299,7 @@ class DiscoveryService:
                 continue
             seen_in_this_run.add(key)
 
-            created = self._upsert(db, topic, source, video, key)
+            created = self._upsert(db, pipeline, source, video, key)
             if created:
                 result.new_candidates += 1
             else:
@@ -310,7 +310,7 @@ class DiscoveryService:
     def _upsert(
         self,
         db: Session,
-        topic: ContentTopic,
+        pipeline: Pipeline,
         source: DiscoverySource,
         video: DiscoveredVideo,
         key: str,
@@ -331,7 +331,7 @@ class DiscoveryService:
             self._refresh(existing, video, source)
             return False
 
-        candidate = self._build(topic, source, video, key)
+        candidate = self._build(pipeline, source, video, key)
         try:
             # The insert happens inside a SAVEPOINT so a constraint violation rolls back only
             # this row. Adding it outside would leave the failed object pending in the
@@ -357,14 +357,14 @@ class DiscoveryService:
 
     def _build(
         self,
-        topic: ContentTopic,
+        pipeline: Pipeline,
         source: DiscoverySource,
         video: DiscoveredVideo,
         key: str,
     ) -> VideoCandidate:
         now = datetime.now(timezone.utc)
         return VideoCandidate(
-            topic_id=topic.id,
+            pipeline_id=pipeline.id,
             source_id=source.id,
             external_id=video.external_id,
             url=video.canonical_url,
@@ -435,7 +435,7 @@ class DiscoveryService:
     def _finish(
         self,
         db: Session,
-        topic: ContentTopic,
+        pipeline: Pipeline,
         source: DiscoverySource,
         result: DiscoveryRunResult,
         started: float,
@@ -451,7 +451,7 @@ class DiscoveryService:
             "failed": PipelineEventType.ERROR,
         }.get(result.status, PipelineEventType.INFO)
         name = "discovery.failed" if result.status == "failed" else "discovery.completed"
-        self._emit(db, topic, source, result, name, event_type)
+        self._emit(db, pipeline, source, result, name, event_type)
 
         # One structured line per run, carrying every field an operator filters on. Queries
         # are included; the API key is not, and never reaches this layer.
@@ -459,7 +459,7 @@ class DiscoveryService:
             "discovery_run",
             extra={
                 "discovery_run_id": result.run_id,
-                "topic_id": result.topic_id,
+                "pipeline_id": result.pipeline_id,
                 "source_id": result.source_id,
                 "provider": result.provider,
                 "status": result.status,
@@ -478,7 +478,7 @@ class DiscoveryService:
     def _emit(
         self,
         db: Session,
-        topic: ContentTopic,
+        pipeline: Pipeline,
         source: DiscoverySource,
         result: DiscoveryRunResult,
         name: str,

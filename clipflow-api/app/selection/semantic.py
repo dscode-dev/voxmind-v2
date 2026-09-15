@@ -1,4 +1,4 @@
-"""Semantic judgement of a candidate against a topic.
+"""Semantic judgement of a candidate against a pipeline.
 
 This is a model call, not an agent: input goes in, a structured result comes out, and nothing
 loops, plans or converses. It is named for what it does.
@@ -143,18 +143,18 @@ class NullSemanticEvaluator:
 
 
 SYSTEM_PROMPT = (
-    "You judge whether a video belongs to an editorial topic and whether it is worth "
+    "You judge whether a video belongs to an editorial pipeline and whether it is worth "
     "covering. You see only metadata: no transcript, no video.\n\n"
-    "relevance: does this video actually belong to the topic? A video that merely mentions "
+    "relevance: does this video actually belong to the pipeline? A video that merely mentions "
     "the subject in passing is not relevant to it.\n\n"
     "editorial_interest: is there something here worth making a clip about — a dispute, a "
     "strong or unexpected statement, a conflict, a development people will react to? "
     "Routine coverage, recaps and highlight compilations are low interest even when they are "
-    "perfectly on topic. Interest is NOT profanity, negativity or politics; it is whether "
+    "perfectly on pipeline. Interest is NOT profanity, negativity or politics; it is whether "
     "the material gives an audience something to react to.\n\n"
     "confidence: how sure are you, given that you only saw metadata? Vague or truncated "
     "titles deserve low confidence.\n\n"
-    "reason: one short sentence, in the topic's language, saying why.\n\n"
+    "reason: one short sentence, in the pipeline's language, saying why.\n\n"
     "Answer with JSON only: "
     '{"relevance": 0.0-1.0, "editorial_interest": 0.0-1.0, "confidence": 0.0-1.0, '
     '"reason": "..."}'
@@ -200,7 +200,7 @@ class OpenAISemanticEvaluator:
             return SemanticResult(status=UNAVAILABLE, error="no api key configured")
 
         payload = {
-            "topic": {
+            "pipeline": {
                 "name": topic_name,
                 "description": topic_description,
                 "keywords": topic_keywords[:20],

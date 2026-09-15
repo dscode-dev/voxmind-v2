@@ -11,7 +11,7 @@ The question is now asked once, against the run's required set:
     outstanding  required items with no attempt at all - the only ones anything may create
 
 **Target-scoped.** A publication to channel B cannot satisfy channel A's manifest. Today one
-topic has one automatic target, so the distinction rarely bites, but it is the kind that is
+pipeline has one automatic target, so the distinction rarely bites, but it is the kind that is
 silently wrong rather than loudly wrong when it does.
 
 **Initiator-blind.** A clip published by an operator and one published by automation are both

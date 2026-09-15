@@ -253,15 +253,15 @@ def test_a_missing_key_disables_one_source_and_nothing_else(db, no_event_fanout)
     It is recorded as `unavailable` rather than raising, so the run continues, other sources
     still collect, and — most importantly — nothing in the publishing path is touched.
     """
-    from app.models.content_topic import ContentTopic
+    from app.models.pipeline import Pipeline
     from app.models.discovery_source import DiscoverySource
     from app.models.enums import DiscoverySourceKind
 
-    topic = ContentTopic(name="Serie A", is_active=True, keywords_json=["serie a"])
-    db.add(topic)
+    pipeline = Pipeline(name="Serie A", is_active=True, keywords_json=["serie a"])
+    db.add(pipeline)
     db.flush()
     source = DiscoverySource(
-        topic_id=topic.id, kind=DiscoverySourceKind.YOUTUBE_SEARCH, name="search",
+        pipeline_id=pipeline.id, kind=DiscoverySourceKind.YOUTUBE_SEARCH, name="search",
         is_active=True, config_json={"queries": ["serie a"]},
     )
     db.add(source)
@@ -271,7 +271,7 @@ def test_a_missing_key_disables_one_source_and_nothing_else(db, no_event_fanout)
     service = build_default_service(None, timeout_sec=5.0, max_results=5, freshness_days=7)
     assert isinstance(service, DiscoveryService)
 
-    result = service.run_source(db, topic=topic, source=source, commit=True)
+    result = service.run_source(db, pipeline=pipeline, source=source, commit=True)
 
     assert result.status == "unavailable"
     assert result.errors
@@ -292,14 +292,14 @@ def test_a_missing_key_does_not_reject_a_manually_created_candidate(db, no_event
     Without a key an operator can still add and publish work by hand, which is the whole
     point of the failure being scoped to a provider.
     """
-    from app.models.content_topic import ContentTopic
+    from app.models.pipeline import Pipeline
     from app.models.video_candidate import VideoCandidate
 
-    topic = ContentTopic(name="Manual", is_active=True)
-    db.add(topic)
+    pipeline = Pipeline(name="Manual", is_active=True)
+    db.add(pipeline)
     db.flush()
     candidate = VideoCandidate(
-        topic_id=topic.id, url="https://youtu.be/manual", title="Added by hand",
+        pipeline_id=pipeline.id, url="https://youtu.be/manual", title="Added by hand",
         status=VideoCandidateStatus.SELECTED,
     )
     db.add(candidate)
@@ -333,16 +333,16 @@ def test_a_discovery_failure_never_logs_the_key(db, no_event_fanout, caplog):
 
     The service records the exception *type* rather than its text for exactly this reason.
     """
-    from app.models.content_topic import ContentTopic
+    from app.models.pipeline import Pipeline
     from app.models.discovery_source import DiscoverySource
     from app.models.enums import DiscoverySourceKind
     from app.models.pipeline_event import PipelineEvent
 
-    topic = ContentTopic(name="Leaky", is_active=True, keywords_json=["x"])
-    db.add(topic)
+    pipeline = Pipeline(name="Leaky", is_active=True, keywords_json=["x"])
+    db.add(pipeline)
     db.flush()
     source = DiscoverySource(
-        topic_id=topic.id, kind=DiscoverySourceKind.YOUTUBE_SEARCH, name="search",
+        pipeline_id=pipeline.id, kind=DiscoverySourceKind.YOUTUBE_SEARCH, name="search",
         is_active=True, config_json={"queries": ["x"]},
     )
     db.add(source)
@@ -360,7 +360,7 @@ def test_a_discovery_failure_never_logs_the_key(db, no_event_fanout, caplog):
     service = DiscoveryService(youtube_provider=LeakyProvider())
 
     with caplog.at_level(logging.ERROR):
-        result = service.run_source(db, topic=topic, source=source, commit=True)
+        result = service.run_source(db, pipeline=pipeline, source=source, commit=True)
 
     assert result.status == "failed"
     assert FAKE_API_KEY not in str(result.errors)

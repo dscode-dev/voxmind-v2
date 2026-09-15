@@ -23,7 +23,7 @@ from typing import Any
 
 from app.selection.engine import CandidateView, SelectionEngine, recency_baseline
 from app.selection.policy import SelectionConfig
-from evaluation.selection.fixtures import NOW, TOPIC, load_candidates, load_cases
+from evaluation.selection.fixtures import NOW, PIPELINE, load_candidates, load_cases
 
 # Eligibility reasons that must never appear in a selected set, whichever arm produced it.
 HARD_VIOLATIONS = {
@@ -88,7 +88,7 @@ def run_evaluation(*, limit: int = 3) -> dict[str, Any]:
 
     # ---- selection-v1, deterministic path (no model configured) ----
     engine = SelectionEngine(config=config)
-    outcome = engine.run(topic=TOPIC, candidates=candidates, config=config, now=NOW)
+    outcome = engine.run(pipeline=PIPELINE, candidates=candidates, config=config, now=NOW)
     engine_selected = [item.candidate for item in outcome.selected]
     after = measure(engine_selected, arm="selection_v1")
 
@@ -110,7 +110,7 @@ def run_evaluation(*, limit: int = 3) -> dict[str, Any]:
         "dataset": {
             "cases": len(candidates),
             "evaluated_at": NOW.isoformat(),
-            "topic": TOPIC.name,
+            "pipeline": PIPELINE.name,
         },
         "config": config.as_dict(),
         "baseline": baseline,

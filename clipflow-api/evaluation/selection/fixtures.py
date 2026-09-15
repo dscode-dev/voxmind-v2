@@ -19,14 +19,14 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from app.selection.engine import CandidateView, TopicView
+from app.selection.engine import CandidateView, PipelineView
 
 # Fixed clock: freshness is a function of age, so a moving "now" would make every run
 # different and the dataset unreproducible.
 NOW = datetime(2026, 9, 3, 12, 0, tzinfo=timezone.utc)
 
-TOPIC = TopicView(
-    topic_id="topic-futebol",
+PIPELINE = PipelineView(
+    pipeline_id="pipeline-futebol",
     name="Futebol brasileiro",
     description="Noticias, entrevistas e polemicas do futebol brasileiro",
     keywords=["futebol", "entrevista", "coletiva", "polemica", "arbitragem"],
@@ -73,7 +73,7 @@ CASES: list[SelectionCase] = [
     # ---------------------------------------------------------------- ranking
     SelectionCase(
         case_id="fresh_high_engagement",
-        description="Published 3h ago, climbing fast, squarely on topic.",
+        description="Published 3h ago, climbing fast, squarely on pipeline.",
         expectation="ranks at or near the top",
         candidate=_candidate(
             "fresh_high_engagement",
@@ -89,7 +89,7 @@ CASES: list[SelectionCase] = [
     ),
     SelectionCase(
         case_id="fresh_low_engagement",
-        description="Equally fresh and on topic, but almost nobody is watching.",
+        description="Equally fresh and on pipeline, but almost nobody is watching.",
         expectation="ranks below the fresh high-engagement case",
         candidate=_candidate(
             "fresh_low_engagement",
@@ -139,7 +139,7 @@ CASES: list[SelectionCase] = [
     # ---------------------------------------------------------------- missing data
     SelectionCase(
         case_id="rss_no_metrics",
-        description="An RSS item: on topic and fresh, but the feed publishes no counts.",
+        description="An RSS item: on pipeline and fresh, but the feed publishes no counts.",
         expectation="scores on the signals it has; not zeroed for missing metrics",
         candidate=_candidate(
             "rss_no_metrics",
@@ -159,8 +159,8 @@ CASES: list[SelectionCase] = [
     # ---------------------------------------------------------------- relevance
     SelectionCase(
         case_id="viral_off_topic",
-        description="Enormous velocity, nothing to do with the topic.",
-        expectation="must not outrank on-topic candidates on virality alone",
+        description="Enormous velocity, nothing to do with the pipeline.",
+        expectation="must not outrank on-pipeline candidates on virality alone",
         candidate=_candidate(
             "viral_off_topic",
             title="Receita de bolo de chocolate em 10 minutos",
@@ -369,7 +369,7 @@ CASES: list[SelectionCase] = [
     # ---------------------------------------------------------------- cross-source
     SelectionCase(
         case_id="cross_source_rss",
-        description="A topic surfaced by RSS, and separately by YouTube search.",
+        description="A pipeline surfaced by RSS, and separately by YouTube search.",
         expectation="both remain distinct candidates; near-duplicate detection is out of scope",
         candidate=_candidate(
             "cross_source_rss",

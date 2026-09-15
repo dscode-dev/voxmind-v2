@@ -17,7 +17,7 @@ def main() -> int:
     report = run_evaluation(limit=args.limit)
 
     print(f"Selection evaluation ({report['dataset']['cases']} synthetic cases, "
-          f"topic '{report['dataset']['topic']}')")
+          f"pipeline '{report['dataset']['pipeline']}')")
     print(report["note"])
     print()
 

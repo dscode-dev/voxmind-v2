@@ -11,15 +11,15 @@ from app.models.enums import DiscoverySourceKind
 
 
 class DiscoverySource(Base, UUIDPrimaryKeyMixin, TimestampMixin):
-    """A provider/feed a topic is discovered from. Provider integration is deferred (Phase 8);
+    """A provider/feed a pipeline is discovered from. Provider integration is deferred (Phase 8);
     this table + the abstraction is all V2 prepares for now."""
 
     __tablename__ = "discovery_sources"
-    __table_args__ = (Index("ix_discovery_sources_topic", "topic_id"),)
+    __table_args__ = (Index("ix_discovery_sources_pipeline", "pipeline_id"),)
 
-    topic_id: Mapped[uuid.UUID] = mapped_column(
+    pipeline_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("content_topics.id", ondelete="CASCADE"),
+        ForeignKey("pipelines.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -34,5 +34,5 @@ class DiscoverySource(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 
     config_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
-    topic = relationship("ContentTopic", back_populates="sources")
+    pipeline = relationship("Pipeline", back_populates="sources")
     candidates = relationship("VideoCandidate", back_populates="source")

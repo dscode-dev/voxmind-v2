@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 from app.core.settings import settings
 from app.db.session import get_db
 from app.models.enums import PublishAttemptStatus, PublishPlatform
-from app.models.content_topic import ContentTopic
+from app.models.pipeline import Pipeline
 from app.models.pipeline_job import PipelineJob
 from app.models.publish_attempt import PublishAttempt
 from app.models.publish_target import PublishTarget
@@ -402,7 +402,7 @@ class AutopublishRunInput(BaseModel):
     """
 
     dry_run: bool = True
-    topic_id: uuid.UUID | None = None
+    pipeline_id: uuid.UUID | None = None
     limit: int | None = Field(default=None, ge=0, le=10)
 
 
@@ -413,15 +413,15 @@ def autopublish_run(
     admin: User = Depends(get_current_admin),
 ):
     """Evaluate the autopublish policy now, and optionally act on it."""
-    topic = None
-    if payload.topic_id is not None:
-        topic = db.query(ContentTopic).filter(ContentTopic.id == payload.topic_id).first()
-        if topic is None:
-            raise HTTPException(status_code=404, detail="unknown topic")
+    pipeline = None
+    if payload.pipeline_id is not None:
+        pipeline = db.query(Pipeline).filter(Pipeline.id == payload.pipeline_id).first()
+        if pipeline is None:
+            raise HTTPException(status_code=404, detail="unknown pipeline")
 
     report = _autopublish().run(
         db,
-        topic=topic,
+        pipeline=pipeline,
         dry_run=payload.dry_run,
         limit=payload.limit,
         actor=str(admin.id),
@@ -435,8 +435,8 @@ def autopublish_run(
             action="admin.autopublish.run",
             outcome=report.status,
             actor_user=admin,
-            target_type="content_topic",
-            target_id=str(topic.id) if topic else None,
+            target_type="pipeline",
+            target_id=str(pipeline.id) if pipeline else None,
             metadata={
                 "autopublish_run_id": report.autopublish_run_id,
                 "queued": report.queued,

@@ -73,6 +73,7 @@ class Pipeline:
         pipeline_job_id: str | None = None,
         worker_id: str | None = None,
         attempt: int | None = None,
+        telegram_chat_id: str | None = None,
     ):
 
         self.video_url = video_url
@@ -86,6 +87,7 @@ class Pipeline:
         self.worker_id = worker_id
         self.attempt = attempt
         self.manual_response = manual_response
+        self.telegram_chat_id = telegram_chat_id
 
         self.preset: ClipPreset = resolve_job_preset(job_preset, clip_mode, video_ratio)
         self.clip_mode = self.preset.clip_mode
@@ -220,7 +222,9 @@ class Pipeline:
         # subtitle file that produced it, so QA evaluates the file it can actually explain.
         self.final_render_records: list[dict] = []
 
-        self.telegram = TelegramSender()
+        # The chat this run reports to, named by the pipeline that started it.
+        # None for a studio job, which falls back to the deployment default.
+        self.telegram = TelegramSender(chat_id=telegram_chat_id)
         self.clipflow_api = ClipFlowApiClient()
         self.prompt_builder = ManualPromptBuilder()
         self.raw_edit_prompt_builder = RawEditPromptBuilder()

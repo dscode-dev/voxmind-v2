@@ -20,7 +20,7 @@ from app.api.router import api_router
 from app.core.settings import settings
 from app.db.session import get_db
 from app.models.ai_execution import AIExecution
-from app.models.content_topic import ContentTopic
+from app.models.pipeline import Pipeline
 from app.models.enums import (
     AIExecutionStatus,
     PipelineState,
@@ -181,7 +181,7 @@ def test_ai_status_is_admin_only(db, no_event_fanout):
 # ===========================================================================
 
 
-_topics = itertools.count(1)
+_pipelines = itertools.count(1)
 
 
 def _target(db):
@@ -204,13 +204,13 @@ def _target(db):
 
 def make_production(db, *, title="Milan 3 x 1 Inter | Melhores Momentos", **overrides):
     # Topic names are unique; each production gets its own so a test can build several.
-    topic = ContentTopic(
-        name=f"Serie A {next(_topics)}", is_active=True, keywords_json=["serie a"]
+    pipeline = Pipeline(
+        name=f"Serie A {next(_pipelines)}", is_active=True, keywords_json=["serie a"]
     )
-    db.add(topic)
+    db.add(pipeline)
     db.flush()
     candidate = VideoCandidate(
-        topic_id=topic.id,
+        pipeline_id=pipeline.id,
         url="https://youtu.be/abc",
         title=title,
         channel="Serie A",
@@ -221,7 +221,7 @@ def make_production(db, *, title="Milan 3 x 1 Inter | Melhores Momentos", **over
     db.add(candidate)
     db.flush()
     return make_run(
-        db, topic_id=topic.id, candidate_id=candidate.id, **overrides
+        db, pipeline_id=pipeline.id, candidate_id=candidate.id, **overrides
     )
 
 
@@ -238,7 +238,7 @@ def test_a_run_is_identified_by_what_it_is_about(client, db):
     item = client.get("/admin/pipeline-jobs").json()["items"][0]
 
     assert item["title"] == "Milan 3 x 1 Inter | Melhores Momentos"
-    assert item["topic"]["name"].startswith("Serie A")
+    assert item["pipeline"]["name"].startswith("Serie A")
     assert item["candidate"]["thumbnail_url"].startswith("https://")
     assert item["candidate"]["channel"] == "Serie A"
     assert item["id"]

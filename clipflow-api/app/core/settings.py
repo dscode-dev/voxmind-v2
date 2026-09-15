@@ -226,7 +226,7 @@ class Settings(BaseSettings):
     # Per query. YouTube's own ceiling is 50; a search costs 100 quota units of a 10,000
     # daily allowance, so this is the main lever on how much of it one run spends.
     discovery_max_results: int = Field(default=25, alias="DISCOVERY_MAX_RESULTS")
-    # How far back a run looks when the topic does not say.
+    # How far back a run looks when the pipeline does not say.
     discovery_freshness_days: int = Field(default=7, alias="DISCOVERY_FRESHNESS_DAYS")
 
     # =====================================
@@ -237,7 +237,7 @@ class Settings(BaseSettings):
     # evidence should mean more caution, not a fabricated relevance number.
     #
     # Policy (weights, caps, thresholds) is NOT here: it belongs to the editorial intention
-    # and lives in ContentTopic.metadata_json["selection"].
+    # and lives in Pipeline.metadata_json["selection"].
     # =====================================
 
     # The account-wide key. Feature-scoped names below fall back to it, so a deployment
@@ -261,15 +261,15 @@ class Settings(BaseSettings):
     # Turning it off stops the WORK, not the scheduler — the loop keeps ticking and the API
     # stays healthy, so re-enabling needs no restart.
     #
-    # Per-topic policy (interval, stage switches, limits) is NOT here: it belongs to the
-    # editorial intention and lives in ContentTopic.metadata_json["automation"].
+    # Per-pipeline policy (interval, stage switches, limits) is NOT here: it belongs to the
+    # editorial intention and lives in Pipeline.metadata_json["automation"].
     # =====================================
 
     autonomous_pipeline_enabled: bool = Field(
         default=False, alias="AUTONOMOUS_PIPELINE_ENABLED"
     )
-    # How often the loop looks for due topics. Not the run interval — that is per topic and
-    # persisted, so this only bounds how late a due topic can be noticed.
+    # How often the loop looks for due pipelines. Not the run interval — that is per pipeline and
+    # persisted, so this only bounds how late a due pipeline can be noticed.
     automation_poll_interval_sec: int = Field(
         default=60, alias="AUTOMATION_POLL_INTERVAL_SEC"
     )
@@ -443,7 +443,7 @@ class Settings(BaseSettings):
     operations_stall_window_sec: int = Field(
         default=1800, alias="OPERATIONS_STALL_WINDOW_SEC"
     )
-    # Consecutive automation failures for one topic before it is worth saying so.
+    # Consecutive automation failures for one pipeline before it is worth saying so.
     operations_failure_threshold: int = Field(
         default=3, alias="OPERATIONS_FAILURE_THRESHOLD"
     )

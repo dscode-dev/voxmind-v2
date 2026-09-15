@@ -16,7 +16,7 @@ class VideoCandidate(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 
     __tablename__ = "video_candidates"
     __table_args__ = (
-        Index("ix_video_candidates_topic_status", "topic_id", "status"),
+        Index("ix_video_candidates_pipeline_status", "pipeline_id", "status"),
         # UNIQUE, and enforced by the database rather than by a read-then-write in the
         # service: two discovery runs finding the same video at the same moment would both
         # see nothing and both insert. Partial, so rows with no derivable identity are
@@ -31,9 +31,9 @@ class VideoCandidate(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         Index("ix_video_candidates_source_status", "source_id", "status"),
     )
 
-    topic_id: Mapped[uuid.UUID] = mapped_column(
+    pipeline_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("content_topics.id", ondelete="CASCADE"),
+        ForeignKey("pipelines.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -77,6 +77,6 @@ class VideoCandidate(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 
     metadata_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
-    topic = relationship("ContentTopic", back_populates="candidates")
+    pipeline = relationship("Pipeline", back_populates="candidates")
     source = relationship("DiscoverySource", back_populates="candidates")
     jobs = relationship("PipelineJob", back_populates="candidate")

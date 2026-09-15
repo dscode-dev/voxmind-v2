@@ -3,7 +3,7 @@
 The technical alternative is what shipped: `final_clip_01.mp4` as a title and an empty
 description. That is fine as a fallback and useless as a publication.
 
-**Grounded, or conservative.** The model is given the facts this system holds — the topic, the
+**Grounded, or conservative.** The model is given the facts this system holds — the pipeline, the
 source video's own title and channel, the clip's transcript when there is one — and told to
 describe only those. A model asked to write about football will happily invent a scoreline, a
 competition and a quote, and every one of those would be published under someone's channel as
@@ -128,7 +128,7 @@ class MetadataResult:
 class ClipContext:
     """What the model is told about one clip. Facts this system holds, nothing more.
 
-    Assembled by the caller from the topic, the candidate and the clip itself. Every field is
+    Assembled by the caller from the pipeline, the candidate and the clip itself. Every field is
     optional because a run can genuinely lack any of them, and a missing field must produce a
     conservative title rather than a confident invention.
     """
@@ -150,7 +150,7 @@ class ClipContext:
         fields = {
             "clip_number": self.video_index,
             "clips_in_this_run": self.total_clips,
-            "topic": self.topic_name,
+            "pipeline": self.topic_name,
             "topic_keywords": (self.topic_keywords or [])[:12] or None,
             "source_video_title": self.source_title,
             "source_channel": self.source_channel,

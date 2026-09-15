@@ -144,7 +144,7 @@ class DiscoveredVideo:
 class DiscoveryRequest:
     """What a provider is asked to look for.
 
-    Built from the ContentTopic and the DiscoverySource config, never from constants inside a
+    Built from the Pipeline and the DiscoverySource config, never from constants inside a
     provider — a query hardcoded in the fetching code cannot be changed without a deploy.
     """
 

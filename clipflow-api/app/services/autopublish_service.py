@@ -34,7 +34,7 @@ from app.core.settings import (
     VALID_AUTOPUBLISH_PRIVACY,
     settings,
 )
-from app.models.content_topic import ContentTopic
+from app.models.pipeline import Pipeline
 from app.models.enums import (
     PipelineEventType,
     PipelineState,
@@ -65,8 +65,8 @@ INITIATOR = "automatic"
 # invisible - and that difference decides whether publishing it by hand is reasonable.
 GLOBAL_PUBLISHING_DISABLED = "global_publishing_disabled"
 GLOBAL_AUTOPUBLISH_DISABLED = "global_autopublish_disabled"
-TOPIC_AUTOMATION_DISABLED = "topic_automation_disabled"
-TOPIC_AUTOPUBLISH_DISABLED = "topic_autopublish_disabled"
+PIPELINE_AUTOMATION_DISABLED = "pipeline_automation_disabled"
+PIPELINE_AUTOPUBLISH_DISABLED = "pipeline_autopublish_disabled"
 TARGET_NOT_CONFIGURED = "publish_target_not_configured"
 TARGET_UNKNOWN = "publish_target_unknown"
 TARGET_INACTIVE = "target_inactive"
@@ -104,7 +104,7 @@ MANIFEST_UNAVAILABLE = "publication_manifest_unavailable"
 POLICY_ONLY_REASONS = frozenset(
     {
         GLOBAL_AUTOPUBLISH_DISABLED,
-        TOPIC_AUTOPUBLISH_DISABLED,
+        PIPELINE_AUTOPUBLISH_DISABLED,
         TARGET_AUTOPUBLISH_DISABLED,
         TARGET_NOT_CONFIGURED,
         HISTORICAL,
@@ -124,7 +124,7 @@ class Candidate:
     """One run considered for automatic publication."""
 
     pipeline_job_id: str
-    topic_id: str | None
+    pipeline_id: str | None
     target_id: str | None
     status: str
     reasons: list[str] = field(default_factory=list)
@@ -141,7 +141,7 @@ class Candidate:
     def as_dict(self) -> dict[str, Any]:
         return {
             "pipeline_job_id": self.pipeline_job_id,
-            "topic_id": self.topic_id,
+            "pipeline_id": self.pipeline_id,
             "publish_target_id": self.target_id,
             "status": self.status,
             "reasons": self.reasons,
@@ -231,7 +231,7 @@ class AutonomousPublicationService:
         self,
         db: Session,
         *,
-        topic: ContentTopic | None = None,
+        pipeline: Pipeline | None = None,
         dry_run: bool = True,
         limit: int | None = None,
         automation_run_id: str | None = None,
@@ -269,7 +269,7 @@ class AutonomousPublicationService:
             self._log(report, automation_run_id, blocked_globally)
             return report
 
-        candidates = self._ready_jobs(db, topic=topic)
+        candidates = self._ready_jobs(db, pipeline=pipeline)
         report.considered = len(candidates)
 
         if dry_run:
@@ -332,7 +332,7 @@ class AutonomousPublicationService:
             tick_left = max(0, per_tick - spent)
             if tick_left <= 0:
                 report.record(Candidate(
-                    pipeline_job_id=str(job.id), topic_id=_str(job.topic_id),
+                    pipeline_job_id=str(job.id), pipeline_id=_str(job.pipeline_id),
                     target_id=None, status="blocked", reasons=[PER_RUN_LIMIT],
                 ))
                 continue
@@ -344,7 +344,7 @@ class AutonomousPublicationService:
                 day_left = budget.allocatable(tick_left)
             if day_left <= 0:
                 report.record(Candidate(
-                    pipeline_job_id=str(job.id), topic_id=_str(job.topic_id),
+                    pipeline_job_id=str(job.id), pipeline_id=_str(job.pipeline_id),
                     target_id=None, status="blocked", reasons=[DAILY_LIMIT],
                 ))
                 continue
@@ -393,7 +393,7 @@ class AutonomousPublicationService:
 
     # ------------------------------------------------------------- candidates
 
-    def _ready_jobs(self, db: Session, *, topic: ContentTopic | None) -> list[PipelineJob]:
+    def _ready_jobs(self, db: Session, *, pipeline: Pipeline | None) -> list[PipelineJob]:
         """Runs that finished, cleared the technical gate, and are waiting.
 
         Ordered by when they first became publishable, ascending: deterministic, derived from
@@ -403,8 +403,8 @@ class AutonomousPublicationService:
         query = db.query(PipelineJob).filter(
             PipelineJob.state == PipelineState.READY_TO_PUBLISH
         )
-        if topic is not None:
-            query = query.filter(PipelineJob.topic_id == topic.id)
+        if pipeline is not None:
+            query = query.filter(PipelineJob.pipeline_id == pipeline.id)
 
         jobs = query.all()
         return sorted(jobs, key=_first_ready_at)
@@ -424,7 +424,7 @@ class AutonomousPublicationService:
         budget: AutopublishBudget,
     ) -> Candidate:
         candidate = Candidate(
-            pipeline_job_id=str(job.id), topic_id=_str(job.topic_id),
+            pipeline_job_id=str(job.id), pipeline_id=_str(job.pipeline_id),
             target_id=None, status="blocked",
         )
 
@@ -449,18 +449,18 @@ class AutonomousPublicationService:
             candidate.reasons.append(PUBLICATION_INELIGIBLE)
             return candidate
 
-        # ---- the topic ------------------------------------------------------
-        topic = job.topic
-        if topic is None:
+        # ---- the pipeline ------------------------------------------------------
+        pipeline = job.pipeline
+        if pipeline is None:
             candidate.reasons.append(TARGET_NOT_CONFIGURED)
             return candidate
 
-        config = AutomationConfig.from_topic(topic)
+        config = AutomationConfig.from_pipeline(pipeline)
         if not config.enabled:
-            candidate.reasons.append(TOPIC_AUTOMATION_DISABLED)
+            candidate.reasons.append(PIPELINE_AUTOMATION_DISABLED)
             return candidate
         if not config.autopublish_enabled:
-            candidate.reasons.append(TOPIC_AUTOPUBLISH_DISABLED)
+            candidate.reasons.append(PIPELINE_AUTOPUBLISH_DISABLED)
             return candidate
         if not config.publish_target_id:
             # Never "the first active YouTube target": that rule changes meaning silently the
@@ -600,7 +600,7 @@ class AutonomousPublicationService:
                 "policy_version": POLICY_VERSION,
                 "autopublish_run_id": report.autopublish_run_id,
                 "automation_run_id": automation_run_id,
-                "topic_id": _str(job.topic_id),
+                "pipeline_id": _str(job.pipeline_id),
             },
         )
 
@@ -870,7 +870,7 @@ class AutonomousPublicationService:
                 payload={
                     "pipeline_job_id": str(job.id),
                     "publish_target_id": str(target.id),
-                    "topic_id": candidate.topic_id,
+                    "pipeline_id": candidate.pipeline_id,
                     "autopublish_run_id": report.autopublish_run_id,
                     "automation_run_id": automation_run_id,
                     "policy_version": POLICY_VERSION,
@@ -942,7 +942,7 @@ def _as_utc(value: datetime | None) -> datetime | None:
 
 
 def _latest(*values: datetime | None) -> datetime | None:
-    """The strictest cutoff wins: a topic and a target may both have one."""
+    """The strictest cutoff wins: a pipeline and a target may both have one."""
     present = [value for value in values if value is not None]
     return max(present) if present else None
 

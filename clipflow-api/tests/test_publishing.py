@@ -1862,7 +1862,7 @@ def test_nothing_publishes_without_an_explicit_decision():
     assert defaults["autopublish_enabled"].default is False
     assert defaults["autopublish_public_enabled"].default is False
 
-    # And the per-topic switch, which is what a fresh topic gets.
+    # And the per-pipeline switch, which is what a fresh pipeline gets.
     from app.services.automation_service import AutomationConfig
 
     assert AutomationConfig().autopublish_enabled is False

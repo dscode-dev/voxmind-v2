@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 
 from app.core.settings import settings
 from app.db.session import get_db
-from app.models.content_topic import ContentTopic
+from app.models.pipeline import Pipeline
 from app.models.discovery_source import DiscoverySource
 from app.models.enums import DiscoverySourceKind, VideoCandidateStatus
 from app.models.user import User
@@ -77,16 +77,16 @@ def _admission_service() -> ProductionAdmissionService:
 
 
 class AdmissionRunInput(BaseModel):
-    # Optional: omitting it admits across every topic, which is what a global scheduler wants.
-    topic_id: uuid.UUID | None = None
+    # Optional: omitting it admits across every pipeline, which is what a global scheduler wants.
+    pipeline_id: uuid.UUID | None = None
     limit: int | None = Field(default=None, ge=1, le=HARD_MAX_ADMISSIONS_PER_RUN)
     # Committing starts real production and spends GPU time, so it has to be asked for.
     dry_run: bool = True
 
 
 class SelectionRunInput(BaseModel):
-    topic_id: uuid.UUID
-    # None means "use the topic's configured cap". Whatever arrives is clamped server-side:
+    pipeline_id: uuid.UUID
+    # None means "use the pipeline's configured cap". Whatever arrives is clamped server-side:
     # this is the last line before automation can act at scale.
     limit: int | None = Field(default=None, ge=1, le=HARD_MAX_SELECTED_PER_RUN)
     # Ranking and reasons with no state change — the way to calibrate the engine against real
@@ -95,18 +95,8 @@ class SelectionRunInput(BaseModel):
     verbose: bool = False
 
 
-class TopicInput(BaseModel):
-    name: str
-    description: str | None = None
-    keywords: list[str] = Field(default_factory=list)
-    language: str | None = None
-    region: str | None = None
-    freshness_days: int | None = None
-    is_active: bool = True
-
-
 class SourceInput(BaseModel):
-    topic_id: uuid.UUID
+    pipeline_id: uuid.UUID
     kind: DiscoverySourceKind
     name: str | None = None
     is_active: bool = True
@@ -116,7 +106,7 @@ class SourceInput(BaseModel):
 
 
 class RunInput(BaseModel):
-    topic_id: uuid.UUID
+    pipeline_id: uuid.UUID
     source_id: uuid.UUID | None = None
     max_results: int | None = None
     published_after: datetime | None = None
@@ -127,7 +117,7 @@ def serialize_candidate(candidate: VideoCandidate, *, detail: bool = False) -> d
     normalized = dict(metadata.get("normalized") or {})
     payload = {
         "id": str(candidate.id),
-        "topic_id": str(candidate.topic_id),
+        "pipeline_id": str(candidate.pipeline_id),
         "source_id": str(candidate.source_id) if candidate.source_id else None,
         "status": candidate.status.value,
         "provider": metadata.get("provider"),
@@ -163,53 +153,6 @@ def serialize_candidate(candidate: VideoCandidate, *, detail: bool = False) -> d
     return payload
 
 
-# ---------------------------------------------------------------- topics
-
-
-@router.post("/admin/content-topics")
-def create_topic(
-    payload: TopicInput,
-    db: Session = Depends(get_db),
-    admin: User = Depends(get_current_admin),
-):
-    topic = ContentTopic(
-        name=payload.name,
-        description=payload.description,
-        keywords_json=payload.keywords,
-        is_active=payload.is_active,
-        metadata_json={
-            key: value
-            for key, value in {
-                "language": payload.language,
-                "region": payload.region,
-                "freshness_days": payload.freshness_days,
-            }.items()
-            if value is not None
-        },
-    )
-    db.add(topic)
-    audit_service.log(
-        db,
-        action="admin.discovery.topic.create",
-        outcome="success",
-        actor_user=admin,
-        target_type="content_topic",
-        metadata={"name": payload.name},
-    )
-    db.commit()
-    db.refresh(topic)
-    return _serialize_topic(topic)
-
-
-@router.get("/admin/content-topics")
-def list_topics(
-    db: Session = Depends(get_db),
-    admin: User = Depends(get_current_admin),
-):
-    topics = db.query(ContentTopic).order_by(ContentTopic.created_at.desc()).all()
-    return [_serialize_topic(topic) for topic in topics]
-
-
 # ---------------------------------------------------------------- sources
 
 
@@ -219,12 +162,12 @@ def create_source(
     db: Session = Depends(get_db),
     admin: User = Depends(get_current_admin),
 ):
-    topic = db.query(ContentTopic).filter(ContentTopic.id == payload.topic_id).first()
-    if topic is None:
-        raise HTTPException(status_code=404, detail="unknown topic")
+    pipeline = db.query(Pipeline).filter(Pipeline.id == payload.pipeline_id).first()
+    if pipeline is None:
+        raise HTTPException(status_code=404, detail="unknown pipeline")
 
     source = DiscoverySource(
-        topic_id=topic.id,
+        pipeline_id=pipeline.id,
         kind=payload.kind,
         name=payload.name,
         is_active=payload.is_active,
@@ -237,7 +180,7 @@ def create_source(
         outcome="success",
         actor_user=admin,
         target_type="discovery_source",
-        metadata={"kind": payload.kind.value, "topic_id": str(topic.id)},
+        metadata={"kind": payload.kind.value, "pipeline_id": str(pipeline.id)},
     )
     db.commit()
     db.refresh(source)
@@ -246,13 +189,13 @@ def create_source(
 
 @router.get("/admin/discovery-sources")
 def list_sources(
-    topic_id: uuid.UUID | None = None,
+    pipeline_id: uuid.UUID | None = None,
     db: Session = Depends(get_db),
     admin: User = Depends(get_current_admin),
 ):
     query = db.query(DiscoverySource)
-    if topic_id:
-        query = query.filter(DiscoverySource.topic_id == topic_id)
+    if pipeline_id:
+        query = query.filter(DiscoverySource.pipeline_id == pipeline_id)
     sources = query.order_by(DiscoverySource.created_at.desc()).all()
     return [_serialize_source(source) for source in sources]
 
@@ -266,14 +209,14 @@ def run_discovery(
     db: Session = Depends(get_db),
     admin: User = Depends(get_current_admin),
 ):
-    """Run discovery for a topic, or for one of its sources.
+    """Run discovery for a pipeline, or for one of its sources.
 
     A source that cannot run answers with a classified reason rather than an exception — an
     unconfigured provider is a state to report, not a crash.
     """
-    topic = db.query(ContentTopic).filter(ContentTopic.id == payload.topic_id).first()
-    if topic is None:
-        raise HTTPException(status_code=404, detail="unknown topic")
+    pipeline = db.query(Pipeline).filter(Pipeline.id == payload.pipeline_id).first()
+    if pipeline is None:
+        raise HTTPException(status_code=404, detail="unknown pipeline")
 
     service = _service()
 
@@ -282,25 +225,25 @@ def run_discovery(
             db.query(DiscoverySource)
             .filter(
                 DiscoverySource.id == payload.source_id,
-                DiscoverySource.topic_id == topic.id,
+                DiscoverySource.pipeline_id == pipeline.id,
             )
             .first()
         )
         if source is None:
-            raise HTTPException(status_code=404, detail="unknown source for this topic")
+            raise HTTPException(status_code=404, detail="unknown source for this pipeline")
         results = [
             service.run_source(
                 db,
-                topic=topic,
+                pipeline=pipeline,
                 source=source,
                 max_results=payload.max_results,
                 published_after=payload.published_after,
             )
         ]
     else:
-        results = service.run_topic(
+        results = service.run_pipeline(
             db,
-            topic=topic,
+            pipeline=pipeline,
             max_results=payload.max_results,
             published_after=payload.published_after,
         )
@@ -310,8 +253,8 @@ def run_discovery(
         action="admin.discovery.run",
         outcome="success",
         actor_user=admin,
-        target_type="content_topic",
-        target_id=str(topic.id),
+        target_type="pipeline",
+        target_id=str(pipeline.id),
         metadata={
             "source_id": str(payload.source_id) if payload.source_id else None,
             "runs": len(results),
@@ -321,7 +264,7 @@ def run_discovery(
     db.commit()
 
     return {
-        "topic_id": str(topic.id),
+        "pipeline_id": str(pipeline.id),
         "runs": [result.as_dict() for result in results],
         "totals": {
             "results_received": sum(r.results_received for r in results),
@@ -341,7 +284,7 @@ def run_selection(
     db: Session = Depends(get_db),
     admin: User = Depends(get_current_admin),
 ):
-    """Rank a topic's candidates and, unless this is a dry run, mark the winners SELECTED.
+    """Rank a pipeline's candidates and, unless this is a dry run, mark the winners SELECTED.
 
     Defaults to ``dry_run=true``. Committing is the exception that has to be asked for, not
     the default a mistyped request falls into.
@@ -350,12 +293,12 @@ def run_selection(
     admitting it into production is the next PR's boundary, so enabling automatic selection
     cannot by itself start spending GPU time.
     """
-    topic = db.query(ContentTopic).filter(ContentTopic.id == payload.topic_id).first()
-    if topic is None:
-        raise HTTPException(status_code=404, detail="unknown topic")
+    pipeline = db.query(Pipeline).filter(Pipeline.id == payload.pipeline_id).first()
+    if pipeline is None:
+        raise HTTPException(status_code=404, detail="unknown pipeline")
 
     report = _selection_service().run(
-        db, topic=topic, limit=payload.limit, dry_run=payload.dry_run
+        db, pipeline=pipeline, limit=payload.limit, dry_run=payload.dry_run
     )
 
     audit_service.log(
@@ -363,8 +306,8 @@ def run_selection(
         action="admin.selection.run",
         outcome="success",
         actor_user=admin,
-        target_type="content_topic",
-        target_id=str(topic.id),
+        target_type="pipeline",
+        target_id=str(pipeline.id),
         metadata={
             "selection_run_id": report.run_id,
             "dry_run": payload.dry_run,
@@ -392,15 +335,15 @@ def run_admission(
     capacity, the day's budget, and whether the run already exists. Defaults to a dry run:
     committing creates PipelineJobs and puts real work on the queue.
     """
-    topic = None
-    if payload.topic_id:
-        topic = db.query(ContentTopic).filter(ContentTopic.id == payload.topic_id).first()
-        if topic is None:
-            raise HTTPException(status_code=404, detail="unknown topic")
+    pipeline = None
+    if payload.pipeline_id:
+        pipeline = db.query(Pipeline).filter(Pipeline.id == payload.pipeline_id).first()
+        if pipeline is None:
+            raise HTTPException(status_code=404, detail="unknown pipeline")
 
     report = _admission_service().run(
         db,
-        topic=topic,
+        pipeline=pipeline,
         limit=payload.limit,
         dry_run=payload.dry_run,
         actor=str(admin.id),
@@ -411,8 +354,8 @@ def run_admission(
         action="admin.admission.run",
         outcome="success",
         actor_user=admin,
-        target_type="content_topic",
-        target_id=str(topic.id) if topic else None,
+        target_type="pipeline",
+        target_id=str(pipeline.id) if pipeline else None,
         metadata={
             "admission_run_id": report.run_id,
             "dry_run": payload.dry_run,
@@ -491,7 +434,7 @@ def retry_pending_enqueue(
 
 @router.get("/admin/video-candidates")
 def list_candidates(
-    topic_id: uuid.UUID | None = None,
+    pipeline_id: uuid.UUID | None = None,
     source_id: uuid.UUID | None = None,
     status: VideoCandidateStatus | None = None,
     min_score: float | None = Query(default=None, ge=0.0, le=1.0),
@@ -512,8 +455,8 @@ def list_candidates(
     recency, not ranking — there is no scoring in this PR.
     """
     query = db.query(VideoCandidate)
-    if topic_id:
-        query = query.filter(VideoCandidate.topic_id == topic_id)
+    if pipeline_id:
+        query = query.filter(VideoCandidate.pipeline_id == pipeline_id)
     if source_id:
         query = query.filter(VideoCandidate.source_id == source_id)
     if status:
@@ -629,24 +572,10 @@ def select_candidate(
     }
 
 
-def _serialize_topic(topic: ContentTopic) -> dict[str, Any]:
-    return {
-        "id": str(topic.id),
-        "name": topic.name,
-        "description": topic.description,
-        "keywords": topic.keywords_json or [],
-        "is_active": topic.is_active,
-        "default_clip_mode": topic.default_clip_mode,
-        "default_video_ratio": topic.default_video_ratio,
-        "last_run_at": topic.last_run_at,
-        "metadata": topic.metadata_json or {},
-    }
-
-
 def _serialize_source(source: DiscoverySource) -> dict[str, Any]:
     return {
         "id": str(source.id),
-        "topic_id": str(source.topic_id),
+        "pipeline_id": str(source.pipeline_id),
         "kind": source.kind.value,
         "name": source.name,
         "is_active": source.is_active,

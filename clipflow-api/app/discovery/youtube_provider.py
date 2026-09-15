@@ -12,7 +12,7 @@ same single unit fifty times over and take fifty round trips; ``videos.list`` ac
 
 Quota is the binding constraint. Search costs 100 units against a default daily allowance of
 10,000, so roughly 100 searches a day exist in total. That is why the query list comes from
-the topic (deduplicated) rather than from a loop somewhere, why ``max_results`` is capped,
+the pipeline (deduplicated) rather than from a loop somewhere, why ``max_results`` is capped,
 and why a quota error is classified as non-retryable: the allowance resets on a clock, not
 on a backoff, and retrying only spends tomorrow's.
 
@@ -104,7 +104,7 @@ def _as_int(value: Any) -> int | None:
 
 
 class YouTubeSearchProvider:
-    """Searches YouTube for a topic's queries and returns normalised results."""
+    """Searches YouTube for a pipeline's queries and returns normalised results."""
 
     name = identity.YOUTUBE
 
@@ -133,7 +133,7 @@ class YouTubeSearchProvider:
             )
 
         fetch = DiscoveryFetch()
-        # Deduplicated because two topic queries overlapping costs 100 quota units to learn
+        # Deduplicated because two pipeline queries overlapping costs 100 quota units to learn
         # what the caller already knew.
         queries = list(dict.fromkeys(q.strip() for q in request.queries if q and q.strip()))
         if not queries:

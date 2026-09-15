@@ -1,6 +1,6 @@
 """Admin endpoints for the autonomous loop.
 
-Three operations an operator actually needs: see what the scheduler is doing, turn a topic's
+Three operations an operator actually needs: see what the scheduler is doing, turn a pipeline's
 automation on or off, and force a cycle now.
 
 The manual trigger calls the same ``AutonomousPipelineService`` the scheduler calls — directly,
@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 from app.core.settings import settings
 from app.db.session import get_db
 from app.models.automation_state import AutomationState
-from app.models.content_topic import ContentTopic
+from app.models.pipeline import Pipeline
 from app.models.enums import VideoCandidateStatus
 from app.models.user import User
 from app.models.video_candidate import VideoCandidate
@@ -50,7 +50,7 @@ def _scheduler() -> AutomationScheduler:
 
 
 class AutomationConfigInput(BaseModel):
-    """The per-topic automation settings an operator may change.
+    """The per-pipeline automation settings an operator may change.
 
     Bounded at the edge as well as in the service: a limit of 100000 is a mistake, and the
     earliest place to say so is the request.
@@ -71,20 +71,20 @@ def automation_status(
     db: Session = Depends(get_db),
     admin: User = Depends(get_current_admin),
 ):
-    """What the scheduler will do next, per topic."""
-    topics = db.query(ContentTopic).order_by(ContentTopic.created_at.asc()).all()
+    """What the scheduler will do next, per pipeline."""
+    pipelines = db.query(Pipeline).order_by(Pipeline.created_at.asc()).all()
     states = {
-        state.topic_id: state for state in db.query(AutomationState).all()
+        state.pipeline_id: state for state in db.query(AutomationState).all()
     }
 
     backlog_rows = (
-        db.query(VideoCandidate.topic_id, VideoCandidate.status)
+        db.query(VideoCandidate.pipeline_id, VideoCandidate.status)
         .filter(VideoCandidate.status == VideoCandidateStatus.SELECTED)
         .all()
     )
     backlog: dict[Any, int] = {}
-    for topic_id, _ in backlog_rows:
-        backlog[topic_id] = backlog.get(topic_id, 0) + 1
+    for pipeline_id, _ in backlog_rows:
+        backlog[pipeline_id] = backlog.get(pipeline_id, 0) + 1
 
     runners = AutomationHeartbeat.alive()
     return {
@@ -107,36 +107,36 @@ def automation_status(
             for r in runners
         ],
         "poll_interval_sec": settings.automation_poll_interval_sec,
-        "topics": [
-            _serialize_topic_state(topic, states.get(topic.id), backlog.get(topic.id, 0))
-            for topic in topics
+        "pipelines": [
+            _serialize_pipeline_state(pipeline, states.get(pipeline.id), backlog.get(pipeline.id, 0))
+            for pipeline in pipelines
         ],
     }
 
 
-@router.put("/admin/automation/topics/{topic_id}")
+@router.put("/admin/automation/pipelines/{pipeline_id}")
 def update_automation_config(
-    topic_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
     payload: AutomationConfigInput,
     db: Session = Depends(get_db),
     admin: User = Depends(get_current_admin),
 ):
-    """Change a topic's automation settings.
+    """Change a pipeline's automation settings.
 
-    Pausing a topic only stops *new cycles*. Candidates keep their statuses, running
+    Pausing a pipeline only stops *new cycles*. Candidates keep their statuses, running
     PipelineJobs keep running, and nothing is deleted — a pause must be reversible without
     having lost anything.
     """
-    topic = db.query(ContentTopic).filter(ContentTopic.id == topic_id).first()
-    if topic is None:
-        raise HTTPException(status_code=404, detail="unknown topic")
+    pipeline = db.query(Pipeline).filter(Pipeline.id == pipeline_id).first()
+    if pipeline is None:
+        raise HTTPException(status_code=404, detail="unknown pipeline")
 
-    metadata = dict(topic.metadata_json or {})
+    metadata = dict(pipeline.metadata_json or {})
     automation = dict(metadata.get("automation") or {})
     changes = payload.model_dump(exclude_none=True)
     automation.update(changes)
     metadata["automation"] = automation
-    topic.metadata_json = metadata
+    pipeline.metadata_json = metadata
 
     # A human changing whether the system may produce on its own is exactly what the audit
     # log is for. Scheduler ticks are not audited — they are events and logs.
@@ -145,27 +145,27 @@ def update_automation_config(
         action="admin.automation.configure",
         outcome="success",
         actor_user=admin,
-        target_type="content_topic",
-        target_id=str(topic.id),
+        target_type="pipeline",
+        target_id=str(pipeline.id),
         metadata={"changes": changes},
     )
     db.commit()
-    db.refresh(topic)
+    db.refresh(pipeline)
 
-    state = db.query(AutomationState).filter(AutomationState.topic_id == topic.id).first()
-    return _serialize_topic_state(topic, state, _selected_backlog(db, topic))
+    state = db.query(AutomationState).filter(AutomationState.pipeline_id == pipeline.id).first()
+    return _serialize_pipeline_state(pipeline, state, _selected_backlog(db, pipeline))
 
 
-@router.post("/admin/automation/topics/{topic_id}/run")
-def run_topic_now(
-    topic_id: uuid.UUID,
+@router.post("/admin/automation/pipelines/{pipeline_id}/run")
+def run_pipeline_now(
+    pipeline_id: uuid.UUID,
     db: Session = Depends(get_db),
     admin: User = Depends(get_current_admin),
 ):
     """Run one full cycle now, ignoring the schedule.
 
     Goes through the scheduler rather than straight to the orchestrator, so a manual trigger
-    takes the same per-topic lock and observes the same overlap guard as an automatic run.
+    takes the same per-pipeline lock and observes the same overlap guard as an automatic run.
     A manual run that skipped the lock could race an automatic one and break the caps both
     are meant to respect.
 
@@ -177,26 +177,26 @@ def run_topic_now(
             detail="autonomous pipeline is disabled (AUTONOMOUS_PIPELINE_ENABLED=false)",
         )
 
-    topic = db.query(ContentTopic).filter(ContentTopic.id == topic_id).first()
-    if topic is None:
-        raise HTTPException(status_code=404, detail="unknown topic")
+    pipeline = db.query(Pipeline).filter(Pipeline.id == pipeline_id).first()
+    if pipeline is None:
+        raise HTTPException(status_code=404, detail="unknown pipeline")
 
-    config = AutomationConfig.from_topic(topic)
+    config = AutomationConfig.from_pipeline(pipeline)
     if not config.enabled:
-        raise HTTPException(status_code=409, detail="automation is disabled for this topic")
+        raise HTTPException(status_code=409, detail="automation is disabled for this pipeline")
 
     scheduler = _scheduler()
     # Forced: a manual trigger means "now", so the due check is bypassed — but the lock and
     # the overlap guard are not.
-    outcome = scheduler.run_topic_if_due(db, topic=topic, now=datetime.now(timezone.utc), force=True)
+    outcome = scheduler.run_pipeline_if_due(db, pipeline=pipeline, now=datetime.now(timezone.utc), force=True)
 
     audit_service.log(
         db,
         action="admin.automation.manual_run",
         outcome="success",
         actor_user=admin,
-        target_type="content_topic",
-        target_id=str(topic.id),
+        target_type="pipeline",
+        target_id=str(pipeline.id),
         metadata={"forced": True},
     )
     db.commit()
@@ -234,14 +234,14 @@ def _runner_state(runners: list[dict]) -> str:
     return "live" if runners else "stale"
 
 
-def _serialize_topic_state(
-    topic: ContentTopic, state: AutomationState | None, backlog: int
+def _serialize_pipeline_state(
+    pipeline: Pipeline, state: AutomationState | None, backlog: int
 ) -> dict[str, Any]:
-    config = AutomationConfig.from_topic(topic)
+    config = AutomationConfig.from_pipeline(pipeline)
     return {
-        "topic_id": str(topic.id),
-        "name": topic.name,
-        "is_active": topic.is_active,
+        "pipeline_id": str(pipeline.id),
+        "name": pipeline.name,
+        "is_active": pipeline.is_active,
         "automation": config.as_dict(),
         "selected_backlog": backlog,
         "next_due_at": _iso(state.next_due_at) if state else None,
@@ -254,11 +254,11 @@ def _serialize_topic_state(
     }
 
 
-def _selected_backlog(db: Session, topic: ContentTopic) -> int:
+def _selected_backlog(db: Session, pipeline: Pipeline) -> int:
     return (
         db.query(VideoCandidate)
         .filter(
-            VideoCandidate.topic_id == topic.id,
+            VideoCandidate.pipeline_id == pipeline.id,
             VideoCandidate.status == VideoCandidateStatus.SELECTED,
         )
         .count()

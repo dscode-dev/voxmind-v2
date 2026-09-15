@@ -51,7 +51,7 @@ from app.models.publish_attempt import PublishAttempt
 logger = logging.getLogger(__name__)
 
 # One namespace for the whole automatic budget. The cap is global today - one target per
-# topic, one shared daily allowance - so one lock is the honest scope. A per-target budget
+# pipeline, one shared daily allowance - so one lock is the honest scope. A per-target budget
 # would take a per-target key, and that is a schema question to answer when a second channel
 # exists rather than a shape to guess at now.
 BUDGET_LOCK_KEY = 8_812_001

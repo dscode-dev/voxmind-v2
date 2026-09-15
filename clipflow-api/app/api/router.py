@@ -18,6 +18,7 @@ from app.api import ops_stream
 from app.api import pipeline_runs
 from app.api import operations
 from app.api import operations_read
+from app.api import pipelines
 from app.api import publishing
 
 
@@ -74,7 +75,14 @@ api_router.include_router(metrics.router)
 
 
 # ==========================================
-# Discovery (topics, sources, candidates)
+# Pipelines (the object an operator configures and watches)
+# ==========================================
+
+api_router.include_router(pipelines.router)
+
+
+# ==========================================
+# Discovery (sources, candidates, and the runs that fill them)
 # ==========================================
 
 api_router.include_router(discovery.router)

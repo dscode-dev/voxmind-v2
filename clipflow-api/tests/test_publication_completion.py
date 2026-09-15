@@ -45,7 +45,7 @@ from tests.test_autopublish import (  # noqa: F401 - fixtures used by pytest
     autopublish_config,
     autopublish_target,
     make_ready_job,
-    make_topic,
+    make_pipeline,
     policy,
     queue,
 )
@@ -481,7 +481,7 @@ def test_a_budget_smaller_than_the_run_allocates_what_it_can(db, queue, monkeypa
                                                               no_event_fanout):
     monkeypatch.setattr(settings, "autopublish_max_per_day", 2, raising=False)
     target = autopublish_target(db)
-    make_ready_job(db, make_topic(db, target=target))
+    make_ready_job(db, make_pipeline(db, target=target))
 
     report = policy(queue, artifacts=StubArtifacts(videos=4)).run(db, dry_run=False)
 
@@ -499,7 +499,7 @@ def test_the_run_finishes_on_a_later_budget_and_never_republishes(
     """Day 1 takes two clips, day 2 the rest, and then the run is PUBLISHED."""
     monkeypatch.setattr(settings, "autopublish_max_per_day", 2, raising=False)
     target = autopublish_target(db)
-    job = make_ready_job(db, make_topic(db, target=target))
+    job = make_ready_job(db, make_pipeline(db, target=target))
     svc = policy(queue, artifacts=StubArtifacts(videos=4))
 
     svc.run(db, dry_run=False)
@@ -524,7 +524,7 @@ def test_a_per_tick_cap_of_one_advances_one_clip_at_a_time(db, queue, monkeypatc
     monkeypatch.setattr(settings, "autopublish_max_per_tick", 1, raising=False)
     monkeypatch.setattr(settings, "autopublish_max_per_day", 50, raising=False)
     target = autopublish_target(db)
-    job = make_ready_job(db, make_topic(db, target=target))
+    job = make_ready_job(db, make_pipeline(db, target=target))
     svc = policy(queue, artifacts=StubArtifacts(videos=4))
 
     progress = []
@@ -541,7 +541,7 @@ def test_a_per_tick_cap_of_one_advances_one_clip_at_a_time(db, queue, monkeypatc
 
 def test_successes_are_never_offered_for_allocation_again(db, queue, no_event_fanout):
     target = autopublish_target(db)
-    job = make_ready_job(db, make_topic(db, target=target))
+    job = make_ready_job(db, make_pipeline(db, target=target))
     attempt_for(db, job, target, 1, PublishAttemptStatus.SUCCEEDED)
     attempt_for(db, job, target, 3, PublishAttemptStatus.SUCCEEDED)
 

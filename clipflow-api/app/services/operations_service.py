@@ -345,7 +345,7 @@ class OperationsService:
         """
         threshold = max(2, settings.operations_failure_threshold)
         rows = (
-            db.query(AutomationState.topic_id, AutomationState.consecutive_failures)
+            db.query(AutomationState.pipeline_id, AutomationState.consecutive_failures)
             .filter(AutomationState.consecutive_failures >= threshold)
             .all()
         )
@@ -354,12 +354,12 @@ class OperationsService:
             severity=SEVERITIES[REPEATED_AUTOMATION_FAILURE],
             active=bool(rows),
             message=(
-                f"{len(rows)} topic(s) failing repeatedly"
-                if rows else "no topic is failing repeatedly"
+                f"{len(rows)} pipeline(s) failing repeatedly"
+                if rows else "no pipeline is failing repeatedly"
             ),
             observed_at=now.isoformat(),
             metadata={
-                "topics": len(rows),
+                "pipelines": len(rows),
                 "threshold": threshold,
                 "worst": max((int(f or 0) for _, f in rows), default=0),
             },

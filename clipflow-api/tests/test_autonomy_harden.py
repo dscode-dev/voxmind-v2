@@ -57,7 +57,7 @@ from tests.test_autopublish import (  # noqa: F401 - fixtures are used by pytest
     autopublish_config,
     autopublish_target,
     make_ready_job,
-    make_topic,
+    make_pipeline,
     policy,
     queue,
 )
@@ -94,7 +94,7 @@ def test_a_naive_clock_is_read_as_utc():
 
 def test_the_budget_counts_only_automatic_publications_of_its_own_day(db, no_event_fanout):
     target = autopublish_target(db)
-    job = make_ready_job(db, make_topic(db, target=target))
+    job = make_ready_job(db, make_pipeline(db, target=target))
 
     today = utc_today()
     _attempt(db, job, target, PublishAttemptStatus.SUCCEEDED, media="a.mp4")
@@ -109,7 +109,7 @@ def test_the_budget_counts_only_automatic_publications_of_its_own_day(db, no_eve
 def test_a_canceled_publication_gives_its_unit_back(db, no_event_fanout):
     """An operator's correction must not permanently shrink the day's allowance."""
     target = autopublish_target(db)
-    job = make_ready_job(db, make_topic(db, target=target))
+    job = make_ready_job(db, make_pipeline(db, target=target))
     attempt = _attempt(db, job, target, PublishAttemptStatus.PENDING)
 
     assert AutopublishBudget(db, limit=3).used() == 1
@@ -123,7 +123,7 @@ def test_a_canceled_publication_gives_its_unit_back(db, no_event_fanout):
 def test_every_started_publication_is_charged(db, status, no_event_fanout):
     """Including the ones that failed: the attempt was made, and it reached the provider."""
     target = autopublish_target(db)
-    job = make_ready_job(db, make_topic(db, target=target))
+    job = make_ready_job(db, make_pipeline(db, target=target))
     _attempt(db, job, target, status)
 
     assert AutopublishBudget(db, limit=3).used() == 1
@@ -162,11 +162,11 @@ def test_repeated_allocations_do_not_wedge_the_budget(db, queue, monkeypatch,
     """Three allocations in one process, each of which commits inside publish()."""
     monkeypatch.setattr(settings, "autopublish_max_per_day", 10, raising=False)
     target = autopublish_target(db)
-    topic = make_topic(db, target=target)
+    pipeline = make_pipeline(db, target=target)
     service = policy(queue)
 
     for _ in range(3):
-        make_ready_job(db, topic)
+        make_ready_job(db, pipeline)
         report = service.run(db, dry_run=False)
         assert "budget_locked" not in report.blocked_reasons, (
             "a previous allocation left the lock held"
@@ -178,7 +178,7 @@ def test_repeated_allocations_do_not_wedge_the_budget(db, queue, monkeypatch,
 def test_the_budget_recomputes_between_allocations(db, no_event_fanout):
     """Not decremented in memory: the number always comes from the publications."""
     target = autopublish_target(db)
-    job = make_ready_job(db, make_topic(db, target=target))
+    job = make_ready_job(db, make_pipeline(db, target=target))
     budget = AutopublishBudget(db, limit=2)
 
     with budget.hold():
@@ -206,7 +206,7 @@ def test_a_run_larger_than_the_budget_publishes_what_it_can(
     monkeypatch.setattr(settings, "autopublish_max_per_day", 1, raising=False)
     monkeypatch.setattr(settings, "autopublish_max_per_tick", 5, raising=False)
     target = autopublish_target(db)
-    job = make_ready_job(db, make_topic(db, target=target))
+    job = make_ready_job(db, make_pipeline(db, target=target))
 
     report = policy(queue, artifacts=StubArtifacts(videos=3)).run(db, dry_run=False)
 
@@ -222,7 +222,7 @@ def test_a_multi_clip_run_spends_one_unit_per_clip(db, queue, monkeypatch,
     monkeypatch.setattr(settings, "autopublish_max_per_day", 3, raising=False)
     monkeypatch.setattr(settings, "autopublish_max_per_tick", 5, raising=False)
     target = autopublish_target(db)
-    make_ready_job(db, make_topic(db, target=target))
+    make_ready_job(db, make_pipeline(db, target=target))
 
     report = policy(queue, artifacts=StubArtifacts(videos=3)).run(db, dry_run=False)
 
@@ -237,9 +237,9 @@ def test_the_per_tick_cap_also_counts_media_items(db, queue, monkeypatch,
     monkeypatch.setattr(settings, "autopublish_max_per_tick", 2, raising=False)
     monkeypatch.setattr(settings, "autopublish_max_per_day", 50, raising=False)
     target = autopublish_target(db)
-    topic = make_topic(db, target=target)
+    pipeline = make_pipeline(db, target=target)
     for _ in range(3):
-        make_ready_job(db, topic)
+        make_ready_job(db, pipeline)
 
     report = policy(queue).run(db, dry_run=False)
 
@@ -253,7 +253,7 @@ def test_a_four_clip_run_takes_two_units_of_a_tick_cap_of_two(db, queue, monkeyp
     monkeypatch.setattr(settings, "autopublish_max_per_tick", 2, raising=False)
     monkeypatch.setattr(settings, "autopublish_max_per_day", 50, raising=False)
     target = autopublish_target(db)
-    make_ready_job(db, make_topic(db, target=target))
+    make_ready_job(db, make_pipeline(db, target=target))
 
     report = policy(queue, artifacts=StubArtifacts(videos=4)).run(db, dry_run=False)
 
@@ -266,7 +266,7 @@ def test_a_run_publishes_every_clip_in_declared_order(db, queue, monkeypatch,
                                                        no_event_fanout):
     monkeypatch.setattr(settings, "autopublish_max_per_day", 4, raising=False)
     target = autopublish_target(db)
-    make_ready_job(db, make_topic(db, target=target))
+    make_ready_job(db, make_pipeline(db, target=target))
 
     policy(queue, artifacts=StubArtifacts(videos=4)).run(db, dry_run=False)
 
@@ -282,7 +282,7 @@ def test_a_large_run_makes_progress_across_budgets(db, queue, monkeypatch,
     """The P1 this PR closes: a run larger than the cap used to stall for ever."""
     monkeypatch.setattr(settings, "autopublish_max_per_day", 1, raising=False)
     target = autopublish_target(db)
-    make_ready_job(db, make_topic(db, target=target))
+    make_ready_job(db, make_pipeline(db, target=target))
     service = policy(queue, artifacts=StubArtifacts(videos=2))
 
     service.run(db, dry_run=False)
@@ -304,7 +304,7 @@ def test_a_large_run_makes_progress_across_budgets(db, queue, monkeypatch,
 
 def test_a_run_with_nothing_outstanding_is_not_a_candidate(db, queue, no_event_fanout):
     target = autopublish_target(db)
-    job = make_ready_job(db, make_topic(db, target=target))
+    job = make_ready_job(db, make_pipeline(db, target=target))
     _attempt(db, job, target, PublishAttemptStatus.SUCCEEDED,
              media="final_clips/final_clip_01.mp4")
 
@@ -321,7 +321,7 @@ def test_a_run_with_nothing_outstanding_is_not_a_candidate(db, queue, no_event_f
 
 def test_a_dry_run_spends_nothing(db, queue, no_event_fanout):
     target = autopublish_target(db)
-    make_ready_job(db, make_topic(db, target=target))
+    make_ready_job(db, make_pipeline(db, target=target))
 
     before = AutopublishBudget(db, limit=10).used()
     policy(queue).run(db, dry_run=True)
@@ -333,7 +333,7 @@ def test_an_idempotent_rerun_does_not_spend_twice(db, queue, monkeypatch,
     """The ordering hazard: reserve, then find the row already exists, and leak a unit."""
     monkeypatch.setattr(settings, "autopublish_max_per_day", 5, raising=False)
     target = autopublish_target(db)
-    make_ready_job(db, make_topic(db, target=target))
+    make_ready_job(db, make_pipeline(db, target=target))
     service = policy(queue)
 
     service.run(db, dry_run=False)
@@ -348,7 +348,7 @@ def test_an_idempotent_rerun_does_not_spend_twice(db, queue, monkeypatch,
 
 def test_a_retry_does_not_spend_a_second_unit(db, queue, no_event_fanout):
     target = autopublish_target(db)
-    job = make_ready_job(db, make_topic(db, target=target))
+    job = make_ready_job(db, make_pipeline(db, target=target))
     attempt = _attempt(db, job, target, PublishAttemptStatus.FAILED_RETRYABLE)
 
     assert AutopublishBudget(db, limit=5).used() == 1
@@ -379,7 +379,7 @@ def test_a_manual_publication_spends_no_automatic_budget(db, queue, no_event_fan
 def test_a_new_utc_day_restores_the_budget(db, queue, no_event_fanout):
     """Injected clock, so the boundary is tested without waiting for midnight."""
     target = autopublish_target(db)
-    job = make_ready_job(db, make_topic(db, target=target))
+    job = make_ready_job(db, make_pipeline(db, target=target))
     yesterday = datetime(2026, 3, 1, 23, 59, tzinfo=timezone.utc)
     today = datetime(2026, 3, 2, 0, 1, tzinfo=timezone.utc)
 
@@ -392,7 +392,7 @@ def test_a_new_utc_day_restores_the_budget(db, queue, no_event_fanout):
 
 def test_the_report_states_the_budget_day(db, queue, no_event_fanout):
     target = autopublish_target(db)
-    make_ready_job(db, make_topic(db, target=target))
+    make_ready_job(db, make_pipeline(db, target=target))
 
     report = policy(queue).run(db, dry_run=True)
     assert report.budget_date == utc_today().isoformat()
@@ -401,7 +401,7 @@ def test_the_report_states_the_budget_day(db, queue, no_event_fanout):
 def test_the_status_read_model_uses_the_enforcement_query(db, queue, no_event_fanout):
     """A status page that computes its own number starts disagreeing with the gate."""
     target = autopublish_target(db)
-    job = make_ready_job(db, make_topic(db, target=target))
+    job = make_ready_job(db, make_pipeline(db, target=target))
     _attempt(db, job, target, PublishAttemptStatus.PENDING)
 
     status = policy(queue).status(db)
@@ -525,7 +525,7 @@ def test_unresolved_publications_surface_with_count_and_age(db, queue, monkeypat
                                                              no_event_fanout):
     monkeypatch.setattr(settings, "automation_runner_enabled", False, raising=False)
     target = autopublish_target(db)
-    job = make_ready_job(db, make_topic(db, target=target))
+    job = make_ready_job(db, make_pipeline(db, target=target))
     attempt = _attempt(db, job, target, PublishAttemptStatus.UNKNOWN)
     attempt.created_at = datetime.utcnow() - timedelta(hours=2)
     db.flush()
@@ -543,7 +543,7 @@ def test_the_unresolved_signal_carries_no_session_uri(db, queue, no_event_fanout
     import json
 
     target = autopublish_target(db)
-    job = make_ready_job(db, make_topic(db, target=target))
+    job = make_ready_job(db, make_pipeline(db, target=target))
     _attempt(db, job, target, PublishAttemptStatus.UNKNOWN,
              upload_session_uri_encrypted="ciphertext-looking-value")
 
@@ -556,7 +556,7 @@ def test_the_unresolved_signal_clears_when_resolved(db, queue, monkeypatch,
                                                      no_event_fanout):
     monkeypatch.setattr(settings, "automation_runner_enabled", False, raising=False)
     target = autopublish_target(db)
-    job = make_ready_job(db, make_topic(db, target=target))
+    job = make_ready_job(db, make_pipeline(db, target=target))
     attempt = _attempt(db, job, target, PublishAttemptStatus.UNKNOWN)
 
     assert _signal(operations(queue, publishers=ALIVE).health(db),
@@ -590,7 +590,7 @@ def test_a_deep_queue_that_is_draining_is_not_a_stall(db, queue, monkeypatch,
     """Backlog is not stall: a healthy system working through one looks exactly like this."""
     monkeypatch.setattr(settings, "automation_runner_enabled", False, raising=False)
     target = autopublish_target(db)
-    job = make_ready_job(db, make_topic(db, target=target))
+    job = make_ready_job(db, make_pipeline(db, target=target))
     for index in range(5):
         queue.enqueue(command_payload(publish_attempt_id=str(uuid.uuid4()),
                                       pipeline_job_id="j", target_id="t",
@@ -613,7 +613,7 @@ def test_a_queue_with_a_live_publisher_and_no_progress_is_a_stall(db, queue, mon
     # A publication that has been waiting longer than the window is the evidence. Without
     # one, a queue that only just received work would look stalled the instant it filled.
     target = autopublish_target(db)
-    job = make_ready_job(db, make_topic(db, target=target))
+    job = make_ready_job(db, make_pipeline(db, target=target))
     waiting = _attempt(db, job, target, PublishAttemptStatus.PENDING)
     waiting.created_at = datetime.utcnow() - timedelta(hours=1)
     db.flush()
@@ -660,8 +660,8 @@ def test_repeated_automation_failures_raise_a_signal(db, queue, monkeypatch,
                                                       no_event_fanout):
     monkeypatch.setattr(settings, "operations_failure_threshold", 3, raising=False)
     monkeypatch.setattr(settings, "automation_runner_enabled", False, raising=False)
-    topic = make_topic(db)
-    db.add(AutomationState(topic_id=topic.id, consecutive_failures=1))
+    pipeline = make_pipeline(db)
+    db.add(AutomationState(pipeline_id=pipeline.id, consecutive_failures=1))
     db.flush()
 
     assert _signal(operations(queue, publishers=ALIVE).health(db),

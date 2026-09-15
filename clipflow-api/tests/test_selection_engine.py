@@ -13,7 +13,7 @@ from app.selection import features
 from app.selection.engine import (
     CandidateView,
     SelectionEngine,
-    TopicView,
+    PipelineView,
     recency_baseline,
 )
 from app.selection.policy import (
@@ -40,7 +40,7 @@ from app.selection.semantic import (
     SemanticResult,
     SemanticVerdict,
 )
-from evaluation.selection.fixtures import NOW, TOPIC, load_candidates
+from evaluation.selection.fixtures import NOW, PIPELINE, load_candidates
 
 CONFIG = SelectionConfig()
 
@@ -69,7 +69,7 @@ def candidate(candidate_id="c1", **overrides) -> CandidateView:
 
 def rank(candidates, *, config=None, evaluator=None, **kwargs):
     engine = SelectionEngine(evaluator=evaluator, config=config or CONFIG)
-    return engine.run(topic=TOPIC, candidates=candidates, config=config or CONFIG, now=NOW, **kwargs)
+    return engine.run(pipeline=PIPELINE, candidates=candidates, config=config or CONFIG, now=NOW, **kwargs)
 
 
 # ==========================================================================
@@ -172,7 +172,7 @@ def test_no_reaction_counts_is_unmeasurable_not_zero():
 # ==========================================================================
 
 
-def test_relevance_matches_topic_keywords_in_the_title():
+def test_relevance_matches_pipeline_keywords_in_the_title():
     signal = features.deterministic_relevance(
         topic_name="Futebol brasileiro",
         topic_keywords=["futebol", "entrevista", "polemica"],
@@ -183,12 +183,12 @@ def test_relevance_matches_topic_keywords_in_the_title():
     assert signal.detail["title_hits"] == 3
 
 
-def test_adding_keywords_to_a_topic_does_not_make_candidates_less_relevant():
+def test_adding_keywords_to_a_pipeline_does_not_make_candidates_less_relevant():
     """Keywords are alternatives, not a checklist.
 
     Coverage used to be hits/len(keywords), so listing six terms instead of two made every
     candidate score three times lower — and real feed items matching "futebol" clearly were
-    blocked by the relevance floor for it. Adding vocabulary to a topic must not punish the
+    blocked by the relevance floor for it. Adding vocabulary to a pipeline must not punish the
     videos that match part of it.
     """
     narrow = features.deterministic_relevance(
@@ -205,7 +205,7 @@ def test_adding_keywords_to_a_topic_does_not_make_candidates_less_relevant():
 
 
 def test_one_strong_match_clears_the_relevance_floor():
-    """A video plainly about the topic must not be gated out for matching only one term."""
+    """A video plainly about the pipeline must not be gated out for matching only one term."""
     signal = features.deterministic_relevance(
         topic_name="Futebol brasileiro",
         topic_keywords=["futebol", "entrevista", "coletiva", "polemica", "arbitragem"],
@@ -270,7 +270,7 @@ def test_stopwords_do_not_create_false_relevance():
     assert signal.value < 0.2
 
 
-def test_a_topic_with_no_keywords_is_unmeasurable():
+def test_a_pipeline_with_no_keywords_is_unmeasurable():
     signal = features.deterministic_relevance(
         topic_name=None, topic_keywords=[], title="qualquer coisa", description=None
     )
@@ -548,7 +548,7 @@ def verdict(relevance=0.9, interest=0.8, confidence=0.9):
         status=OK,
         verdict=SemanticVerdict(
             relevance=relevance, editorial_interest=interest,
-            confidence=confidence, reason="on topic",
+            confidence=confidence, reason="on pipeline",
         ),
         provider="stub", model="stub-1",
     )
@@ -765,7 +765,7 @@ def test_scores_spread_rather_than_clustering_at_one_value():
 # ==========================================================================
 
 
-def test_a_topic_can_override_the_policy():
+def test_a_pipeline_can_override_the_policy():
     config = SelectionConfig().with_overrides({"max_selected_per_run": 7, "minimum_score": 0.9})
     assert config.max_selected_per_run == 7
     assert config.minimum_score == 0.9

@@ -19,7 +19,7 @@ class PipelineJob(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "pipeline_jobs"
     __table_args__ = (
         Index("ix_pipeline_jobs_state", "state"),
-        Index("ix_pipeline_jobs_topic_state", "topic_id", "state"),
+        Index("ix_pipeline_jobs_pipeline_state", "pipeline_id", "state"),
         # UNIQUE, enforced by the database rather than by a read-then-write in the service:
         # a retried admission request would otherwise pass its own existence check and insert
         # a second run. Partial, because runs that did not come from a candidate have no key
@@ -37,9 +37,9 @@ class PipelineJob(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         ),
     )
 
-    topic_id: Mapped[uuid.UUID | None] = mapped_column(
+    pipeline_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("content_topics.id", ondelete="SET NULL"),
+        ForeignKey("pipelines.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
@@ -86,7 +86,7 @@ class PipelineJob(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 
     metadata_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
-    topic = relationship("ContentTopic", back_populates="jobs")
+    pipeline = relationship("Pipeline", back_populates="jobs")
     candidate = relationship("VideoCandidate", back_populates="jobs")
 
     events = relationship(

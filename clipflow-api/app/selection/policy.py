@@ -68,8 +68,8 @@ DETERMINISTIC_ONLY = "deterministic_only"
 class SelectionConfig:
     """Everything tunable, in one object.
 
-    Defaults live here rather than in a dozen environment variables, and a topic overrides
-    them through ``ContentTopic.metadata_json["selection"]`` — policy belongs next to the
+    Defaults live here rather than in a dozen environment variables, and a pipeline overrides
+    them through ``Pipeline.metadata_json["selection"]`` — policy belongs next to the
     editorial intention it serves, not in the deployment.
 
     The weights are **V1 heuristics**, chosen against the evaluation fixtures and rounded to
@@ -98,11 +98,11 @@ class SelectionConfig:
 
     # --- policy ---
     minimum_score: float = 0.45
-    # A floor on topic relevance, checked separately from the composed score.
+    # A floor on pipeline relevance, checked separately from the composed score.
     #
     # Composition is linear, so a video with zero relevance can still reach a respectable
-    # total on freshness and virality alone — measured on the fixtures, an entirely off-topic
-    # viral video scored 0.5724 and outranked an on-topic one. Being popular is not a reason
+    # total on freshness and virality alone — measured on the fixtures, an entirely off-pipeline
+    # viral video scored 0.5724 and outranked an on-pipeline one. Being popular is not a reason
     # to publish something the channel is not about, so relevance gets a gate of its own
     # rather than a larger weight, which would only have shifted the same problem.
     minimum_relevance: float = 0.25
@@ -116,7 +116,7 @@ class SelectionConfig:
     channel_cooldown_hours: float = 24.0
 
     def with_overrides(self, overrides: dict[str, Any] | None) -> "SelectionConfig":
-        """Apply a topic's overrides, ignoring anything unrecognised or malformed.
+        """Apply a pipeline's overrides, ignoring anything unrecognised or malformed.
 
         A typo in configuration must not silently reshape the ranking, and it must not crash
         a run either. Unknown keys are dropped; bad values fall back to the default.
@@ -344,8 +344,8 @@ def apply_policy(
     if score < threshold:
         blocked.append(BELOW_MINIMUM_SCORE)
 
-    # An unmeasurable relevance (a topic with no keywords) does not block: that is a
-    # configuration gap, not evidence the candidate is off-topic.
+    # An unmeasurable relevance (a pipeline with no keywords) does not block: that is a
+    # configuration gap, not evidence the candidate is off-pipeline.
     if relevance is not None and relevance < config.minimum_relevance:
         blocked.append(INSUFFICIENT_TOPIC_RELEVANCE)
 

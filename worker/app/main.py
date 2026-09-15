@@ -212,6 +212,7 @@ def run_pipeline(job: dict, queue: ReliableQueue | None = None):
         pipeline_job_id=pipeline_job_id,
         worker_id=WORKER_ID,
         attempt=attempt,
+        telegram_chat_id=job.get("telegram_chat_id"),
     )
 
     storage = MinioStorage()

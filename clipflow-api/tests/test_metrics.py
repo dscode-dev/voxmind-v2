@@ -36,7 +36,7 @@ from app.models.enums import (
     PublishTargetConnectionStatus,
     VideoCandidateStatus,
 )
-from app.models.content_topic import ContentTopic
+from app.models.pipeline import Pipeline
 from app.models.publish_attempt import PublishAttempt
 from app.models.video_candidate import VideoCandidate
 from app.models.video_performance_snapshot import VideoPerformanceSnapshot
@@ -668,33 +668,33 @@ def test_provider_batches_at_fifty(db):
 
 def full_chain(db, target):
     """A publication with every provenance link a real foreign key."""
-    topic = ContentTopic(name=f"Serie A {uuid.uuid4().hex[:6]}", is_active=True)
-    db.add(topic)
+    pipeline = Pipeline(name=f"Serie A {uuid.uuid4().hex[:6]}", is_active=True)
+    db.add(pipeline)
     db.flush()
     candidate = VideoCandidate(
-        topic_id=topic.id, external_id="src_video_9", url="https://youtu.be/src_video_9",
+        pipeline_id=pipeline.id, external_id="src_video_9", url="https://youtu.be/src_video_9",
         title="Milan 3-1 Inter", channel="Serie A", duration_sec=600,
         status=VideoCandidateStatus.SELECTED, relevance_score=0.82, trend_score=0.44,
         scores_json={"relevance": 0.82, "trend": 0.44}, selected_at=NOW - timedelta(days=1),
     )
     db.add(candidate)
     db.flush()
-    job = make_run(db, state=PipelineState.PUBLISHED, topic_id=topic.id,
+    job = make_run(db, state=PipelineState.PUBLISHED, pipeline_id=pipeline.id,
                    candidate_id=candidate.id)
     attempt = published(db, target, video_id="vid_pub", job=job)
     db.commit()
-    return topic, candidate, job, attempt
+    return pipeline, candidate, job, attempt
 
 
 def test_lineage_walks_from_the_video_back_to_the_source_item(db, no_event_fanout):
     """The end-to-end question: which discovered video produced this published clip?"""
     target = make_target(db)
-    topic, candidate, job, attempt = full_chain(db, target)
+    pipeline, candidate, job, attempt = full_chain(db, target)
 
     chain = ContentLineageService().lineage(db, attempt)
 
     assert chain["complete"] is True
-    assert chain["topic"]["content_topic_id"] == str(topic.id)
+    assert chain["pipeline"]["pipeline_id"] == str(pipeline.id)
     assert chain["candidate"]["video_candidate_id"] == str(candidate.id)
     assert chain["candidate"]["external_id"] == "src_video_9"
     assert chain["candidate"]["relevance_score"] == pytest.approx(0.82)
@@ -793,7 +793,7 @@ def test_collection_does_not_touch_production(db, no_event_fanout):
     the selection score, the candidate status or the job state, this test is what fails.
     """
     target = make_target(db)
-    topic, candidate, job, attempt = full_chain(db, target)
+    pipeline, candidate, job, attempt = full_chain(db, target)
 
     # Read back from the database first: a Numeric column returns a Decimal once loaded,
     # and comparing that against the float just assigned in Python would fail on the type
@@ -808,7 +808,7 @@ def test_collection_does_not_touch_production(db, no_event_fanout):
         "job_state": job.state,
         "attempt_status": attempt.status,
         "attempt_external_id": attempt.external_id,
-        "topic_last_run_at": topic.last_run_at,
+        "pipeline_last_run_at": pipeline.last_run_at,
     }
 
     report = ingestion(StubProvider({
@@ -819,7 +819,7 @@ def test_collection_does_not_touch_production(db, no_event_fanout):
     db.refresh(candidate)
     db.refresh(job)
     db.refresh(attempt)
-    db.refresh(topic)
+    db.refresh(pipeline)
 
     assert candidate.relevance_score == before["relevance_score"]
     assert candidate.trend_score == before["trend_score"]
@@ -829,7 +829,7 @@ def test_collection_does_not_touch_production(db, no_event_fanout):
     assert job.state == before["job_state"]
     assert attempt.status == before["attempt_status"]
     assert attempt.external_id == before["attempt_external_id"]
-    assert topic.last_run_at == before["topic_last_run_at"]
+    assert pipeline.last_run_at == before["pipeline_last_run_at"]
 
 
 def test_metrics_package_is_not_imported_by_the_production_path():

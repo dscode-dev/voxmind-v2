@@ -351,20 +351,20 @@ def test_generation_is_not_repeated_for_a_clip_that_already_has_metadata(
 
 
 def test_context_is_built_from_persisted_facts(db, own_session, no_event_fanout):
-    from app.models.content_topic import ContentTopic
+    from app.models.pipeline import Pipeline
     from app.models.enums import VideoCandidateStatus
     from app.models.video_candidate import VideoCandidate
 
-    topic = ContentTopic(name="Serie A", is_active=True, keywords_json=["serie a", "milan"])
-    db.add(topic)
+    pipeline = Pipeline(name="Serie A", is_active=True, keywords_json=["serie a", "milan"])
+    db.add(pipeline)
     db.flush()
     candidate = VideoCandidate(
-        topic_id=topic.id, url="https://youtu.be/x", title="Milan 3-1 Inter | Highlights",
+        pipeline_id=pipeline.id, url="https://youtu.be/x", title="Milan 3-1 Inter | Highlights",
         channel="Serie A", status=VideoCandidateStatus.CONSUMED,
     )
     db.add(candidate)
     db.flush()
-    job = make_run(db, state=PipelineState.READY_TO_PUBLISH, topic_id=topic.id,
+    job = make_run(db, state=PipelineState.READY_TO_PUBLISH, pipeline_id=pipeline.id,
                    candidate_id=candidate.id)
     db.commit()
 

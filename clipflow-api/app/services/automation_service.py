@@ -1,4 +1,4 @@
-"""The autonomous loop: discovery, then selection, then admission, for one topic.
+"""The autonomous loop: discovery, then selection, then admission, for one pipeline.
 
     AutonomousPipelineService
         ├── DiscoveryService     "what content exists?"
@@ -35,7 +35,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.settings import settings
-from app.models.content_topic import ContentTopic
+from app.models.pipeline import Pipeline
 from app.models.enums import PipelineEventType, VideoCandidateStatus
 from app.models.video_candidate import VideoCandidate
 from app.selection.engine import SelectionEngine
@@ -65,7 +65,7 @@ STAGE_SKIPPED = "skipped"
 HARD_MAX_SELECTION_LIMIT = 25
 HARD_MAX_ADMISSION_LIMIT = 10
 HARD_MAX_PENDING_SWEEP = 10
-# One topic cannot start more publications in a tick than this, whatever it asks for.
+# One pipeline cannot start more publications in a tick than this, whatever it asks for.
 HARD_MAX_AUTOPUBLISH_LIMIT = 5
 
 # Config keys that are text, not numbers. Everything else is coerced to bool or int.
@@ -75,10 +75,10 @@ MIN_INTERVAL_MINUTES = 5
 
 @dataclass(frozen=True)
 class AutomationConfig:
-    """Per-topic automation settings, read from ``ContentTopic.metadata_json["automation"]``.
+    """Per-pipeline automation settings, read from ``Pipeline.metadata_json["automation"]``.
 
     Policy lives beside the editorial intention it serves, not in environment variables: a
-    topic that should be discovered hourly and one discovered daily are an editorial
+    pipeline that should be discovered hourly and one discovered daily are an editorial
     difference, not a deployment one.
     """
 
@@ -89,19 +89,19 @@ class AutomationConfig:
     selection_enabled: bool = True
     admission_enabled: bool = True
 
-    # Off by default, and off for every topic that already exists. Enabling automation for a
-    # topic is a separate editorial decision from enabling it globally: a channel may be
+    # Off by default, and off for every pipeline that already exists. Enabling automation for a
+    # pipeline is a separate editorial decision from enabling it globally: a channel may be
     # discovering and producing happily for weeks before anyone is ready to let it publish.
     autopublish_enabled: bool = False
-    # How many publications this topic may start in one tick. Independent of the global
-    # per-tick cap, which bounds the whole system rather than one topic.
+    # How many publications this pipeline may start in one tick. Independent of the global
+    # per-tick cap, which bounds the whole system rather than one pipeline.
     autopublish_limit: int = 1
 
     selection_limit: int = 3
     admission_limit: int = 1
 
     # How many candidates may sit in SELECTED awaiting admission before selection pauses.
-    # Without it, a topic with three worker slots happily accumulates a thousand selected
+    # Without it, a pipeline with three worker slots happily accumulates a thousand selected
     # candidates that will never all be produced — and the oldest go stale while it grows.
     max_selected_backlog: int = 10
 
@@ -109,20 +109,20 @@ class AutomationConfig:
     failure_backoff_minutes: int = 30
     max_consecutive_failures: int = 5
 
-    # Which channel this topic publishes to, as a PublishTarget id.
+    # Which channel this pipeline publishes to, as a PublishTarget id.
     #
     # Required for automation and deliberately not inferred. "The first active YouTube
     # target" would be a rule that silently changes meaning the day a second channel is
     # connected - and the failure mode is a video on the wrong channel, which cannot be
     # taken back. No target configured means no automatic publication.
     publish_target_id: str | None = None
-    # ISO-8601. Set when a topic's automation is switched on, and compared against when a
+    # ISO-8601. Set when a pipeline's automation is switched on, and compared against when a
     # run first became publishable, so turning this on does not publish the backlog.
     autopublish_enabled_at: str | None = None
 
     @classmethod
-    def from_topic(cls, topic: ContentTopic) -> "AutomationConfig":
-        raw = ((topic.metadata_json or {}).get("automation")) or {}
+    def from_pipeline(cls, pipeline: Pipeline) -> "AutomationConfig":
+        raw = ((pipeline.metadata_json or {}).get("automation")) or {}
         config = cls()
         if not isinstance(raw, dict):
             return config
@@ -178,7 +178,7 @@ class StageResult:
 @dataclass
 class AutomationRunReport:
     automation_run_id: str
-    topic_id: str
+    pipeline_id: str
     started_at: datetime
     finished_at: datetime | None = None
     status: str = SKIPPED
@@ -193,7 +193,7 @@ class AutomationRunReport:
     def as_dict(self) -> dict[str, Any]:
         return {
             "automation_run_id": self.automation_run_id,
-            "topic_id": self.topic_id,
+            "pipeline_id": self.pipeline_id,
             "started_at": self.started_at.isoformat(),
             "finished_at": self.finished_at.isoformat() if self.finished_at else None,
             "status": self.status,
@@ -208,7 +208,7 @@ class AutomationRunReport:
 
 
 class AutonomousPipelineService:
-    """Runs one topic through the loop. Knows the order; owns none of the rules."""
+    """Runs one pipeline through the loop. Knows the order; owns none of the rules."""
 
     def __init__(
         self,
@@ -239,11 +239,11 @@ class AutonomousPipelineService:
         # PR is careful about is exactly that one.
         self._publication = publication
 
-    def run_topic(
+    def run_pipeline(
         self,
         db: Session,
         *,
-        topic: ContentTopic,
+        pipeline: Pipeline,
         config: AutomationConfig | None = None,
         now: datetime | None = None,
         automation_run_id: str | None = None,
@@ -251,12 +251,12 @@ class AutonomousPipelineService:
     ) -> AutomationRunReport:
         """Discovery, selection, admission — each attempted, none allowed to abort the rest."""
         now = now or datetime.now(timezone.utc)
-        config = config or AutomationConfig.from_topic(topic)
+        config = config or AutomationConfig.from_pipeline(pipeline)
         started = time.monotonic()
 
         report = AutomationRunReport(
             automation_run_id=automation_run_id or str(uuid.uuid4()),
-            topic_id=str(topic.id),
+            pipeline_id=str(pipeline.id),
             started_at=now,
         )
 
@@ -264,22 +264,22 @@ class AutonomousPipelineService:
         # is running, and an event claiming "skipped" at the moment work starts would be read
         # by an operator as the exact opposite of what happened.
         report.status = RUNNING
-        self._emit(db, topic, report, "automation.started", PipelineEventType.INFO)
+        self._emit(db, pipeline, report, "automation.started", PipelineEventType.INFO)
 
-        self._discovery_stage(db, topic, config, report)
-        self._selection_stage(db, topic, config, report)
-        self._admission_stage(db, topic, config, report, actor)
+        self._discovery_stage(db, pipeline, config, report)
+        self._selection_stage(db, pipeline, config, report)
+        self._admission_stage(db, pipeline, config, report, actor)
         # Last, and working on a different set of runs: whatever admission just produced is
         # minutes of GPU time away from being publishable, so this stage acts on the backlog
         # of runs that finished in earlier ticks. It never waits for a publication.
-        self._publication_stage(db, topic, config, report, actor)
+        self._publication_stage(db, pipeline, config, report, actor)
 
         report.finished_at = datetime.now(timezone.utc)
         report.duration_ms = int((time.monotonic() - started) * 1000)
         report.status = self._resolve_status(report)
 
         self._emit(
-            db, topic, report,
+            db, pipeline, report,
             f"automation.{report.status}",
             PipelineEventType.ERROR if report.status == FAILED
             else PipelineEventType.WARNING if report.status == PARTIAL
@@ -291,13 +291,13 @@ class AutonomousPipelineService:
     # ------------------------------------------------------------------ stages
 
     def _discovery_stage(
-        self, db: Session, topic: ContentTopic, config: AutomationConfig, report: AutomationRunReport
+        self, db: Session, pipeline: Pipeline, config: AutomationConfig, report: AutomationRunReport
     ) -> None:
         if not config.discovery_enabled:
             report.discovery.status = DISABLED
             return
         try:
-            results = self.discovery.run_topic(db, topic=topic, commit=True)
+            results = self.discovery.run_pipeline(db, pipeline=pipeline, commit=True)
         except Exception as exc:  # noqa: BLE001 — one bad source must not end the run
             report.discovery.status = STAGE_FAILED
             # The message is not carried: a provider that interpolates its request into an
@@ -305,7 +305,7 @@ class AutonomousPipelineService:
             report.discovery.reasons = [type(exc).__name__]
             logger.exception(
                 "automation_discovery_crashed",
-                extra={"automation_run_id": report.automation_run_id, "topic_id": str(topic.id)},
+                extra={"automation_run_id": report.automation_run_id, "pipeline_id": str(pipeline.id)},
             )
             return
 
@@ -330,13 +330,13 @@ class AutonomousPipelineService:
             report.discovery.status = OK
 
     def _selection_stage(
-        self, db: Session, topic: ContentTopic, config: AutomationConfig, report: AutomationRunReport
+        self, db: Session, pipeline: Pipeline, config: AutomationConfig, report: AutomationRunReport
     ) -> None:
         if not config.selection_enabled or config.selection_limit <= 0:
             report.selection.status = DISABLED
             return
 
-        backlog = self._selected_backlog(db, topic)
+        backlog = self._selected_backlog(db, pipeline)
         if backlog >= config.max_selected_backlog:
             # Backpressure. Selecting more when nothing can be admitted only grows a queue of
             # candidates that go stale before their turn.
@@ -352,13 +352,13 @@ class AutonomousPipelineService:
         limit = min(config.selection_limit, headroom)
 
         try:
-            result = self.selection.run(db, topic=topic, limit=limit, dry_run=False)
+            result = self.selection.run(db, pipeline=pipeline, limit=limit, dry_run=False)
         except Exception as exc:  # noqa: BLE001
             report.selection.status = STAGE_FAILED
             report.selection.reasons = [type(exc).__name__]
             logger.exception(
                 "automation_selection_crashed",
-                extra={"automation_run_id": report.automation_run_id, "topic_id": str(topic.id)},
+                extra={"automation_run_id": report.automation_run_id, "pipeline_id": str(pipeline.id)},
             )
             return
 
@@ -376,7 +376,7 @@ class AutonomousPipelineService:
     def _admission_stage(
         self,
         db: Session,
-        topic: ContentTopic,
+        pipeline: Pipeline,
         config: AutomationConfig,
         report: AutomationRunReport,
         actor: str | None,
@@ -386,14 +386,14 @@ class AutonomousPipelineService:
             return
         try:
             result = self.admission.run(
-                db, topic=topic, limit=config.admission_limit, dry_run=False, actor=actor
+                db, pipeline=pipeline, limit=config.admission_limit, dry_run=False, actor=actor
             )
         except Exception as exc:  # noqa: BLE001
             report.admission.status = STAGE_FAILED
             report.admission.reasons = [type(exc).__name__]
             logger.exception(
                 "automation_admission_crashed",
-                extra={"automation_run_id": report.automation_run_id, "topic_id": str(topic.id)},
+                extra={"automation_run_id": report.automation_run_id, "pipeline_id": str(pipeline.id)},
             )
             return
 
@@ -433,11 +433,11 @@ class AutonomousPipelineService:
     # ------------------------------------------------------------------ helpers
 
     @staticmethod
-    def _selected_backlog(db: Session, topic: ContentTopic) -> int:
+    def _selected_backlog(db: Session, pipeline: Pipeline) -> int:
         return (
             db.query(func.count(VideoCandidate.id))
             .filter(
-                VideoCandidate.topic_id == topic.id,
+                VideoCandidate.pipeline_id == pipeline.id,
                 VideoCandidate.status == VideoCandidateStatus.SELECTED,
             )
             .scalar()
@@ -447,12 +447,12 @@ class AutonomousPipelineService:
     def _publication_stage(
         self,
         db: Session,
-        topic: ContentTopic,
+        pipeline: Pipeline,
         config: AutomationConfig,
         report: AutomationRunReport,
         actor: str | None,
     ) -> None:
-        """Ask the publication policy whether anything of this topic may publish itself.
+        """Ask the publication policy whether anything of this pipeline may publish itself.
 
         The scheduler does not publish. It does not know what YouTube is, holds no
         credential, and calls no adapter - it calls one application service that evaluates
@@ -466,7 +466,7 @@ class AutonomousPipelineService:
         try:
             result = self.publication.run(
                 db,
-                topic=topic,
+                pipeline=pipeline,
                 dry_run=False,
                 limit=config.autopublish_limit,
                 automation_run_id=report.automation_run_id,
@@ -481,7 +481,7 @@ class AutonomousPipelineService:
             logger.exception(
                 "automation_publication_crashed",
                 extra={"automation_run_id": report.automation_run_id,
-                       "topic_id": str(topic.id)},
+                       "pipeline_id": str(pipeline.id)},
             )
             return
 
@@ -517,7 +517,7 @@ class AutonomousPipelineService:
         if failed:
             return PARTIAL
 
-        # Everything ran and nothing happened. That is a correct, quiet run — a topic with no
+        # Everything ran and nothing happened. That is a correct, quiet run — a pipeline with no
         # new content is not an error, and reporting it as one would train operators to ignore
         # the alarm.
         produced = (
@@ -532,7 +532,7 @@ class AutonomousPipelineService:
     def _emit(
         self,
         db: Session,
-        topic: ContentTopic,
+        pipeline: Pipeline,
         report: AutomationRunReport,
         stage: str,
         event_type: PipelineEventType,
@@ -546,10 +546,10 @@ class AutonomousPipelineService:
             # production runs; only admission creates one.
             pipeline_job_id=None,
             stage=stage,
-            message=f"{stage} for '{topic.name}'",
+            message=f"{stage} for '{pipeline.name}'",
             payload={
                 "automation_run_id": report.automation_run_id,
-                "topic_id": report.topic_id,
+                "pipeline_id": report.pipeline_id,
                 "status": report.status,
                 "discovery": payload["discovery"]["status"],
                 "selection": payload["selection"]["status"],
@@ -568,7 +568,7 @@ class AutonomousPipelineService:
             "automation_run",
             extra={
                 "automation_run_id": report.automation_run_id,
-                "topic_id": report.topic_id,
+                "pipeline_id": report.pipeline_id,
                 "status": report.status,
                 "discovery_status": report.discovery.status,
                 "discovered_new": report.discovery.counts.get("new_candidates", 0),

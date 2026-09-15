@@ -3,17 +3,17 @@
     tick
      ├── kill switch?          → skip everything
      ├── recover pending enqueue   (orphans before new work)
-     └── for each due topic:
+     └── for each due pipeline:
             acquire lock → run AutonomousPipelineService → persist next_due_at
 
 The split matters: this file contains no discovery, no ranking, no capacity arithmetic and no
-idempotency key. It answers four questions — is automation on, which topics are due, may this
+idempotency key. It answers four questions — is automation on, which pipelines are due, may this
 process run one, and when should it run next — and hands everything else to the orchestrator.
 
-**Three separate protections against running a topic twice**, because they guard different
+**Three separate protections against running a pipeline twice**, because they guard different
 things and none of them subsumes the others:
 
-* a PostgreSQL **advisory lock**, which stops two API replicas from running the same topic;
+* a PostgreSQL **advisory lock**, which stops two API replicas from running the same pipeline;
 * a persisted **``running_since``**, which stops the *next tick of the same process* from
   re-entering a run that is still going after its own interval expired;
 * the services' own **idempotency**, which makes a duplicate harmless if the first two ever
@@ -39,7 +39,7 @@ from sqlalchemy.orm import Session
 
 from app.core.settings import settings
 from app.models.automation_state import AutomationState
-from app.models.content_topic import ContentTopic
+from app.models.pipeline import Pipeline
 from app.services.automation_service import (
     FAILED,
     AutomationConfig,
@@ -51,18 +51,18 @@ logger = logging.getLogger(__name__)
 
 # Skip reasons.
 GLOBAL_DISABLED = "global_disabled"
-TOPIC_DISABLED = "topic_disabled"
+PIPELINE_DISABLED = "pipeline_disabled"
 NOT_DUE = "not_due"
 LOCK_UNAVAILABLE = "lock_unavailable"
 OVERLAP = "skip_overlap"
 BACKOFF = "failure_backoff"
 
 # Namespace for the advisory lock, so an automation lock can never collide with the
-# selection or admission locks that use the same topic id.
+# selection or admission locks that use the same pipeline id.
 _LOCK_NAMESPACE = "clipflow:automation:"
 
 # A run still marked running after this long is treated as abandoned — the process that owned
-# it died without clearing the flag, and refusing to run the topic forever afterwards would be
+# it died without clearing the flag, and refusing to run the pipeline forever afterwards would be
 # worse than re-entering it, which the services' idempotency already covers.
 STALE_RUN_MINUTES = 60
 
@@ -74,7 +74,7 @@ class TickReport:
     tick_id: str
     started_at: datetime
     enabled: bool = True
-    topics_considered: int = 0
+    pipelines_considered: int = 0
     pending_enqueue_recovered: int = 0
     runs: list[dict[str, Any]] = field(default_factory=list)
     skipped: list[dict[str, Any]] = field(default_factory=list)
@@ -85,7 +85,7 @@ class TickReport:
             "tick_id": self.tick_id,
             "started_at": self.started_at.isoformat(),
             "enabled": self.enabled,
-            "topics_considered": self.topics_considered,
+            "pipelines_considered": self.pipelines_considered,
             "pending_enqueue_recovered": self.pending_enqueue_recovered,
             "ran": len(self.runs),
             "skipped": len(self.skipped),
@@ -95,22 +95,22 @@ class TickReport:
         }
 
 
-def deterministic_jitter_seconds(topic_id: Any, spread_seconds: int = 120) -> int:
-    """Spread topics across the interval, stably.
+def deterministic_jitter_seconds(pipeline_id: Any, spread_seconds: int = 120) -> int:
+    """Spread pipelines across the interval, stably.
 
-    Every topic would otherwise become due at the same instant after a deploy and stampede the
-    providers together. Derived from the topic id rather than ``random`` so the offset is the
+    Every pipeline would otherwise become due at the same instant after a deploy and stampede the
+    providers together. Derived from the pipeline id rather than ``random`` so the offset is the
     same on every replica and across restarts — a random jitter would make two replicas
-    disagree about when a topic is due, and make a schedule impossible to reproduce.
+    disagree about when a pipeline is due, and make a schedule impossible to reproduce.
     """
     if spread_seconds <= 0:
         return 0
-    digest = hashlib.sha256(str(topic_id).encode("utf-8")).digest()
+    digest = hashlib.sha256(str(pipeline_id).encode("utf-8")).digest()
     return int.from_bytes(digest[:4], "big") % spread_seconds
 
 
 class AutomationScheduler:
-    """Finds due topics and runs them, one at a time, under lock."""
+    """Finds due pipelines and runs them, one at a time, under lock."""
 
     def __init__(self, pipeline: AutonomousPipelineService | None = None) -> None:
         self.pipeline = pipeline or AutonomousPipelineService()
@@ -122,7 +122,7 @@ class AutomationScheduler:
         db: Session,
         *,
         now: datetime | None = None,
-        max_topics: int = 5,
+        max_pipelines: int = 5,
     ) -> TickReport:
         """One scheduler pass. Never raises: a tick that throws stops the loop forever."""
         now = now or datetime.now(timezone.utc)
@@ -139,20 +139,20 @@ class AutomationScheduler:
         # Orphans first: work already decided on, stranded before it reached the queue.
         report.pending_enqueue_recovered = self.pipeline.recover_pending_enqueue(db)
 
-        topics = (
-            db.query(ContentTopic)
-            .filter(ContentTopic.is_active.is_(True))
-            .order_by(ContentTopic.created_at.asc())
+        pipelines = (
+            db.query(Pipeline)
+            .filter(Pipeline.is_active.is_(True))
+            .order_by(Pipeline.created_at.asc())
             .all()
         )
-        report.topics_considered = len(topics)
+        report.pipelines_considered = len(pipelines)
 
-        for topic in topics:
-            if len(report.runs) >= max_topics:
+        for pipeline in pipelines:
+            if len(report.runs) >= max_pipelines:
                 # Bounded per tick so one tick cannot monopolise the process; the rest stay
                 # due and are picked up by the next pass.
                 break
-            outcome = self.run_topic_if_due(db, topic=topic, now=now)
+            outcome = self.run_pipeline_if_due(db, pipeline=pipeline, now=now)
             if isinstance(outcome, AutomationRunReport):
                 report.runs.append(outcome.as_dict())
             elif outcome is not None:
@@ -163,17 +163,17 @@ class AutomationScheduler:
         )
         return report
 
-    # -------------------------------------------------------------- one topic
+    # -------------------------------------------------------------- one pipeline
 
-    def run_topic_if_due(
+    def run_pipeline_if_due(
         self,
         db: Session,
         *,
-        topic: ContentTopic,
+        pipeline: Pipeline,
         now: datetime | None = None,
         force: bool = False,
     ) -> AutomationRunReport | dict[str, Any] | None:
-        """Run this topic if it is due and nothing else is running it.
+        """Run this pipeline if it is due and nothing else is running it.
 
         Returns the run report, or a skip record explaining why not.
 
@@ -182,16 +182,16 @@ class AutomationScheduler:
         automatic one and break the caps both are supposed to respect.
         """
         now = now or datetime.now(timezone.utc)
-        config = AutomationConfig.from_topic(topic)
+        config = AutomationConfig.from_pipeline(pipeline)
 
         if not config.enabled:
-            return {"topic_id": str(topic.id), "reason": TOPIC_DISABLED}
+            return {"pipeline_id": str(pipeline.id), "reason": PIPELINE_DISABLED}
 
-        state = self._state_for(db, topic)
+        state = self._state_for(db, pipeline)
 
         if not force and not self._is_due(state, now):
             return {
-                "topic_id": str(topic.id),
+                "pipeline_id": str(pipeline.id),
                 "reason": NOT_DUE,
                 "next_due_at": state.next_due_at.isoformat() if state.next_due_at else None,
             }
@@ -201,24 +201,24 @@ class AutomationScheduler:
             # queueing this tick behind it would build a backlog of stale ticks that all fire
             # at once when the long run finally ends.
             return {
-                "topic_id": str(topic.id),
+                "pipeline_id": str(pipeline.id),
                 "reason": OVERLAP,
                 "running_since": state.running_since.isoformat() if state.running_since else None,
             }
 
-        with self._topic_lock(db, topic.id) as acquired:
+        with self._pipeline_lock(db, pipeline.id) as acquired:
             if not acquired:
                 # Another replica has it. Skip rather than wait: blocking would hold this
                 # tick — and the whole loop — behind another process's work.
-                return {"topic_id": str(topic.id), "reason": LOCK_UNAVAILABLE}
+                return {"pipeline_id": str(pipeline.id), "reason": LOCK_UNAVAILABLE}
 
             # Re-read under the lock. Between the check above and here another process may
             # have finished a run and pushed next_due_at forward.
             db.refresh(state)
             if self._is_running(state, now):
-                return {"topic_id": str(topic.id), "reason": OVERLAP}
+                return {"pipeline_id": str(pipeline.id), "reason": OVERLAP}
             if not force and not self._is_due(state, now):
-                return {"topic_id": str(topic.id), "reason": NOT_DUE}
+                return {"pipeline_id": str(pipeline.id), "reason": NOT_DUE}
 
             run_id = str(uuid.uuid4())
             state.running_since = now
@@ -227,20 +227,20 @@ class AutomationScheduler:
             db.commit()
 
             try:
-                report = self.pipeline.run_topic(
-                    db, topic=topic, config=config, now=now,
+                report = self.pipeline.run_pipeline(
+                    db, pipeline=pipeline, config=config, now=now,
                     automation_run_id=run_id, actor="scheduler",
                 )
             except Exception as exc:  # noqa: BLE001
-                # A crash in the orchestrator must not leave the topic marked running forever,
+                # A crash in the orchestrator must not leave the pipeline marked running forever,
                 # and must not be swallowed either — it is a programming error and has to be
                 # visible in the logs with its traceback.
                 logger.exception(
                     "automation_run_crashed",
-                    extra={"automation_run_id": run_id, "topic_id": str(topic.id)},
+                    extra={"automation_run_id": run_id, "pipeline_id": str(pipeline.id)},
                 )
                 report = AutomationRunReport(
-                    automation_run_id=run_id, topic_id=str(topic.id), started_at=now
+                    automation_run_id=run_id, pipeline_id=str(pipeline.id), started_at=now
                 )
                 report.status = FAILED
                 report.skip_reason = type(exc).__name__
@@ -251,16 +251,16 @@ class AutomationScheduler:
 
     # ---------------------------------------------------------------- state
 
-    def _state_for(self, db: Session, topic: ContentTopic) -> AutomationState:
+    def _state_for(self, db: Session, pipeline: Pipeline) -> AutomationState:
         state = (
             db.query(AutomationState)
-            .filter(AutomationState.topic_id == topic.id)
+            .filter(AutomationState.pipeline_id == pipeline.id)
             .first()
         )
         if state is not None:
             return state
 
-        state = AutomationState(topic_id=topic.id)
+        state = AutomationState(pipeline_id=pipeline.id)
         db.add(state)
         try:
             with db.begin_nested():
@@ -271,14 +271,14 @@ class AutomationScheduler:
             db.rollback()
             state = (
                 db.query(AutomationState)
-                .filter(AutomationState.topic_id == topic.id)
+                .filter(AutomationState.pipeline_id == pipeline.id)
                 .one()
             )
         return state
 
     @staticmethod
     def _is_due(state: AutomationState, now: datetime) -> bool:
-        # Never scheduled is due: a topic just switched on should not wait a full interval
+        # Never scheduled is due: a pipeline just switched on should not wait a full interval
         # before its first run.
         if state.next_due_at is None:
             return True
@@ -291,10 +291,10 @@ class AutomationScheduler:
         age = now - _as_utc(state.running_since)
         if age > timedelta(minutes=STALE_RUN_MINUTES):
             # The owning process died without clearing the flag. Treat it as finished rather
-            # than wedging the topic permanently.
+            # than wedging the pipeline permanently.
             logger.warning(
                 "automation_stale_run_cleared",
-                extra={"topic_id": str(state.topic_id), "age_minutes": age.total_seconds() / 60},
+                extra={"pipeline_id": str(state.pipeline_id), "age_minutes": age.total_seconds() / 60},
             )
             return False
         return True
@@ -310,7 +310,7 @@ class AutomationScheduler:
         """Record the outcome and schedule the next run.
 
         This runs whether the report succeeded or failed, so ``running_since`` is always
-        cleared — a topic must never be left permanently marked as running.
+        cleared — a pipeline must never be left permanently marked as running.
         """
         state.running_since = None
         state.running_run_id = None
@@ -321,7 +321,7 @@ class AutomationScheduler:
         if report.status == FAILED:
             state.consecutive_failures = (state.consecutive_failures or 0) + 1
         else:
-            # Any non-failing run clears the penalty: a topic that recovers should not serve
+            # Any non-failing run clears the penalty: a pipeline that recovers should not serve
             # out a backoff it no longer deserves.
             state.consecutive_failures = 0
 
@@ -331,15 +331,15 @@ class AutomationScheduler:
             # interval. Bounded — this is a pause, not a circuit-breaker framework.
             interval = max(interval, timedelta(minutes=config.failure_backoff_minutes))
 
-        jitter = timedelta(seconds=deterministic_jitter_seconds(state.topic_id))
+        jitter = timedelta(seconds=deterministic_jitter_seconds(state.pipeline_id))
         state.next_due_at = now + interval + jitter
         db.commit()
 
     # ----------------------------------------------------------------- lock
 
     @contextmanager
-    def _topic_lock(self, db: Session, topic_id: Any) -> Iterator[bool]:
-        """Try to take the topic's automation lock; never wait for it.
+    def _pipeline_lock(self, db: Session, pipeline_id: Any) -> Iterator[bool]:
+        """Try to take the pipeline's automation lock; never wait for it.
 
         ``pg_try_advisory_lock`` returns immediately rather than blocking, which is what makes
         a losing replica skip instead of stalling its whole loop behind another one's run.
@@ -353,7 +353,7 @@ class AutomationScheduler:
             yield True
             return
 
-        key = _lock_key(topic_id)
+        key = _lock_key(pipeline_id)
         acquired = bool(
             db.execute(text("SELECT pg_try_advisory_lock(:key)"), {"key": key}).scalar()
         )
@@ -365,9 +365,9 @@ class AutomationScheduler:
                 db.commit()
 
 
-def _lock_key(topic_id: Any) -> int:
-    """A signed 64-bit key, namespaced so it cannot collide with the other topic locks."""
-    digest = hashlib.sha256(f"{_LOCK_NAMESPACE}{topic_id}".encode("utf-8")).digest()
+def _lock_key(pipeline_id: Any) -> int:
+    """A signed 64-bit key, namespaced so it cannot collide with the other pipeline locks."""
+    digest = hashlib.sha256(f"{_LOCK_NAMESPACE}{pipeline_id}".encode("utf-8")).digest()
     return int.from_bytes(digest[:8], "big", signed=True)
 
 

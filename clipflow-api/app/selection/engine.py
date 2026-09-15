@@ -72,8 +72,8 @@ class CandidateView:
 
 
 @dataclass(frozen=True)
-class TopicView:
-    topic_id: str
+class PipelineView:
+    pipeline_id: str
     name: str
     description: str | None = None
     keywords: list[str] = field(default_factory=list)
@@ -148,9 +148,9 @@ class CandidateAssessment:
 
 @dataclass
 class SelectionOutcome:
-    """The result of one run over one topic."""
+    """The result of one run over one pipeline."""
 
-    topic_id: str
+    pipeline_id: str
     score_version: str = SCORE_VERSION
     considered: int = 0
     eligible: int = 0
@@ -166,7 +166,7 @@ class SelectionOutcome:
 
     def as_dict(self, *, verbose: bool = False) -> dict[str, Any]:
         payload: dict[str, Any] = {
-            "topic_id": self.topic_id,
+            "pipeline_id": self.pipeline_id,
             "score_version": self.score_version,
             "considered": self.considered,
             "eligible": self.eligible,
@@ -185,7 +185,7 @@ class SelectionOutcome:
 
 
 class SelectionEngine:
-    """Ranks candidates for a topic and applies the selection policy."""
+    """Ranks candidates for a pipeline and applies the selection policy."""
 
     def __init__(self, evaluator=None, config: SelectionConfig | None = None) -> None:
         self.evaluator = evaluator or NullSemanticEvaluator()
@@ -194,7 +194,7 @@ class SelectionEngine:
     def run(
         self,
         *,
-        topic: TopicView,
+        pipeline: PipelineView,
         candidates: list[CandidateView],
         config: SelectionConfig | None = None,
         now: datetime | None = None,
@@ -205,7 +205,7 @@ class SelectionEngine:
         now = now or datetime.now(timezone.utc)
         started = time.monotonic()
 
-        outcome = SelectionOutcome(topic_id=topic.topic_id)
+        outcome = SelectionOutcome(pipeline_id=pipeline.pipeline_id)
         outcome.semantic_provider = getattr(self.evaluator, "name", None)
         outcome.considered = len(candidates)
 
@@ -234,7 +234,7 @@ class SelectionEngine:
 
         # --- 2. deterministic signals + pre-rank ----------------------------
         for assessment in eligible:
-            self._deterministic_signals(assessment, topic=topic, now=now, config=config)
+            self._deterministic_signals(assessment, pipeline=pipeline, now=now, config=config)
             assessment.prerank_score = self._prerank(assessment, config)
 
         eligible.sort(key=lambda item: (-item.prerank_score, item.candidate.candidate_id))
@@ -242,7 +242,7 @@ class SelectionEngine:
         # --- 3. semantic evaluation, on the top K only ----------------------
         top_k = max(0, config.semantic_top_k)
         for assessment in eligible[:top_k]:
-            result = self._evaluate_semantically(assessment, topic)
+            result = self._evaluate_semantically(assessment, pipeline)
             assessment.semantic = result
             if result.ok:
                 outcome.semantic_evaluated += 1
@@ -298,7 +298,7 @@ class SelectionEngine:
         self,
         assessment: CandidateAssessment,
         *,
-        topic: TopicView,
+        pipeline: PipelineView,
         now: datetime,
         config: SelectionConfig,
     ) -> None:
@@ -314,8 +314,8 @@ class SelectionEngine:
             candidate.like_count, candidate.comment_count, candidate.view_count
         )
         assessment.signals["deterministic_relevance"] = features.deterministic_relevance(
-            topic_name=topic.name,
-            topic_keywords=topic.keywords,
+            topic_name=pipeline.name,
+            topic_keywords=pipeline.keywords,
             title=candidate.title,
             description=candidate.description,
             discovery_query=candidate.discovery_query,
@@ -340,12 +340,12 @@ class SelectionEngine:
         return composition.final_score
 
     def _evaluate_semantically(
-        self, assessment: CandidateAssessment, topic: TopicView
+        self, assessment: CandidateAssessment, pipeline: PipelineView
     ) -> SemanticResult:
         """One model call. Never allowed to take down the run.
 
         A provider that is down, slow or returning nonsense degrades this candidate to its
-        deterministic signals — it does not abort the topic's selection.
+        deterministic signals — it does not abort the pipeline's selection.
         """
         candidate = assessment.candidate
         brief = CandidateBrief(
@@ -357,9 +357,9 @@ class SelectionEngine:
         )
         try:
             return self.evaluator.evaluate(
-                topic_name=topic.name,
-                topic_description=topic.description,
-                topic_keywords=list(topic.keywords or []),
+                topic_name=pipeline.name,
+                topic_description=pipeline.description,
+                topic_keywords=list(pipeline.keywords or []),
                 brief=brief,
             )
         except Exception as exc:  # noqa: BLE001 — an unclassified evaluator bug

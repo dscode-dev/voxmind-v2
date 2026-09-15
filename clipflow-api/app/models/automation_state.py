@@ -11,19 +11,19 @@ from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 
 
 class AutomationState(Base, UUIDPrimaryKeyMixin, TimestampMixin):
-    """Scheduling state for one ContentTopic's autonomous loop.
+    """Scheduling state for one Pipeline's autonomous loop.
 
-    A real table rather than more keys in ``ContentTopic.metadata_json``, for three reasons
+    A real table rather than more keys in ``Pipeline.metadata_json``, for three reasons
     that only show up once a scheduler is actually running:
 
-    * **``next_due_at`` has to be queried.** Finding due topics is ``WHERE next_due_at <= now``
+    * **``next_due_at`` has to be queried.** Finding due pipelines is ``WHERE next_due_at <= now``
       over an index. Reaching into a JSONB blob for that works on PostgreSQL and not on SQLite,
       and it cannot be indexed usefully either way.
     * **A JSONB column is read-modify-write.** Two writers touching different keys of the same
       blob silently lose one of the updates. Distinct columns do not have that failure.
-    * **It is not the topic's business.** ``metadata_json`` holds editorial configuration a
+    * **It is not the pipeline's business.** ``metadata_json`` holds editorial configuration a
       human edits; this holds machine bookkeeping a scheduler rewrites every tick. Mixing them
-      means an operator editing the topic can clobber the schedule.
+      means an operator editing the pipeline can clobber the schedule.
 
     This is scheduling state, not a workflow engine: there is no run history table, no task
     graph and no step records. Automation runs are reported through events and logs; only what
@@ -36,16 +36,16 @@ class AutomationState(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         Index("ix_automation_states_next_due", "next_due_at"),
     )
 
-    topic_id: Mapped[uuid.UUID] = mapped_column(
+    pipeline_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("content_topics.id", ondelete="CASCADE"),
+        ForeignKey("pipelines.id", ondelete="CASCADE"),
         nullable=False,
         unique=True,
         index=True,
     )
 
-    # When this topic may next run. NULL means "never scheduled", which is treated as due —
-    # a newly configured topic should not have to wait a full interval for its first run.
+    # When this pipeline may next run. NULL means "never scheduled", which is treated as due —
+    # a newly configured pipeline should not have to wait a full interval for its first run.
     next_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     last_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -61,7 +61,7 @@ class AutomationState(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     running_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     running_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
-    # Backoff. Reset to 0 on any run that is not a failure, so a topic recovers immediately
+    # Backoff. Reset to 0 on any run that is not a failure, so a pipeline recovers immediately
     # rather than serving out a penalty it no longer deserves.
     consecutive_failures: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 

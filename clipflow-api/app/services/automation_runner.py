@@ -5,7 +5,7 @@ Deliberately the thinnest part of this PR: a task that wakes up, opens a session
 rule in the services below it.
 
 **Why in-process and not a separate container.** The scheduler is a few database queries on a
-timer, and it already holds a PostgreSQL advisory lock per topic — which is what makes replicas
+timer, and it already holds a PostgreSQL advisory lock per pipeline — which is what makes replicas
 safe, not process isolation. A dedicated container would add an image, a deployment and a
 failure mode to run a `sleep` loop that the API can run for free. If a separate process is ever
 justified — a scheduler that must survive API restarts, or one with a very different resource
@@ -16,7 +16,7 @@ this does not have: cron expressions, persistent job stores, distributed workers
 needed here is "call a function every N seconds and do not run it twice", and the not-twice
 part is handled by a lock the library would not know about.
 
-**Not a short sleep loop with drift.** The interval is per topic and persisted as
+**Not a short sleep loop with drift.** The interval is per pipeline and persisted as
 ``next_due_at``, so a slow tick pushes nothing out of alignment: the loop polls on a fixed
 cadence and the scheduler decides what is actually due. A run that takes ten minutes does not
 delay the next one by ten minutes.
@@ -215,7 +215,7 @@ def _tick_fields(report) -> dict:
     return {
         "tick_id": report.tick_id,
         "enabled": report.enabled,
-        "topics_considered": report.topics_considered,
+        "pipelines_considered": report.pipelines_considered,
         "ran": len(report.runs),
         "skipped": len(report.skipped),
         "pending_enqueue_recovered": report.pending_enqueue_recovered,

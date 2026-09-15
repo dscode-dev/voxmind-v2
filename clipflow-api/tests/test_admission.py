@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 from app.api import discovery as discovery_api
 from app.api.router import api_router
 from app.db.session import get_db
-from app.models.content_topic import ContentTopic
+from app.models.pipeline import Pipeline
 from app.models.discovery_source import DiscoverySource
 from app.models.enums import (
     DiscoverySourceKind,
@@ -72,36 +72,36 @@ def service(queue):
 
 
 @pytest.fixture()
-def topic(db):
-    topic = ContentTopic(
+def pipeline(db):
+    pipeline = Pipeline(
         name="Futebol brasileiro",
         keywords_json=["futebol"],
         default_clip_mode="short_serie",
         default_video_ratio="portrait",
         metadata_json={},
     )
-    db.add(topic)
+    db.add(pipeline)
     db.flush()
-    return topic
+    return pipeline
 
 
 @pytest.fixture()
-def source(db, topic):
+def source(db, pipeline):
     source = DiscoverySource(
-        topic_id=topic.id, kind=DiscoverySourceKind.RSS, is_active=True, config_json={}
+        pipeline_id=pipeline.id, kind=DiscoverySourceKind.RSS, is_active=True, config_json={}
     )
     db.add(source)
     db.flush()
     return source
 
 
-def make_candidate(db, topic, source, name="c0", **overrides):
+def make_candidate(db, pipeline, source, name="c0", **overrides):
     normalized = {
         "channel_id": overrides.pop("channel_id", f"UC_{name}"),
         "available": overrides.pop("available", True),
     }
     row = VideoCandidate(
-        topic_id=topic.id,
+        pipeline_id=pipeline.id,
         source_id=source.id,
         external_id=name,
         url=overrides.pop("url", f"https://www.youtube.com/watch?v={name}"),
@@ -127,10 +127,10 @@ def make_candidate(db, topic, source, name="c0", **overrides):
     return row
 
 
-def make_active_run(db, topic, state=PipelineState.DOWNLOADING):
+def make_active_run(db, pipeline, state=PipelineState.DOWNLOADING):
     run = PipelineJob(
         worker_job_id=str(uuid.uuid4()),
-        topic_id=topic.id,
+        pipeline_id=pipeline.id,
         source_url="https://example.invalid/v",
         state=state,
         clip_mode="short_serie",
@@ -151,8 +151,8 @@ def runs(db):
 # ==========================================================================
 
 
-def test_a_selected_candidate_becomes_a_queued_production(db, topic, source, service, queue, no_event_fanout):
-    candidate = make_candidate(db, topic, source)
+def test_a_selected_candidate_becomes_a_queued_production(db, pipeline, source, service, queue, no_event_fanout):
+    candidate = make_candidate(db, pipeline, source)
 
     decision = service.admit_candidate(db, candidate=candidate, now=NOW)
 
@@ -165,8 +165,8 @@ def test_a_selected_candidate_becomes_a_queued_production(db, topic, source, ser
     assert queue.published[0]["job_id"] == run.worker_job_id
 
 
-def test_the_candidate_is_consumed_only_after_the_handoff(db, topic, source, service, no_event_fanout):
-    candidate = make_candidate(db, topic, source)
+def test_the_candidate_is_consumed_only_after_the_handoff(db, pipeline, source, service, no_event_fanout):
+    candidate = make_candidate(db, pipeline, source)
     service.admit_candidate(db, candidate=candidate, now=NOW)
 
     db.refresh(candidate)
@@ -174,9 +174,9 @@ def test_the_candidate_is_consumed_only_after_the_handoff(db, topic, source, ser
     assert candidate.metadata_json["production"]["pipeline_job_id"]
 
 
-def test_enqueued_at_is_recorded_separately_from_queued_at(db, topic, source, service, no_event_fanout):
+def test_enqueued_at_is_recorded_separately_from_queued_at(db, pipeline, source, service, no_event_fanout):
     """"queued in the database" and "queued in Redis" are different facts."""
-    candidate = make_candidate(db, topic, source)
+    candidate = make_candidate(db, pipeline, source)
     service.admit_candidate(db, candidate=candidate, now=NOW)
 
     run = db.query(PipelineJob).one()
@@ -184,20 +184,20 @@ def test_enqueued_at_is_recorded_separately_from_queued_at(db, topic, source, se
     assert run.enqueued_at is not None
 
 
-def test_no_clip_job_is_fabricated(db, topic, source, service, no_event_fanout):
+def test_no_clip_job_is_fabricated(db, pipeline, source, service, no_event_fanout):
     """ClipJob requires a user, a purchase and a product. An autonomous run has none of
     them, and PipelineJob has no ClipJob FK — so nothing fake is created to satisfy one."""
     from app.models.clip_job import ClipJob
 
-    candidate = make_candidate(db, topic, source)
+    candidate = make_candidate(db, pipeline, source)
     service.admit_candidate(db, candidate=candidate, now=NOW)
 
     assert db.query(ClipJob).count() == 0
 
 
-def test_the_payload_stays_small(db, topic, source, service, queue, no_event_fanout):
+def test_the_payload_stays_small(db, pipeline, source, service, queue, no_event_fanout):
     """The worker needs the source, the shape and two ids — not the candidate's metadata."""
-    candidate = make_candidate(db, topic, source)
+    candidate = make_candidate(db, pipeline, source)
     service.admit_candidate(db, candidate=candidate, now=NOW)
 
     payload = queue.published[0]
@@ -212,8 +212,8 @@ def test_the_payload_stays_small(db, topic, source, service, queue, no_event_fan
 # ==========================================================================
 
 
-def test_admitting_the_same_candidate_twice_creates_one_run(db, topic, source, service, queue, no_event_fanout):
-    candidate = make_candidate(db, topic, source)
+def test_admitting_the_same_candidate_twice_creates_one_run(db, pipeline, source, service, queue, no_event_fanout):
+    candidate = make_candidate(db, pipeline, source)
 
     first = service.admit_candidate(db, candidate=candidate, now=NOW)
     second = service.admit_candidate(db, candidate=candidate, now=NOW)
@@ -239,14 +239,14 @@ def test_a_different_profile_is_a_different_admission():
     assert admission_key_for(candidate_id, "v1") != admission_key_for(candidate_id, "v2")
 
 
-def test_the_database_refuses_a_duplicate_admission_key(db, topic, source):
+def test_the_database_refuses_a_duplicate_admission_key(db, pipeline, source):
     """The constraint, not the service, is what makes concurrent admission safe."""
     from sqlalchemy.exc import IntegrityError
 
     key = admission_key_for(uuid.uuid4())
     for _ in range(2):
         db.add(PipelineJob(
-            worker_job_id=str(uuid.uuid4()), topic_id=topic.id,
+            worker_job_id=str(uuid.uuid4()), pipeline_id=pipeline.id,
             source_url="https://example.invalid/v", state=PipelineState.QUEUED,
             clip_mode="short_serie", video_ratio="portrait", admission_key=key,
         ))
@@ -255,11 +255,11 @@ def test_the_database_refuses_a_duplicate_admission_key(db, topic, source):
     db.rollback()
 
 
-def test_runs_without_an_admission_key_do_not_collide(db, topic):
+def test_runs_without_an_admission_key_do_not_collide(db, pipeline):
     """API, Telegram and scheduler runs have no candidate; they must not collide on NULL."""
     for _ in range(3):
         db.add(PipelineJob(
-            worker_job_id=str(uuid.uuid4()), topic_id=topic.id,
+            worker_job_id=str(uuid.uuid4()), pipeline_id=pipeline.id,
             source_url="https://example.invalid/v", state=PipelineState.QUEUED,
             clip_mode="short_serie", video_ratio="portrait",
         ))
@@ -267,13 +267,13 @@ def test_runs_without_an_admission_key_do_not_collide(db, topic):
     assert len(runs(db)) == 3
 
 
-def test_a_race_lost_at_the_constraint_reports_the_winner(db, topic, source, service, queue, monkeypatch, no_event_fanout):
+def test_a_race_lost_at_the_constraint_reports_the_winner(db, pipeline, source, service, queue, monkeypatch, no_event_fanout):
     """The interleaving the constraint exists for: both requests see no run and both insert.
 
     The pre-check is blinded so the second admission reaches the unique index, which is
     exactly what a concurrent request does.
     """
-    candidate = make_candidate(db, topic, source)
+    candidate = make_candidate(db, pipeline, source)
     first = service.admit_candidate(db, candidate=candidate, now=NOW)
     db.refresh(candidate)
     candidate.status = VideoCandidateStatus.SELECTED  # pretend the other request had not finished
@@ -307,9 +307,9 @@ def test_a_race_lost_at_the_constraint_reports_the_winner(db, topic, source, ser
     assert len(runs(db)) == 1, "the index collapsed the race, not the service"
 
 
-def test_a_crashed_admission_repairs_the_candidate_status(db, topic, source, service, no_event_fanout):
+def test_a_crashed_admission_repairs_the_candidate_status(db, pipeline, source, service, no_event_fanout):
     """Enqueue succeeded, then the process died before marking the candidate CONSUMED."""
-    candidate = make_candidate(db, topic, source)
+    candidate = make_candidate(db, pipeline, source)
     service.admit_candidate(db, candidate=candidate, now=NOW)
 
     db.refresh(candidate)
@@ -340,17 +340,17 @@ def test_a_crashed_admission_repairs_the_candidate_status(db, topic, source, ser
         (VideoCandidateStatus.CONSUMED, ALREADY_ADMITTED),
     ],
 )
-def test_only_a_selected_candidate_can_be_admitted(db, topic, source, service, status, expected, no_event_fanout):
-    candidate = make_candidate(db, topic, source, status=status)
+def test_only_a_selected_candidate_can_be_admitted(db, pipeline, source, service, status, expected, no_event_fanout):
+    candidate = make_candidate(db, pipeline, source, status=status)
 
     decision = service.admit_candidate(db, candidate=candidate, now=NOW)
 
     assert decision.outcome == expected
 
 
-def test_an_unavailable_candidate_is_permanently_blocked(db, topic, source, service, no_event_fanout):
+def test_an_unavailable_candidate_is_permanently_blocked(db, pipeline, source, service, no_event_fanout):
     """Revalidated at admission time: discovery may have run hours ago."""
-    candidate = make_candidate(db, topic, source, available=False)
+    candidate = make_candidate(db, pipeline, source, available=False)
 
     decision = service.admit_candidate(db, candidate=candidate, now=NOW)
 
@@ -359,8 +359,8 @@ def test_an_unavailable_candidate_is_permanently_blocked(db, topic, source, serv
     assert runs(db) == []
 
 
-def test_a_candidate_without_a_url_is_permanently_blocked(db, topic, source, service, no_event_fanout):
-    candidate = make_candidate(db, topic, source, url="   ")
+def test_a_candidate_without_a_url_is_permanently_blocked(db, pipeline, source, service, no_event_fanout):
+    candidate = make_candidate(db, pipeline, source, url="   ")
 
     decision = service.admit_candidate(db, candidate=candidate, now=NOW)
 
@@ -368,9 +368,9 @@ def test_a_candidate_without_a_url_is_permanently_blocked(db, topic, source, ser
     assert "missing_source_url" in decision.reasons
 
 
-def test_a_blocked_candidate_keeps_its_status(db, topic, source, service, no_event_fanout):
+def test_a_blocked_candidate_keeps_its_status(db, pipeline, source, service, no_event_fanout):
     """Admission never rejects a candidate — that is selection's decision to make."""
-    candidate = make_candidate(db, topic, source, available=False)
+    candidate = make_candidate(db, pipeline, source, available=False)
     service.admit_candidate(db, candidate=candidate, now=NOW)
 
     db.refresh(candidate)
@@ -396,10 +396,10 @@ def test_active_states_exclude_finished_runs():
         assert state in ACTIVE_STATES
 
 
-def test_capacity_blocks_admission_without_rejecting(db, topic, source, service, no_event_fanout):
-    topic.metadata_json = {"admission": {"max_active_jobs": 1}}
-    make_active_run(db, topic)
-    candidate = make_candidate(db, topic, source)
+def test_capacity_blocks_admission_without_rejecting(db, pipeline, source, service, no_event_fanout):
+    pipeline.metadata_json = {"admission": {"max_active_jobs": 1}}
+    make_active_run(db, pipeline)
+    candidate = make_candidate(db, pipeline, source)
     db.flush()
 
     decision = service.admit_candidate(db, candidate=candidate, now=NOW)
@@ -410,10 +410,10 @@ def test_capacity_blocks_admission_without_rejecting(db, topic, source, service,
     assert candidate.status == VideoCandidateStatus.SELECTED, "still admissible later"
 
 
-def test_the_same_candidate_is_admitted_once_capacity_frees(db, topic, source, service, no_event_fanout):
-    topic.metadata_json = {"admission": {"max_active_jobs": 1}}
-    blocker = make_active_run(db, topic)
-    candidate = make_candidate(db, topic, source)
+def test_the_same_candidate_is_admitted_once_capacity_frees(db, pipeline, source, service, no_event_fanout):
+    pipeline.metadata_json = {"admission": {"max_active_jobs": 1}}
+    blocker = make_active_run(db, pipeline)
+    candidate = make_candidate(db, pipeline, source)
     db.flush()
 
     assert service.admit_candidate(db, candidate=candidate, now=NOW).outcome == TEMPORARILY_BLOCKED
@@ -424,10 +424,10 @@ def test_the_same_candidate_is_admitted_once_capacity_frees(db, topic, source, s
     assert service.admit_candidate(db, candidate=candidate, now=NOW).outcome == ADMITTED
 
 
-def test_a_finished_run_does_not_hold_a_slot(db, topic, source, service, no_event_fanout):
-    topic.metadata_json = {"admission": {"max_active_jobs": 1}}
-    make_active_run(db, topic, state=PipelineState.FAILED)
-    candidate = make_candidate(db, topic, source)
+def test_a_finished_run_does_not_hold_a_slot(db, pipeline, source, service, no_event_fanout):
+    pipeline.metadata_json = {"admission": {"max_active_jobs": 1}}
+    make_active_run(db, pipeline, state=PipelineState.FAILED)
+    candidate = make_candidate(db, pipeline, source)
     db.flush()
 
     assert service.admit_candidate(db, candidate=candidate, now=NOW).outcome == ADMITTED
@@ -448,11 +448,11 @@ def test_a_malformed_capacity_value_falls_back(db):
 # ==========================================================================
 
 
-def test_a_dry_run_changes_nothing(db, topic, source, service, queue, no_event_fanout):
+def test_a_dry_run_changes_nothing(db, pipeline, source, service, queue, no_event_fanout):
     for index in range(3):
-        make_candidate(db, topic, source, f"c{index}")
+        make_candidate(db, pipeline, source, f"c{index}")
 
-    report = service.run(db, topic=topic, dry_run=True, now=NOW)
+    report = service.run(db, pipeline=pipeline, dry_run=True, now=NOW)
 
     assert report.as_dict()["counts"]["admitted"] == 3, "it still reports what it would do"
     assert runs(db) == []
@@ -463,13 +463,13 @@ def test_a_dry_run_changes_nothing(db, topic, source, service, queue, no_event_f
     )
 
 
-def test_a_dry_run_reports_capacity(db, topic, source, service, no_event_fanout):
-    topic.metadata_json = {"admission": {"max_active_jobs": 3}}
-    make_active_run(db, topic)
-    make_candidate(db, topic, source)
+def test_a_dry_run_reports_capacity(db, pipeline, source, service, no_event_fanout):
+    pipeline.metadata_json = {"admission": {"max_active_jobs": 3}}
+    make_active_run(db, pipeline)
+    make_candidate(db, pipeline, source)
     db.flush()
 
-    payload = service.run(db, topic=topic, dry_run=True, now=NOW).as_dict()
+    payload = service.run(db, pipeline=pipeline, dry_run=True, now=NOW).as_dict()
 
     assert payload["capacity_limit"] == 3
     assert payload["active_jobs"] == 1
@@ -477,48 +477,48 @@ def test_a_dry_run_reports_capacity(db, topic, source, service, no_event_fanout)
     assert payload["selected_waiting"] == 1
 
 
-def test_a_committed_run_respects_the_limit(db, topic, source, service, queue, no_event_fanout):
+def test_a_committed_run_respects_the_limit(db, pipeline, source, service, queue, no_event_fanout):
     for index in range(5):
-        make_candidate(db, topic, source, f"c{index}")
+        make_candidate(db, pipeline, source, f"c{index}")
 
-    report = service.run(db, topic=topic, limit=2, dry_run=False, now=NOW)
+    report = service.run(db, pipeline=pipeline, limit=2, dry_run=False, now=NOW)
 
     assert report.as_dict()["counts"]["admitted"] == 2
     assert len(runs(db)) == 2
     assert len(queue.published) == 2
 
 
-def test_a_committed_run_respects_capacity(db, topic, source, service, no_event_fanout):
-    topic.metadata_json = {"admission": {"max_active_jobs": 2}}
-    make_active_run(db, topic)
+def test_a_committed_run_respects_capacity(db, pipeline, source, service, no_event_fanout):
+    pipeline.metadata_json = {"admission": {"max_active_jobs": 2}}
+    make_active_run(db, pipeline)
     for index in range(4):
-        make_candidate(db, topic, source, f"c{index}")
+        make_candidate(db, pipeline, source, f"c{index}")
     db.flush()
 
-    report = service.run(db, topic=topic, limit=5, dry_run=False, now=NOW)
+    report = service.run(db, pipeline=pipeline, limit=5, dry_run=False, now=NOW)
 
     counts = report.as_dict()["counts"]
     assert counts["admitted"] == 1, "one slot free of two"
     assert counts["temporarily_blocked"] == 3
 
 
-def test_selection_cannot_flood_the_worker(db, topic, source, service, queue, no_event_fanout):
+def test_selection_cannot_flood_the_worker(db, pipeline, source, service, queue, no_event_fanout):
     """The point of admission: ten selected candidates do not become ten productions."""
     for index in range(10):
-        make_candidate(db, topic, source, f"c{index}")
+        make_candidate(db, pipeline, source, f"c{index}")
 
-    service.run(db, topic=topic, dry_run=False, now=NOW)
+    service.run(db, pipeline=pipeline, dry_run=False, now=NOW)
 
     assert len(queue.published) <= AdmissionConfig().max_active_jobs
 
 
-def test_admission_order_is_deterministic(db, topic, source, service, no_event_fanout):
+def test_admission_order_is_deterministic(db, pipeline, source, service, no_event_fanout):
     """Not the database's arbitrary order: highest score first, then oldest selection."""
-    make_candidate(db, topic, source, "low", relevance_score=0.3)
-    make_candidate(db, topic, source, "high", relevance_score=0.95)
-    make_candidate(db, topic, source, "mid", relevance_score=0.6)
+    make_candidate(db, pipeline, source, "low", relevance_score=0.3)
+    make_candidate(db, pipeline, source, "high", relevance_score=0.95)
+    make_candidate(db, pipeline, source, "mid", relevance_score=0.6)
 
-    report = service.run(db, topic=topic, limit=1, dry_run=False, now=NOW)
+    report = service.run(db, pipeline=pipeline, limit=1, dry_run=False, now=NOW)
 
     admitted = report.as_dict()["admitted"]
     assert len(admitted) == 1
@@ -527,19 +527,19 @@ def test_admission_order_is_deterministic(db, topic, source, service, no_event_f
     assert winner.external_id == "high"
 
 
-def test_a_run_can_span_every_topic(db, topic, source, service, no_event_fanout):
-    other = ContentTopic(name="Outro tema", metadata_json={})
+def test_a_run_can_span_every_pipeline(db, pipeline, source, service, no_event_fanout):
+    other = Pipeline(name="Outro tema", metadata_json={})
     db.add(other)
     db.flush()
     other_source = DiscoverySource(
-        topic_id=other.id, kind=DiscoverySourceKind.RSS, is_active=True, config_json={}
+        pipeline_id=other.id, kind=DiscoverySourceKind.RSS, is_active=True, config_json={}
     )
     db.add(other_source)
     db.flush()
-    make_candidate(db, topic, source, "a")
+    make_candidate(db, pipeline, source, "a")
     make_candidate(db, other, other_source, "b")
 
-    report = service.run(db, topic=None, limit=5, dry_run=True, now=NOW)
+    report = service.run(db, pipeline=None, limit=5, dry_run=True, now=NOW)
 
     assert report.selected_waiting == 2
 
@@ -549,11 +549,11 @@ def test_a_run_can_span_every_topic(db, topic, source, service, no_event_fanout)
 # ==========================================================================
 
 
-def test_a_queue_outage_does_not_lose_the_candidate(db, topic, source, no_event_fanout):
+def test_a_queue_outage_does_not_lose_the_candidate(db, pipeline, source, no_event_fanout):
     """The classic window: the row committed, the message did not."""
     queue = FakeQueue(fail=EnqueueError("redis down", retryable=True))
     service = ProductionAdmissionService(queue=queue)
-    candidate = make_candidate(db, topic, source)
+    candidate = make_candidate(db, pipeline, source)
 
     decision = service.admit_candidate(db, candidate=candidate, now=NOW)
 
@@ -566,9 +566,9 @@ def test_a_queue_outage_does_not_lose_the_candidate(db, topic, source, no_event_
     assert run.enqueued_at is None, "findable as pending-enqueue"
 
 
-def test_a_pending_enqueue_is_recoverable(db, topic, source, no_event_fanout):
+def test_a_pending_enqueue_is_recoverable(db, pipeline, source, no_event_fanout):
     failing = FakeQueue(fail=EnqueueError("redis down", retryable=True))
-    candidate = make_candidate(db, topic, source)
+    candidate = make_candidate(db, pipeline, source)
     ProductionAdmissionService(queue=failing).admit_candidate(db, candidate=candidate, now=NOW)
 
     working = FakeQueue()
@@ -583,9 +583,9 @@ def test_a_pending_enqueue_is_recoverable(db, topic, source, no_event_fanout):
     assert len(runs(db)) == 1, "recovery re-dispatches, it does not re-create"
 
 
-def test_recovery_is_idempotent(db, topic, source, no_event_fanout):
+def test_recovery_is_idempotent(db, pipeline, source, no_event_fanout):
     failing = FakeQueue(fail=EnqueueError("down", retryable=True))
-    candidate = make_candidate(db, topic, source)
+    candidate = make_candidate(db, pipeline, source)
     ProductionAdmissionService(queue=failing).admit_candidate(db, candidate=candidate, now=NOW)
 
     working = FakeQueue()
@@ -597,10 +597,10 @@ def test_recovery_is_idempotent(db, topic, source, no_event_fanout):
     assert len(working.published) == 1
 
 
-def test_retrying_admission_after_a_queue_outage_does_not_duplicate(db, topic, source, no_event_fanout):
+def test_retrying_admission_after_a_queue_outage_does_not_duplicate(db, pipeline, source, no_event_fanout):
     """The admission key protects the retry path too."""
     failing = FakeQueue(fail=EnqueueError("down", retryable=True))
-    candidate = make_candidate(db, topic, source)
+    candidate = make_candidate(db, pipeline, source)
     ProductionAdmissionService(queue=failing).admit_candidate(db, candidate=candidate, now=NOW)
 
     working = FakeQueue()
@@ -613,10 +613,10 @@ def test_retrying_admission_after_a_queue_outage_does_not_duplicate(db, topic, s
     assert len(runs(db)) == 1
 
 
-def test_an_unserialisable_payload_is_not_retried_forever(db, topic, source, no_event_fanout):
+def test_an_unserialisable_payload_is_not_retried_forever(db, pipeline, source, no_event_fanout):
     queue = FakeQueue(fail=EnqueueError("bad payload", retryable=False))
     service = ProductionAdmissionService(queue=queue)
-    candidate = make_candidate(db, topic, source)
+    candidate = make_candidate(db, pipeline, source)
 
     decision = service.admit_candidate(db, candidate=candidate, now=NOW)
 
@@ -629,17 +629,17 @@ def test_an_unserialisable_payload_is_not_retried_forever(db, topic, source, no_
 # ==========================================================================
 
 
-def test_production_inputs_are_frozen_at_admission(db, topic, source, service, no_event_fanout):
-    """Editing the topic must not reshape a run already in flight."""
-    topic.default_clip_mode = "short_serie"
-    topic.default_video_ratio = "portrait"
+def test_production_inputs_are_frozen_at_admission(db, pipeline, source, service, no_event_fanout):
+    """Editing the pipeline must not reshape a run already in flight."""
+    pipeline.default_clip_mode = "short_serie"
+    pipeline.default_video_ratio = "portrait"
     db.flush()
-    candidate = make_candidate(db, topic, source, url="https://www.youtube.com/watch?v=orig")
+    candidate = make_candidate(db, pipeline, source, url="https://www.youtube.com/watch?v=orig")
 
     service.admit_candidate(db, candidate=candidate, now=NOW)
 
-    topic.default_clip_mode = "long_series"
-    topic.default_video_ratio = "landscape"
+    pipeline.default_clip_mode = "long_series"
+    pipeline.default_video_ratio = "landscape"
     candidate.url = "https://www.youtube.com/watch?v=changed"
     db.flush()
 
@@ -651,9 +651,9 @@ def test_production_inputs_are_frozen_at_admission(db, topic, source, service, n
     assert run.source_url == "https://www.youtube.com/watch?v=orig"
 
 
-def test_the_snapshot_is_compact(db, topic, source, service, no_event_fanout):
+def test_the_snapshot_is_compact(db, pipeline, source, service, no_event_fanout):
     """Only what the worker consumes — not a copy of the candidate."""
-    candidate = make_candidate(db, topic, source)
+    candidate = make_candidate(db, pipeline, source)
     service.admit_candidate(db, candidate=candidate, now=NOW)
 
     frozen = db.query(PipelineJob).one().metadata_json["snapshot"]
@@ -667,8 +667,8 @@ def test_the_snapshot_is_compact(db, topic, source, service, no_event_fanout):
 # ==========================================================================
 
 
-def test_a_run_records_where_it_came_from(db, topic, source, service, no_event_fanout):
-    candidate = make_candidate(db, topic, source)
+def test_a_run_records_where_it_came_from(db, pipeline, source, service, no_event_fanout):
+    candidate = make_candidate(db, pipeline, source)
     service.admit_candidate(db, candidate=candidate, now=NOW)
 
     run = db.query(PipelineJob).one()
@@ -680,8 +680,8 @@ def test_a_run_records_where_it_came_from(db, topic, source, service, no_event_f
     assert provenance["score_version"] == "selection-v1"
 
 
-def test_the_candidate_records_where_it_went(db, topic, source, service, no_event_fanout):
-    candidate = make_candidate(db, topic, source)
+def test_the_candidate_records_where_it_went(db, pipeline, source, service, no_event_fanout):
+    candidate = make_candidate(db, pipeline, source)
     service.admit_candidate(db, candidate=candidate, now=NOW)
 
     db.refresh(candidate)
@@ -692,10 +692,10 @@ def test_the_candidate_records_where_it_went(db, topic, source, service, no_even
     assert production["admission_key"] == admission_key_for(candidate.id)
 
 
-def test_the_run_read_model_exposes_the_origin(db, topic, source, service, no_event_fanout):
+def test_the_run_read_model_exposes_the_origin(db, pipeline, source, service, no_event_fanout):
     from app.services.pipeline_job_service import PipelineJobService
 
-    candidate = make_candidate(db, topic, source)
+    candidate = make_candidate(db, pipeline, source)
     service.admit_candidate(db, candidate=candidate, now=NOW)
 
     view = PipelineJobService().serialize(db.query(PipelineJob).one())
@@ -710,10 +710,10 @@ def test_the_run_read_model_exposes_the_origin(db, topic, source, service, no_ev
 # ==========================================================================
 
 
-def test_the_worker_job_id_is_its_own_namespace(db, topic, source, service, no_event_fanout):
+def test_the_worker_job_id_is_its_own_namespace(db, pipeline, source, service, no_event_fanout):
     """Not the candidate id: it addresses storage (jobs/<id>/…) and a queue payload, which
     are different lifetimes from a discovery row."""
-    candidate = make_candidate(db, topic, source)
+    candidate = make_candidate(db, pipeline, source)
     service.admit_candidate(db, candidate=candidate, now=NOW)
 
     run = db.query(PipelineJob).one()
@@ -721,8 +721,8 @@ def test_the_worker_job_id_is_its_own_namespace(db, topic, source, service, no_e
     uuid.UUID(run.worker_job_id)
 
 
-def test_a_retried_admission_keeps_the_same_worker_job_id(db, topic, source, service, no_event_fanout):
-    candidate = make_candidate(db, topic, source)
+def test_a_retried_admission_keeps_the_same_worker_job_id(db, pipeline, source, service, no_event_fanout):
+    candidate = make_candidate(db, pipeline, source)
     first = service.admit_candidate(db, candidate=candidate, now=NOW)
     second = service.admit_candidate(db, candidate=candidate, now=NOW)
 
@@ -734,13 +734,13 @@ def test_a_retried_admission_keeps_the_same_worker_job_id(db, topic, source, ser
 # ==========================================================================
 
 
-def test_admission_emits_a_run_event_and_one_per_admission(db, topic, source, service, no_event_fanout):
+def test_admission_emits_a_run_event_and_one_per_admission(db, pipeline, source, service, no_event_fanout):
     from app.models.pipeline_event import PipelineEvent
 
     for index in range(2):
-        make_candidate(db, topic, source, f"c{index}")
+        make_candidate(db, pipeline, source, f"c{index}")
 
-    service.run(db, topic=topic, limit=2, dry_run=False, now=NOW)
+    service.run(db, pipeline=pipeline, limit=2, dry_run=False, now=NOW)
 
     stages = [
         event.stage
@@ -750,11 +750,11 @@ def test_admission_emits_a_run_event_and_one_per_admission(db, topic, source, se
     assert stages.count("candidate.admitted") == 2
 
 
-def test_an_admission_event_is_attached_to_its_run(db, topic, source, service, no_event_fanout):
+def test_an_admission_event_is_attached_to_its_run(db, pipeline, source, service, no_event_fanout):
     """From here on the candidate's story is the run's story."""
     from app.models.pipeline_event import PipelineEvent
 
-    candidate = make_candidate(db, topic, source)
+    candidate = make_candidate(db, pipeline, source)
     service.admit_candidate(db, candidate=candidate, now=NOW)
 
     event = (
@@ -795,21 +795,21 @@ def client(db, admin_user, queue, no_event_fanout, monkeypatch):
         yield test_client
 
 
-def test_the_run_endpoint_defaults_to_a_dry_run(client, db, topic, source, queue):
-    make_candidate(db, topic, source)
+def test_the_run_endpoint_defaults_to_a_dry_run(client, db, pipeline, source, queue):
+    make_candidate(db, pipeline, source)
 
-    body = client.post("/admin/admission/run", json={"topic_id": str(topic.id)}).json()
+    body = client.post("/admin/admission/run", json={"pipeline_id": str(pipeline.id)}).json()
 
     assert body["dry_run"] is True
     assert runs(db) == []
     assert queue.published == []
 
 
-def test_the_run_endpoint_can_commit(client, db, topic, source, queue):
-    make_candidate(db, topic, source)
+def test_the_run_endpoint_can_commit(client, db, pipeline, source, queue):
+    make_candidate(db, pipeline, source)
 
     body = client.post(
-        "/admin/admission/run", json={"topic_id": str(topic.id), "dry_run": False}
+        "/admin/admission/run", json={"pipeline_id": str(pipeline.id), "dry_run": False}
     ).json()
 
     assert body["counts"]["admitted"] == 1
@@ -817,8 +817,8 @@ def test_the_run_endpoint_can_commit(client, db, topic, source, queue):
     assert len(queue.published) == 1
 
 
-def test_the_direct_endpoint_uses_the_same_service(client, db, topic, source, queue):
-    candidate = make_candidate(db, topic, source)
+def test_the_direct_endpoint_uses_the_same_service(client, db, pipeline, source, queue):
+    candidate = make_candidate(db, pipeline, source)
 
     body = client.post(f"/admin/video-candidates/{candidate.id}/admit").json()
 
@@ -827,8 +827,8 @@ def test_the_direct_endpoint_uses_the_same_service(client, db, topic, source, qu
     assert len(queue.published) == 1
 
 
-def test_the_direct_endpoint_is_idempotent(client, db, topic, source, queue):
-    candidate = make_candidate(db, topic, source)
+def test_the_direct_endpoint_is_idempotent(client, db, pipeline, source, queue):
+    candidate = make_candidate(db, pipeline, source)
 
     client.post(f"/admin/video-candidates/{candidate.id}/admit")
     second = client.post(f"/admin/video-candidates/{candidate.id}/admit").json()
@@ -838,9 +838,9 @@ def test_the_direct_endpoint_is_idempotent(client, db, topic, source, queue):
     assert len(queue.published) == 1
 
 
-def test_an_unbounded_limit_is_rejected(client, topic):
+def test_an_unbounded_limit_is_rejected(client, pipeline):
     response = client.post(
-        "/admin/admission/run", json={"topic_id": str(topic.id), "limit": 100_000}
+        "/admin/admission/run", json={"pipeline_id": str(pipeline.id), "limit": 100_000}
     )
     assert response.status_code == 422
 
@@ -856,17 +856,17 @@ def test_admission_endpoints_are_admin_only(db, no_event_fanout):
         ).status_code in (401, 403)
 
 
-def test_admission_is_audited(client, db, topic, source):
+def test_admission_is_audited(client, db, pipeline, source):
     from app.models.audit_log import AuditLog
 
-    candidate = make_candidate(db, topic, source)
+    candidate = make_candidate(db, pipeline, source)
     client.post(f"/admin/video-candidates/{candidate.id}/admit")
 
     assert "admin.admission.candidate" in {e.action for e in db.query(AuditLog)}
 
 
-def test_the_candidate_detail_shows_its_production(client, db, topic, source):
-    candidate = make_candidate(db, topic, source)
+def test_the_candidate_detail_shows_its_production(client, db, pipeline, source):
+    candidate = make_candidate(db, pipeline, source)
     client.post(f"/admin/video-candidates/{candidate.id}/admit")
 
     body = client.get(f"/admin/video-candidates/{candidate.id}").json()
@@ -876,9 +876,9 @@ def test_the_candidate_detail_shows_its_production(client, db, topic, source):
     assert body["selection_method"] == "policy"
 
 
-def test_the_retry_endpoint_recovers_pending_enqueues(db, admin_user, topic, source, no_event_fanout, monkeypatch):
+def test_the_retry_endpoint_recovers_pending_enqueues(db, admin_user, pipeline, source, no_event_fanout, monkeypatch):
     failing = FakeQueue(fail=EnqueueError("down", retryable=True))
-    candidate = make_candidate(db, topic, source)
+    candidate = make_candidate(db, pipeline, source)
     ProductionAdmissionService(queue=failing).admit_candidate(db, candidate=candidate, now=NOW)
 
     working = FakeQueue()
@@ -902,9 +902,9 @@ def test_the_retry_endpoint_recovers_pending_enqueues(db, admin_user, topic, sou
 # ==========================================================================
 
 
-def test_manual_selection_no_longer_creates_a_run(client, db, topic, source, queue):
+def test_manual_selection_no_longer_creates_a_run(client, db, pipeline, source, queue):
     """It used to create a PipelineJob and never enqueue it — an orphan by construction."""
-    candidate = make_candidate(db, topic, source, status=VideoCandidateStatus.RANKED)
+    candidate = make_candidate(db, pipeline, source, status=VideoCandidateStatus.RANKED)
 
     body = client.post(f"/admin/video-candidates/{candidate.id}/select").json()
 
@@ -915,17 +915,17 @@ def test_manual_selection_no_longer_creates_a_run(client, db, topic, source, que
     assert candidate.status == VideoCandidateStatus.SELECTED
 
 
-def test_selecting_an_already_admitted_candidate_is_refused(client, db, topic, source):
-    candidate = make_candidate(db, topic, source, status=VideoCandidateStatus.CONSUMED)
+def test_selecting_an_already_admitted_candidate_is_refused(client, db, pipeline, source):
+    candidate = make_candidate(db, pipeline, source, status=VideoCandidateStatus.CONSUMED)
 
     assert client.post(f"/admin/video-candidates/{candidate.id}/select").status_code == 409
 
 
-def test_nothing_here_publishes(db, topic, source, service, no_event_fanout):
+def test_nothing_here_publishes(db, pipeline, source, service, no_event_fanout):
     """Admission ends at the queue. Publishing does not exist."""
     from app.models.publish_attempt import PublishAttempt
 
-    candidate = make_candidate(db, topic, source)
+    candidate = make_candidate(db, pipeline, source)
     service.admit_candidate(db, candidate=candidate, now=NOW)
 
     assert db.query(PublishAttempt).count() == 0

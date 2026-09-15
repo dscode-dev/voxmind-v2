@@ -158,7 +158,7 @@ def list_pipeline_jobs(
     """
     query = db.query(PipelineJob).options(
         joinedload(PipelineJob.candidate),
-        joinedload(PipelineJob.topic),
+        joinedload(PipelineJob.pipeline),
     )
     if state is not None:
         query = query.filter(PipelineJob.state == state)
@@ -195,7 +195,7 @@ def get_pipeline_job(
     """One run, with the provenance a person needs to understand where it came from."""
     job = (
         db.query(PipelineJob)
-        .options(joinedload(PipelineJob.candidate), joinedload(PipelineJob.topic))
+        .options(joinedload(PipelineJob.candidate), joinedload(PipelineJob.pipeline))
         .filter(PipelineJob.id == job_id)
         .first()
     )
@@ -266,9 +266,9 @@ def _serialize_job(
         "finished_at": _iso(job.finished_at),
         # What this run is ABOUT, so a console never has to show only an id.
         "title": (candidate.title if candidate else None) or job.source_url,
-        "topic": {
-            "id": str(job.topic_id) if job.topic_id else None,
-            "name": job.topic.name if job.topic else None,
+        "pipeline": {
+            "id": str(job.pipeline_id) if job.pipeline_id else None,
+            "name": job.pipeline.name if job.pipeline else None,
         },
         "candidate": (
             {

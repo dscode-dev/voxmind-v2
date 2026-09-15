@@ -23,7 +23,7 @@ from typing import Any
 from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
-from app.models.content_topic import ContentTopic
+from app.models.pipeline import Pipeline
 from app.models.discovery_source import DiscoverySource
 from app.models.enums import PipelineEventType, VideoCandidateStatus
 from app.models.video_candidate import VideoCandidate
@@ -32,7 +32,7 @@ from app.selection.engine import (
     CandidateView,
     SelectionEngine,
     SelectionOutcome,
-    TopicView,
+    PipelineView,
 )
 from app.selection.policy import PERMANENT_REASONS, SCORE_VERSION, SelectionConfig
 from app.services import event_bus
@@ -52,7 +52,7 @@ METHOD_MANUAL = "manual"
 @dataclass
 class SelectionRunReport:
     run_id: str
-    topic_id: str
+    pipeline_id: str
     dry_run: bool
     outcome: SelectionOutcome
     committed: int = 0
@@ -83,66 +83,66 @@ class SelectionService:
         self,
         db: Session,
         *,
-        topic: ContentTopic,
+        pipeline: Pipeline,
         limit: int | None = None,
         dry_run: bool = False,
         now: datetime | None = None,
     ) -> SelectionRunReport:
         now = now or datetime.now(timezone.utc)
         run_id = str(uuid.uuid4())
-        config = self._config_for(topic, limit)
+        config = self._config_for(pipeline, limit)
 
         if not dry_run:
-            # One selection run per topic at a time. Without this, two concurrent runs both
-            # read "0 selected so far", both pass the cap check, and the topic gets double
+            # One selection run per pipeline at a time. Without this, two concurrent runs both
+            # read "0 selected so far", both pass the cap check, and the pipeline gets double
             # its allowance — with each run believing it obeyed the limit. A transaction-scoped
-            # advisory lock keyed on the topic is enough: it serialises runs for this topic
-            # without blocking any other topic, and it is released on commit or rollback.
-            self._lock_topic(db, topic.id)
+            # advisory lock keyed on the pipeline is enough: it serialises runs for this pipeline
+            # without blocking any other pipeline, and it is released on commit or rollback.
+            self._lock_pipeline(db, pipeline.id)
 
-        candidates = self._load_candidates(db, topic)
-        topic_view = TopicView(
-            topic_id=str(topic.id),
-            name=topic.name,
-            description=topic.description,
-            keywords=list(topic.keywords_json or []),
+        candidates = self._load_candidates(db, pipeline)
+        pipeline_view = PipelineView(
+            pipeline_id=str(pipeline.id),
+            name=pipeline.name,
+            description=pipeline.description,
+            keywords=list(pipeline.keywords_json or []),
         )
 
         outcome = self.engine.run(
-            topic=topic_view,
+            pipeline=pipeline_view,
             candidates=candidates,
             config=config,
             now=now,
-            already_selected_today=self._selected_today(db, topic, now),
-            channel_last_selected=self._recent_channel_selections(db, topic, config, now),
+            already_selected_today=self._selected_today(db, pipeline, now),
+            channel_last_selected=self._recent_channel_selections(db, pipeline, config, now),
         )
 
         report = SelectionRunReport(
-            run_id=run_id, topic_id=str(topic.id), dry_run=dry_run, outcome=outcome
+            run_id=run_id, pipeline_id=str(pipeline.id), dry_run=dry_run, outcome=outcome
         )
 
         if not dry_run:
-            self._persist(db, topic, outcome, report, now)
+            self._persist(db, pipeline, outcome, report, now)
 
-        self._emit(db, topic, report)
+        self._emit(db, pipeline, report)
         self._log(report)
         return report
 
     # ---------------------------------------------------------------- loading
 
-    def _config_for(self, topic: ContentTopic, limit: int | None) -> SelectionConfig:
-        metadata = dict(topic.metadata_json or {})
+    def _config_for(self, pipeline: Pipeline, limit: int | None) -> SelectionConfig:
+        metadata = dict(pipeline.metadata_json or {})
         config = SelectionConfig().with_overrides(metadata.get("selection"))
         if limit is not None:
             config = config.with_overrides(
                 {"max_selected_per_run": max(1, min(int(limit), HARD_MAX_SELECTED_PER_RUN))}
             )
         elif config.max_selected_per_run > HARD_MAX_SELECTED_PER_RUN:
-            # A topic cannot configure its way past the server-side ceiling either.
+            # A pipeline cannot configure its way past the server-side ceiling either.
             config = config.with_overrides({"max_selected_per_run": HARD_MAX_SELECTED_PER_RUN})
         return config
 
-    def _load_candidates(self, db: Session, topic: ContentTopic) -> list[CandidateView]:
+    def _load_candidates(self, db: Session, pipeline: Pipeline) -> list[CandidateView]:
         """Load everything not already finished.
 
         SELECTED and CONSUMED rows are excluded at the query rather than being loaded and
@@ -153,7 +153,7 @@ class SelectionService:
         rows = (
             db.query(VideoCandidate)
             .filter(
-                VideoCandidate.topic_id == topic.id,
+                VideoCandidate.pipeline_id == pipeline.id,
                 VideoCandidate.status.in_(
                     [VideoCandidateStatus.DISCOVERED, VideoCandidateStatus.RANKED]
                 ),
@@ -163,7 +163,7 @@ class SelectionService:
         source_configs = {
             source.id: dict(source.config_json or {})
             for source in db.query(DiscoverySource).filter(
-                DiscoverySource.topic_id == topic.id
+                DiscoverySource.pipeline_id == pipeline.id
             )
         }
         return [self._to_view(row, source_configs) for row in rows]
@@ -192,13 +192,13 @@ class SelectionService:
             discovery_query=metadata.get("discovery_query"),
         )
 
-    def _selected_today(self, db: Session, topic: ContentTopic, now: datetime) -> int:
+    def _selected_today(self, db: Session, pipeline: Pipeline, now: datetime) -> int:
         """How much of today's allowance is already spent."""
         midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
         return (
             db.query(func.count(VideoCandidate.id))
             .filter(
-                VideoCandidate.topic_id == topic.id,
+                VideoCandidate.pipeline_id == pipeline.id,
                 VideoCandidate.selected_at.isnot(None),
                 VideoCandidate.selected_at >= midnight,
             )
@@ -207,7 +207,7 @@ class SelectionService:
         )
 
     def _recent_channel_selections(
-        self, db: Session, topic: ContentTopic, config: SelectionConfig, now: datetime
+        self, db: Session, pipeline: Pipeline, config: SelectionConfig, now: datetime
     ) -> dict[str, datetime]:
         """Channel cooldown carried across runs, not just within one.
 
@@ -218,7 +218,7 @@ class SelectionService:
         rows = (
             db.query(VideoCandidate)
             .filter(
-                VideoCandidate.topic_id == topic.id,
+                VideoCandidate.pipeline_id == pipeline.id,
                 VideoCandidate.selected_at.isnot(None),
                 VideoCandidate.selected_at >= cutoff,
             )
@@ -240,7 +240,7 @@ class SelectionService:
     def _persist(
         self,
         db: Session,
-        topic: ContentTopic,
+        pipeline: Pipeline,
         outcome: SelectionOutcome,
         report: SelectionRunReport,
         now: datetime,
@@ -248,7 +248,7 @@ class SelectionService:
         by_id = {
             str(row.id): row
             for row in db.query(VideoCandidate).filter(
-                VideoCandidate.topic_id == topic.id
+                VideoCandidate.pipeline_id == pipeline.id
             )
         }
 
@@ -279,7 +279,7 @@ class SelectionService:
             }
             row.metadata_json = metadata
             report.committed += 1
-            self._emit_candidate_selected(db, topic, assessment, report)
+            self._emit_candidate_selected(db, pipeline, assessment, report)
 
         # Permanently unusable candidates are the only ones marked REJECTED. A cap, a
         # cooldown or today's freshness window are temporary: rejecting on those would burn a
@@ -321,8 +321,8 @@ class SelectionService:
     # ---------------------------------------------------------------- locking
 
     @staticmethod
-    def _lock_topic(db: Session, topic_id) -> None:
-        """Serialise committed runs for one topic.
+    def _lock_pipeline(db: Session, pipeline_id) -> None:
+        """Serialise committed runs for one pipeline.
 
         PostgreSQL advisory lock, transaction-scoped. On any other backend (the test suite
         runs on SQLite) this is a no-op — SQLite serialises writers anyway, so there is no
@@ -330,12 +330,12 @@ class SelectionService:
         """
         if db.bind is None or db.bind.dialect.name != "postgresql":
             return
-        key = int(uuid.UUID(str(topic_id)).int % (2**31))
+        key = int(uuid.UUID(str(pipeline_id)).int % (2**31))
         db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": key})
 
     # ---------------------------------------------------------- observability
 
-    def _emit(self, db: Session, topic: ContentTopic, report: SelectionRunReport) -> None:
+    def _emit(self, db: Session, pipeline: Pipeline, report: SelectionRunReport) -> None:
         outcome = report.outcome
         event_bus.publish_event(
             db,
@@ -344,7 +344,7 @@ class SelectionService:
             pipeline_job_id=None,
             stage="selection.completed",
             message=(
-                f"selection {'dry-run' if report.dry_run else 'run'} on '{topic.name}': "
+                f"selection {'dry-run' if report.dry_run else 'run'} on '{pipeline.name}': "
                 f"{len(outcome.selected)} selected of {outcome.eligible} eligible"
             ),
             # Aggregated. One event per candidate ranked would be dozens per run saying what
@@ -352,7 +352,7 @@ class SelectionService:
             # because it changes the domain.
             payload={
                 "selection_run_id": report.run_id,
-                "topic_id": str(topic.id),
+                "pipeline_id": str(pipeline.id),
                 "dry_run": report.dry_run,
                 "score_version": SCORE_VERSION,
                 "considered": outcome.considered,
@@ -371,7 +371,7 @@ class SelectionService:
     def _emit_candidate_selected(
         self,
         db: Session,
-        topic: ContentTopic,
+        pipeline: Pipeline,
         assessment: CandidateAssessment,
         report: SelectionRunReport,
     ) -> None:
@@ -384,7 +384,7 @@ class SelectionService:
             message=f"selected: {(assessment.candidate.title or '')[:120]}",
             payload={
                 "selection_run_id": report.run_id,
-                "topic_id": str(topic.id),
+                "pipeline_id": str(pipeline.id),
                 "candidate_id": assessment.candidate.candidate_id,
                 "rank": assessment.rank,
                 "score": assessment.final_score,
@@ -400,7 +400,7 @@ class SelectionService:
             "selection_run",
             extra={
                 "selection_run_id": report.run_id,
-                "topic_id": report.topic_id,
+                "pipeline_id": report.pipeline_id,
                 "dry_run": report.dry_run,
                 "score_version": SCORE_VERSION,
                 "candidates_considered": outcome.considered,
