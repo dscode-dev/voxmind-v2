@@ -74,7 +74,6 @@ def bootstrap_config(monkeypatch):
         settings, "default_admin_phone_number", BOOTSTRAP_PHONE, raising=False
     )
     monkeypatch.setattr(settings, "default_admin_full_name", "ClipFlow Admin", raising=False)
-    monkeypatch.setattr(settings, "default_admin_credits", 100, raising=False)
 
 
 @pytest.fixture()
@@ -122,7 +121,6 @@ def test_bootstrap_restores_admin_properties_on_an_existing_user(db, bootstrap_c
             full_name="Existing",
             role=UserRole.CUSTOMER,
             status=UserStatus.ACTIVE,
-            credits=0,
             token_version=1,
         )
     )

@@ -774,7 +774,7 @@ def test_an_admission_event_is_attached_to_its_run(db, topic, source, service, n
 def admin_user(db):
     user = User(
         phone_number="+5511977776666", full_name="Admin",
-        role=UserRole.ADMIN, status=UserStatus.ACTIVE, credits=100,
+        role=UserRole.ADMIN, status=UserStatus.ACTIVE,
     )
     db.add(user)
     db.flush()

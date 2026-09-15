@@ -94,11 +94,6 @@ class PipelineJob(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         back_populates="job",
         cascade="all, delete-orphan",
     )
-    assets = relationship(
-        "GeneratedAsset",
-        back_populates="job",
-        cascade="all, delete-orphan",
-    )
     ai_executions = relationship(
         "AIExecution",
         back_populates="job",

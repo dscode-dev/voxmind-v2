@@ -13,28 +13,6 @@ class UserStatus(str, enum.Enum):
     PENDING_VERIFICATION = "pending_verification"
     SUSPENDED = "suspended"
     DELETED = "deleted"
-
-
-class BillingProvider(str, enum.Enum):
-    STRIPE = "stripe"
-    MERCADOPAGO = "mercadopago"
-    MANUAL = "manual"
-
-
-class PurchaseStatus(str, enum.Enum):
-    PENDING = "pending"
-    PAID = "paid"
-    FAILED = "failed"
-    REFUNDED = "refunded"
-    CANCELED = "canceled"
-    EXPIRED = "expired"
-
-
-class ProductType(str, enum.Enum):
-    VIDEO_UP_TO_2H = "video_up_to_2h"
-    VIDEO_UP_TO_4H = "video_up_to_4h"
-
-
 class JobStatus(str, enum.Enum):
     PENDING_PAYMENT = "pending_payment"
     QUEUED = "queued"
@@ -102,26 +80,6 @@ class JobEventType(str, enum.Enum):
 
     JOB_COMPLETED = "job_completed"
     JOB_FAILED = "job_failed"
-
-
-class UsageMetricType(str, enum.Enum):
-
-    GPU_SECONDS = "gpu_seconds"
-
-    CPU_SECONDS = "cpu_seconds"
-
-    STORAGE_BYTES = "storage_bytes"
-
-    LLM_TOKENS = "llm_tokens"
-
-    TRANSCRIPTION_SECONDS = "transcription_seconds"
-
-
-# =====================================================
-# V2 — Autonomous pipeline (PipelineJob lineage)
-# =====================================================
-
-
 class PipelineState(str, enum.Enum):
     """Granular state machine for autonomous PipelineJobs (brief §PIPELINE STATE MACHINE)."""
 
@@ -180,20 +138,6 @@ class DiscoverySourceKind(str, enum.Enum):
     NEWS = "news"
     RSS = "rss"
     MANUAL = "manual"
-
-
-class GeneratedAssetKind(str, enum.Enum):
-    CLIP = "clip"
-    FINAL_VIDEO = "final_video"
-    THUMBNAIL = "thumbnail"
-    THUMBNAIL_PROMPT = "thumbnail_prompt"
-    TITLE = "title"
-    DESCRIPTION = "description"
-    HASHTAGS = "hashtags"
-    SUBTITLES = "subtitles"
-    METADATA = "metadata"
-
-
 class PublishPlatform(str, enum.Enum):
     TELEGRAM = "telegram"
     YOUTUBE = "youtube"
@@ -254,15 +198,6 @@ class PublishTargetConnectionStatus(str, enum.Enum):
     # The refresh token was rejected (revoked, expired, invalid_grant). Retrying every job
     # against it would burn quota and log noise forever; an operator must reconnect.
     RECONNECT_REQUIRED = "reconnect_required"
-
-
-class ConnectedNodeStatus(str, enum.Enum):
-    ONLINE = "online"
-    OFFLINE = "offline"
-    DEGRADED = "degraded"
-    UNKNOWN = "unknown"
-
-
 class AIExecutionStatus(str, enum.Enum):
     PENDING = "pending"
     RUNNING = "running"

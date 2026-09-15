@@ -102,14 +102,6 @@ class Settings(BaseSettings):
         default="ClipFlow Admin",
         alias="DEFAULT_ADMIN_FULL_NAME",
     )
-    default_admin_credits: int = Field(
-        default=999999,
-        alias="DEFAULT_ADMIN_CREDITS",
-    )
-    lab_unlimited_credit_phone_numbers: str = Field(
-        default="",
-        alias="LAB_UNLIMITED_CREDIT_PHONE_NUMBERS",
-    )
     otp_request_limit_per_ip_window: int = Field(
         default=5,
         alias="OTP_REQUEST_LIMIT_PER_IP_WINDOW",
@@ -142,22 +134,6 @@ class Settings(BaseSettings):
             return None
         code = str(self.fixed_test_otp or "").strip()
         return code or None
-    internal_default_product_name: str = Field(
-        default="Internal Default",
-        alias="INTERNAL_DEFAULT_PRODUCT_NAME",
-    )
-    internal_default_product_description: str = Field(
-        default="Produto técnico padrão para operação interna do ClipFlow",
-        alias="INTERNAL_DEFAULT_PRODUCT_DESCRIPTION",
-    )
-    internal_default_product_max_video_duration_sec: int = Field(
-        default=14400,
-        alias="INTERNAL_DEFAULT_PRODUCT_MAX_VIDEO_DURATION_SEC",
-    )
-    internal_default_product_max_shorts_generated: int = Field(
-        default=10,
-        alias="INTERNAL_DEFAULT_PRODUCT_MAX_SHORTS_GENERATED",
-    )
 
     # =====================================
     # Storage

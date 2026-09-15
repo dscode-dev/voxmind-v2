@@ -32,7 +32,17 @@ from app.services.selection_service import (
     SelectionService,
 )
 
-NOW = datetime(2026, 9, 3, 12, 0, tzinfo=timezone.utc)
+# The reference instant, taken from the clock rather than written down.
+#
+# It used to be a literal, and that made the file expire. The service tests pass `now=NOW`
+# explicitly and were fine, but the ones that go through `/admin/selection/run` cannot: the
+# endpoint has no `now` parameter, so it uses the real clock. Candidates built four hours
+# before a frozen date were fresh for about a week and then silently aged past the freshness
+# gate, and four tests started failing on a day when nothing had changed.
+#
+# Everything here is relative (`ago(hours=4)`), so anchoring to the real clock keeps every
+# relationship intact and keeps the frozen and the HTTP tests on the same timeline.
+NOW = datetime.now(timezone.utc)
 
 
 def ago(**kwargs) -> datetime:
@@ -373,7 +383,6 @@ def admin_user(db):
         full_name="Admin",
         role=UserRole.ADMIN,
         status=UserStatus.ACTIVE,
-        credits=100,
     )
     db.add(user)
     db.flush()

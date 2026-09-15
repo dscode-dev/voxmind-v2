@@ -15,27 +15,12 @@ class ClipJob(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "clip_jobs"
     __table_args__ = (
         Index("ix_clip_jobs_user_status", "user_id", "status"),
-        Index("ix_clip_jobs_purchase_status", "purchase_id", "status"),
         CheckConstraint("video_duration_sec >= 0", name="clip_jobs_video_duration_non_negative"),
     )
 
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-
-    purchase_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("purchases.id", ondelete="RESTRICT"),
-        nullable=False,
-        index=True,
-    )
-
-    product_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("billing_products.id", ondelete="RESTRICT"),
         nullable=False,
         index=True,
     )
@@ -96,8 +81,6 @@ class ClipJob(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     metadata_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     user = relationship("User", back_populates="jobs")
-    purchase = relationship("Purchase", back_populates="jobs")
-    product = relationship("BillingProduct", back_populates="jobs")
 
     assets = relationship("ClipAsset", back_populates="job", cascade="all, delete-orphan")
     events = relationship("JobEvent", back_populates="job", cascade="all, delete-orphan")

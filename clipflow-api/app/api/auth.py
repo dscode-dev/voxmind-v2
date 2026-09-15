@@ -9,7 +9,6 @@ from app.core.settings import settings
 from app.db.session import get_db
 from app.models.enums import UserRole, UserStatus
 from app.models.user import User
-from app.security.access_control import can_bypass_credits
 from app.security.auth_middleware import get_current_user
 from app.security.bootstrap_auth import resolve_bootstrap_code
 from app.security.phone import normalize_phone_number
@@ -60,7 +59,6 @@ class MeResponse(BaseModel):
     id: str
     full_name: str | None
     phone_number: str
-    credits: int
     status: str
     role: str
     is_admin: bool
@@ -127,14 +125,11 @@ def start_auth(
     now = datetime.now(timezone.utc)
 
     if not user:
-        user = User(
-            phone_number=phone_number,
-            full_name=payload.full_name,
-            credits=0,
-            token_version=1,
-        )
-        db.add(user)
-        db.flush()
+        # No self-service accounts. This deployment has one operator, created at startup from
+        # DEFAULT_ADMIN_PHONE_NUMBER; a number nobody provisioned is not a new customer, it is
+        # somebody else. The message is deliberately the same one a wrong code gets, so this
+        # cannot be used to find out which number is the operator's.
+        raise HTTPException(status_code=401, detail="Invalid code")
     else:
         if user.status in {UserStatus.SUSPENDED, UserStatus.DELETED}:
             raise HTTPException(status_code=403, detail="Account unavailable")
@@ -359,7 +354,6 @@ def me(user: User = Depends(get_current_user)):
         id=str(user.id),
         full_name=user.full_name,
         phone_number=user.phone_number,
-        credits=settings.default_admin_credits if can_bypass_credits(user) else user.credits,
         status=user.status.value,
         role=user.role.value,
         is_admin=user.role == UserRole.ADMIN,

@@ -51,7 +51,7 @@ def body_text(payload) -> str:
 def admin_user(db):
     user = User(
         phone_number="+5511977776666", full_name="Publisher Admin",
-        role=UserRole.ADMIN, status=UserStatus.ACTIVE, credits=100,
+        role=UserRole.ADMIN, status=UserStatus.ACTIVE,
     )
     db.add(user)
     db.flush()

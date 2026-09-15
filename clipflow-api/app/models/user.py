@@ -47,16 +47,6 @@ class User(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     )
 
     # ==============================
-    # Sistema de créditos
-    # ==============================
-
-    credits: Mapped[int] = mapped_column(
-        Integer,
-        nullable=False,
-        default=0,
-    )
-
-    # ==============================
     # Segurança JWT
     # ==============================
 
@@ -156,12 +146,6 @@ class User(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     # ==============================
     # Relacionamentos
     # ==============================
-
-    purchases = relationship(
-        "Purchase",
-        back_populates="user",
-        cascade="all, delete-orphan",
-    )
 
     jobs = relationship(
         "ClipJob",

@@ -15,14 +15,12 @@ from sqlalchemy.orm import Session
 from app.core.settings import settings
 from app.db.session import get_db
 from app.models.clip_job import ClipJob
-from app.models.billing_product import BillingProduct
-from app.models.purchase import Purchase
 from app.models.clip_asset import ClipAsset
-from app.models.enums import BillingProvider, ClipAssetType, JobEventType, JobSourceType, ProductType, PurchaseStatus
+from app.models.enums import ClipAssetType, JobEventType, JobSourceType
 from app.models.job_event import JobEvent
 from app.models.user import User
 from app.security.auth_middleware import get_current_user
-from app.security.access_control import can_bypass_credits, is_admin, scope_job_query
+from app.security.access_control import is_admin, scope_job_query
 from app.models.enums import JobStatus
 from app.services.asset_url_service import AssetUrlService
 from app.services.artifact_content_service import ArtifactContentService
@@ -54,7 +52,6 @@ class CreateJobInput(BaseModel):
     source_url: str | None = None
     source_type: str = Field(default="youtube_url")
     source_storage_key: str | None = None
-    product_id: str | None = None
     job_preset: str | None = Field(default=None)
     clip_mode: str = Field(default="short_serie")
     video_ratio: str = Field(default="portrait")
@@ -194,58 +191,6 @@ def _resolve_job_preset_config(
     if normalized_mode in {"raw_edit", "authorial_edit", "video_edit"}:
         return mapping["raw_edit"]
     return {**mapping["short_series"], "video_ratio": normalized_ratio}
-
-
-def _ensure_internal_default_product(db: Session) -> BillingProduct:
-    product = (
-        db.query(BillingProduct)
-        .filter(BillingProduct.code == ProductType.VIDEO_UP_TO_4H)
-        .order_by(BillingProduct.created_at.asc())
-        .first()
-    )
-    if product:
-        return product
-
-    product = BillingProduct(
-        code=ProductType.VIDEO_UP_TO_4H,
-        name=settings.internal_default_product_name,
-        description=settings.internal_default_product_description,
-        currency="BRL",
-        price_amount=1.00,
-        max_video_duration_sec=settings.internal_default_product_max_video_duration_sec,
-        max_shorts_generated=settings.internal_default_product_max_shorts_generated,
-        is_active=True,
-    )
-    db.add(product)
-    db.commit()
-    db.refresh(product)
-    return product
-
-
-def _ensure_internal_purchase(
-    db: Session,
-    *,
-    user_id,
-    product: BillingProduct,
-) -> Purchase:
-    purchase = Purchase(
-        user_id=user_id,
-        product_id=product.id,
-        billing_provider=BillingProvider.MANUAL,
-        status=PurchaseStatus.PAID,
-        currency=product.currency,
-        amount_total=product.price_amount,
-        provider_payment_id="internal-default",
-        provider_checkout_url=None,
-        provider_raw_payload={
-            "kind": "internal_default_purchase",
-            "reason": "job_created_without_checkout",
-        },
-    )
-    db.add(purchase)
-    db.commit()
-    db.refresh(purchase)
-    return purchase
 
 
 def _serialize_asset(asset: ClipAsset) -> dict:
@@ -465,36 +410,8 @@ def create_job(
         video_ratio=payload.video_ratio,
     )
 
-    product = None
-    if payload.product_id:
-        product = db.query(BillingProduct).filter(BillingProduct.id == payload.product_id).first()
-        if not product:
-            raise HTTPException(status_code=404, detail="Invalid product")
-    else:
-        product = (
-            db.query(BillingProduct)
-            .filter(BillingProduct.is_active == True)
-            .order_by(BillingProduct.price_amount.asc(), BillingProduct.created_at.asc())
-            .first()
-        )
-        if not product:
-            product = db.query(BillingProduct).order_by(BillingProduct.created_at.asc()).first()
-        if not product:
-            product = _ensure_internal_default_product(db)
-
-    if user.credits <= 0 and not can_bypass_credits(user):
-        raise HTTPException(status_code=402, detail="No credits")
-
-    purchase = _ensure_internal_purchase(
-        db,
-        user_id=user.id,
-        product=product,
-    )
-
     job = ClipJob(
         user_id=user.id,
-        purchase_id=purchase.id,
-        product_id=product.id,
         source_type=JobSourceType.DIRECT_UPLOAD if payload.source_storage_key else JobSourceType.YOUTUBE_URL,
         source_url=payload.source_url or f"clipflow-upload://{payload.source_storage_key}",
         source_storage_key=payload.source_storage_key,
@@ -539,11 +456,6 @@ def create_job(
             },
         )
     )
-
-    if not can_bypass_credits(user):
-        user.credits -= 1
-        if user.credits == 0:
-            user.token_version += 1
 
     db.commit()
     db.refresh(job)

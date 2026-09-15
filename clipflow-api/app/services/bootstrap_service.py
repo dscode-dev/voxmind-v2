@@ -30,7 +30,6 @@ class BootstrapService:
                 full_name=settings.default_admin_full_name,
                 role=UserRole.ADMIN,
                 status=UserStatus.ACTIVE,
-                credits=settings.default_admin_credits,
                 token_version=1,
             )
             db.add(user)
@@ -39,8 +38,6 @@ class BootstrapService:
             user.status = UserStatus.ACTIVE
             if not user.full_name:
                 user.full_name = settings.default_admin_full_name
-            if user.credits < settings.default_admin_credits:
-                user.credits = settings.default_admin_credits
 
         db.commit()
 

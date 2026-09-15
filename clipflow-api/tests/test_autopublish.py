@@ -1020,7 +1020,7 @@ def admin_user(db):
 
     user = User(
         phone_number="+5511955554444", full_name="Autopublish Admin",
-        role=UserRole.ADMIN, status=UserStatus.ACTIVE, credits=100,
+        role=UserRole.ADMIN, status=UserStatus.ACTIVE,
     )
     db.add(user)
     db.flush()

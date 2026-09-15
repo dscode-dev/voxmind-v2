@@ -843,7 +843,7 @@ def test_one_good_run_clears_the_penalty(db, no_event_fanout):
 def admin_user(db):
     user = User(
         phone_number="+5511966665555", full_name="Admin",
-        role=UserRole.ADMIN, status=UserStatus.ACTIVE, credits=100,
+        role=UserRole.ADMIN, status=UserStatus.ACTIVE,
     )
     db.add(user)
     db.flush()

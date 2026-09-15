@@ -2,7 +2,6 @@
 #
 # Build strategy (see README "Build"):
 #   clipflow-api          → clipflow-api/Dockerfile          (multi-stage, python:3.11-slim)
-#   voxmind-control-plane → control-plane/Dockerfile         (python:3.11-slim)
 #   voxmind-worker-base   → worker/Dockerfile.gpu.base       (CUDA runtime + torch + ASR models)
 #   voxmind-worker        → worker/Dockerfile.gpu            (FROM the base above)
 #
@@ -502,54 +501,6 @@ services:
       - worker_tmp:/tmp
       - ./worker/assets:/app/assets:ro
 
-  voxmind-control-plane:
-    build:
-      context: ./control-plane
-      dockerfile: Dockerfile
-    image: ${VOXMIND_CONTROL_PLANE_IMAGE:-clipflow-control-plane:local}
-    container_name: voxmind-control-plane
-    restart: unless-stopped
-    depends_on:
-      redis:
-        condition: service_healthy
-      minio-init:
-        condition: service_completed_successfully
-    environment:
-      ENV: docker
-      LOG_LEVEL: ${CONTROL_PLANE_LOG_LEVEL}
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
-      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
-      TELEGRAM_ALLOWED_CHAT_IDS: ${TELEGRAM_ALLOWED_CHAT_IDS:-}
-      TELEGRAM_ALLOWED_USER_IDS: ${TELEGRAM_ALLOWED_USER_IDS:-}
-      MINIO_ENDPOINT: minio:9000
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
-      MINIO_BUCKET: ${MINIO_BUCKET}
-      VOXMIND_REDIS_HOST: redis
-      VOXMIND_REDIS_PORT: 6379
-      VOXMIND_REDIS_QUEUE: ${VOXMIND_REDIS_QUEUE}
-      MIN_CUT_DURATION_SEC: ${MIN_CUT_DURATION_SEC}
-      SHORT_SERIE_MAX_GAP_SEC: ${SHORT_SERIE_MAX_GAP_SEC}
-      HEALTH_HOST: 0.0.0.0
-      HEALTH_PORT: 8000
-      CLIPFLOW_API_BASE_URL: http://clipflow-api:8000
-      CLIPFLOW_API_INTERNAL_TOKEN: ${INTERNAL_API_TOKEN}
-    ports:
-      - "${CONTROL_PLANE_PORT:-8000}:8000"
-    volumes:
-      - control_plane_tmp:/tmp
-    healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/health || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 10
-      start_period: 20s
-
-  # NOTE: the `clipflow-studio` service was removed in PR-BOOT-01. The frontend has never
-  # existed in this repository (it is listed in .gitignore and has no git history), so the
-  # service could never start and blocked `docker compose up`. It will be restored in a
-  # dedicated PR. See README "Frontend".
-
 volumes:
   redis_data:
   minio_data:
@@ -557,4 +508,3 @@ volumes:
   worker_work:
   worker_cache:
   worker_tmp:
-  control_plane_tmp:

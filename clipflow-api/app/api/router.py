@@ -1,10 +1,15 @@
+"""Every HTTP surface the application has.
+
+Ordered the way the flow runs, not alphabetically: the operator signs in, configures what to
+watch, the autonomous loop finds and admits videos, the worker reports progress, and what comes
+out is published and then measured.
+"""
 from fastapi import APIRouter
 
 from app.api import auth
 from app.api import admin
 from app.api import automation
 from app.api import discovery
-from app.api import evaluation
 from app.api import internal_worker
 from app.api import job_events
 from app.api import jobs
@@ -14,18 +19,13 @@ from app.api import pipeline_runs
 from app.api import operations
 from app.api import operations_read
 from app.api import publishing
-from app.api import products
-from app.api import purchases
-from app.api import register
-from app.api import script_jobs
-from app.api import users
 
 
 api_router = APIRouter()
 
 
 # ==========================================
-# Auth
+# Auth (one operator, phone + code)
 # ==========================================
 
 api_router.include_router(auth.router)
@@ -74,13 +74,6 @@ api_router.include_router(metrics.router)
 
 
 # ==========================================
-# Evaluation (canonical windows, reproducible performance dataset)
-# ==========================================
-
-api_router.include_router(evaluation.router)
-
-
-# ==========================================
 # Discovery (topics, sources, candidates)
 # ==========================================
 
@@ -120,38 +113,3 @@ api_router.include_router(ops_stream.router)
 # ==========================================
 
 api_router.include_router(pipeline_runs.router)
-
-
-# ==========================================
-# Products
-# ==========================================
-
-api_router.include_router(products.router)
-
-
-# ==========================================
-# Purchases
-# ==========================================
-
-api_router.include_router(purchases.router)
-
-
-# ==========================================
-# Script Jobs
-# ==========================================
-
-api_router.include_router(script_jobs.router)
-
-
-# ==========================================
-# Register
-# ==========================================
-
-api_router.include_router(register.router)
-
-
-# ==========================================
-# Users
-# ==========================================
-
-api_router.include_router(users.router)

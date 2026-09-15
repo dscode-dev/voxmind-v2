@@ -72,7 +72,6 @@ def admin_user(db):
         full_name="Admin",
         role=UserRole.ADMIN,
         status=UserStatus.ACTIVE,
-        credits=100,
     )
     db.add(user)
     db.flush()
