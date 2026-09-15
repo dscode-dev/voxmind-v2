@@ -13,6 +13,101 @@
 #
 # worker/Dockerfile (CPU-only, no CUDA) is a development/CI convenience and is NOT the
 # production path. It is not referenced here.
+#
+# `voxmind-worker` requires the NVIDIA runtime. On a host without an NVIDIA adapter it cannot
+# start at all — and it fails at container *creation*, so there is no container and no log to
+# look at; the job queue simply fills and nothing drains it. `voxmind-worker-cpu` (profile
+# `cpu`) runs the same image with the devices forced to cpu, for exactly that host:
+#
+#   docker compose --profile cpu up -d voxmind-worker-cpu
+#
+# Run one or the other, never both: they claim from the same queue.
+
+x-worker-env: &worker-env
+    WORKER_MODE: queue
+    WORKER_ID: ${WORKER_ID:-}
+    WORKER_MAX_ATTEMPTS: ${WORKER_MAX_ATTEMPTS:-3}
+    WORKER_VISIBILITY_TIMEOUT_SEC: ${WORKER_VISIBILITY_TIMEOUT_SEC:-900}
+    WORKER_HEARTBEAT_INTERVAL_SEC: ${WORKER_HEARTBEAT_INTERVAL_SEC:-15}
+    WORKER_HEARTBEAT_TTL_SEC: ${WORKER_HEARTBEAT_TTL_SEC:-60}
+    WORKER_RETRY_BACKOFF_BASE_SEC: ${WORKER_RETRY_BACKOFF_BASE_SEC:-30}
+    WORKER_RETRY_BACKOFF_MAX_SEC: ${WORKER_RETRY_BACKOFF_MAX_SEC:-600}
+    WORKER_CLAIM_BLOCK_SEC: ${WORKER_CLAIM_BLOCK_SEC:-5}
+    KEEP_WORKDIR_ON_FAILURE: ${KEEP_WORKDIR_ON_FAILURE:-false}
+    DOWNLOAD_TIMEOUT_SEC: ${DOWNLOAD_TIMEOUT_SEC:-3600}
+    FFMPEG_TIMEOUT_SEC: ${FFMPEG_TIMEOUT_SEC:-3600}
+    FFPROBE_TIMEOUT_SEC: ${FFPROBE_TIMEOUT_SEC:-120}
+    SUBPROCESS_STDERR_CAPTURE_CHARS: ${SUBPROCESS_STDERR_CAPTURE_CHARS:-4000}
+    AI_MODE: ${AI_MODE:-automatic}
+    OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+    LOCAL_LLM_ENABLED: ${LOCAL_LLM_ENABLED:-false}
+    LOCAL_LLM_BASE_URL: ${LOCAL_LLM_BASE_URL:-}
+    LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-qwen3:8b}
+    LOG_LEVEL: ${WORKER_LOG_LEVEL}
+    VIDEO_URL: ""
+    PIPELINE_STAGE: prepare
+    WORK_DIR: /work
+    ASR_MODEL_SIZE: ${ASR_MODEL_SIZE}
+    ASR_DEVICE: ${ASR_DEVICE}
+    ASR_COMPUTE_TYPE: ${ASR_COMPUTE_TYPE}
+    ASR_CPU_THREADS: ${ASR_CPU_THREADS}
+    ASR_BEAM_SIZE: ${ASR_BEAM_SIZE}
+    ASR_VAD_FILTER: ${ASR_VAD_FILTER}
+    ASR_WINDOW_DURATION_SEC: ${ASR_WINDOW_DURATION_SEC:-${ASR_SEGMENT_DURATION_SEC:-900}}
+    ASR_WINDOW_OVERLAP_SEC: ${ASR_WINDOW_OVERLAP_SEC:-5}
+    ASR_WORD_TIMESTAMPS: ${ASR_WORD_TIMESTAMPS:-false}
+    ASR_SEAM_MIN_TEMPORAL_IOU: ${ASR_SEAM_MIN_TEMPORAL_IOU:-0.30}
+    ASR_SEAM_MIN_TEXT_SIMILARITY: ${ASR_SEAM_MIN_TEXT_SIMILARITY:-0.60}
+    ASR_SEAM_STRONG_TEXT_SIMILARITY: ${ASR_SEAM_STRONG_TEXT_SIMILARITY:-0.85}
+    ASR_STRIP_FILLERS: ${ASR_STRIP_FILLERS:-false}
+    ASR_PARALLEL_WORKERS: ${ASR_PARALLEL_WORKERS}
+    ASR_MAX_MERGED_SEGMENT_DURATION_SEC: ${ASR_MAX_MERGED_SEGMENT_DURATION_SEC}
+    DIARIZATION_ENABLED: ${DIARIZATION_ENABLED}
+    DIARIZATION_MODEL_NAME: ${DIARIZATION_MODEL_NAME}
+    DIARIZATION_DEVICE: ${DIARIZATION_DEVICE}
+    DIARIZATION_HF_TOKEN: ${DIARIZATION_HF_TOKEN}
+    DIARIZATION_MIN_OVERLAP_SEC: ${DIARIZATION_MIN_OVERLAP_SEC}
+    RENDER_MIN_CLIP_DURATION_SEC: ${RENDER_MIN_CLIP_DURATION_SEC}
+    RENDER_BOUNDARY_SNAP_TOLERANCE_SEC: ${RENDER_BOUNDARY_SNAP_TOLERANCE_SEC}
+    QA_ENABLED: ${QA_ENABLED}
+    AUTO_REVIEW_ENABLED: ${AUTO_REVIEW_ENABLED}
+    AUTO_REVIEW_READY_SCORE_THRESHOLD: ${AUTO_REVIEW_READY_SCORE_THRESHOLD}
+    AUTO_REVIEW_BLOCKED_SCORE_THRESHOLD: ${AUTO_REVIEW_BLOCKED_SCORE_THRESHOLD}
+    AUTO_REVIEW_MAX_REVIEW_CLIPS: ${AUTO_REVIEW_MAX_REVIEW_CLIPS}
+    FINAL_QA_ENABLED: ${FINAL_QA_ENABLED:-true}
+    FINAL_QA_DURATION_TOLERANCE_SEC: ${FINAL_QA_DURATION_TOLERANCE_SEC:-1.5}
+    FINAL_QA_MAX_SILENCE_SEC: ${FINAL_QA_MAX_SILENCE_SEC:-8}
+    FINAL_QA_BLACK_RATIO: ${FINAL_QA_BLACK_RATIO:-0.60}
+    FINAL_QA_MAX_FREEZE_SEC: ${FINAL_QA_MAX_FREEZE_SEC:-4}
+    FINAL_QA_DECODE_TIMEOUT_SEC: ${FINAL_QA_DECODE_TIMEOUT_SEC:-900}
+    TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+    TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
+    TELEGRAM_DISABLE_NOTIFICATIONS: ${TELEGRAM_DISABLE_NOTIFICATIONS}
+    TELEGRAM_TIMEOUT_SEC: ${TELEGRAM_TIMEOUT_SEC}
+    TELEGRAM_UPLOAD_TIMEOUT_SEC: ${TELEGRAM_UPLOAD_TIMEOUT_SEC}
+    MINIO_ENDPOINT: minio:9000
+    MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+    MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    MINIO_BUCKET: ${MINIO_BUCKET}
+    HF_HOME: /cache
+    TRANSFORMERS_CACHE: /cache
+    HF_HUB_CACHE: /cache/huggingface/hub
+    TORCH_HOME: /cache/torch
+    PYANNOTE_CACHE: /cache/pyannote
+    SPEECHBRAIN_CACHE_DIR: /cache/speechbrain
+    XDG_CACHE_HOME: /tmp/.cache
+    XDG_CONFIG_HOME: /tmp/.config
+    MPLCONFIGDIR: /tmp/matplotlib
+    HOME: /tmp/home
+    CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES}
+    CLIPFLOW_API_ENABLED: ${CLIPFLOW_API_ENABLED}
+    CLIPFLOW_API_BASE_URL: http://clipflow-api:8000
+    CLIPFLOW_API_TIMEOUT_SEC: ${CLIPFLOW_API_TIMEOUT_SEC}
+    CLIPFLOW_API_INTERNAL_TOKEN: ${INTERNAL_API_TOKEN}
+    VOXMIND_REDIS_HOST: redis
+    VOXMIND_REDIS_PORT: 6379
+    VOXMIND_REDIS_QUEUE: ${VOXMIND_REDIS_QUEUE}
 
 services:
   redis:
@@ -359,96 +454,53 @@ services:
       clipflow-api:
         condition: service_healthy
     environment:
-      WORKER_MODE: queue
-      WORKER_ID: ${WORKER_ID:-}
-      WORKER_MAX_ATTEMPTS: ${WORKER_MAX_ATTEMPTS:-3}
-      WORKER_VISIBILITY_TIMEOUT_SEC: ${WORKER_VISIBILITY_TIMEOUT_SEC:-900}
-      WORKER_HEARTBEAT_INTERVAL_SEC: ${WORKER_HEARTBEAT_INTERVAL_SEC:-15}
-      WORKER_HEARTBEAT_TTL_SEC: ${WORKER_HEARTBEAT_TTL_SEC:-60}
-      WORKER_RETRY_BACKOFF_BASE_SEC: ${WORKER_RETRY_BACKOFF_BASE_SEC:-30}
-      WORKER_RETRY_BACKOFF_MAX_SEC: ${WORKER_RETRY_BACKOFF_MAX_SEC:-600}
-      WORKER_CLAIM_BLOCK_SEC: ${WORKER_CLAIM_BLOCK_SEC:-5}
-      KEEP_WORKDIR_ON_FAILURE: ${KEEP_WORKDIR_ON_FAILURE:-false}
-      DOWNLOAD_TIMEOUT_SEC: ${DOWNLOAD_TIMEOUT_SEC:-3600}
-      FFMPEG_TIMEOUT_SEC: ${FFMPEG_TIMEOUT_SEC:-3600}
-      FFPROBE_TIMEOUT_SEC: ${FFPROBE_TIMEOUT_SEC:-120}
-      SUBPROCESS_STDERR_CAPTURE_CHARS: ${SUBPROCESS_STDERR_CAPTURE_CHARS:-4000}
-      AI_MODE: ${AI_MODE:-automatic}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
-      LOCAL_LLM_ENABLED: ${LOCAL_LLM_ENABLED:-false}
-      LOCAL_LLM_BASE_URL: ${LOCAL_LLM_BASE_URL:-}
-      LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-qwen3:8b}
-      LOG_LEVEL: ${WORKER_LOG_LEVEL}
-      VIDEO_URL: ""
-      PIPELINE_STAGE: prepare
-      WORK_DIR: /work
-      ASR_MODEL_SIZE: ${ASR_MODEL_SIZE}
-      ASR_DEVICE: ${ASR_DEVICE}
-      ASR_COMPUTE_TYPE: ${ASR_COMPUTE_TYPE}
-      ASR_CPU_THREADS: ${ASR_CPU_THREADS}
-      ASR_BEAM_SIZE: ${ASR_BEAM_SIZE}
-      ASR_VAD_FILTER: ${ASR_VAD_FILTER}
-      ASR_WINDOW_DURATION_SEC: ${ASR_WINDOW_DURATION_SEC:-${ASR_SEGMENT_DURATION_SEC:-900}}
-      ASR_WINDOW_OVERLAP_SEC: ${ASR_WINDOW_OVERLAP_SEC:-5}
-      ASR_WORD_TIMESTAMPS: ${ASR_WORD_TIMESTAMPS:-false}
-      ASR_SEAM_MIN_TEMPORAL_IOU: ${ASR_SEAM_MIN_TEMPORAL_IOU:-0.30}
-      ASR_SEAM_MIN_TEXT_SIMILARITY: ${ASR_SEAM_MIN_TEXT_SIMILARITY:-0.60}
-      ASR_SEAM_STRONG_TEXT_SIMILARITY: ${ASR_SEAM_STRONG_TEXT_SIMILARITY:-0.85}
-      ASR_STRIP_FILLERS: ${ASR_STRIP_FILLERS:-false}
-      ASR_PARALLEL_WORKERS: ${ASR_PARALLEL_WORKERS}
-      ASR_MAX_MERGED_SEGMENT_DURATION_SEC: ${ASR_MAX_MERGED_SEGMENT_DURATION_SEC}
-      DIARIZATION_ENABLED: ${DIARIZATION_ENABLED}
-      DIARIZATION_MODEL_NAME: ${DIARIZATION_MODEL_NAME}
-      DIARIZATION_DEVICE: ${DIARIZATION_DEVICE}
-      DIARIZATION_HF_TOKEN: ${DIARIZATION_HF_TOKEN}
-      DIARIZATION_MIN_OVERLAP_SEC: ${DIARIZATION_MIN_OVERLAP_SEC}
-      RENDER_MIN_CLIP_DURATION_SEC: ${RENDER_MIN_CLIP_DURATION_SEC}
-      RENDER_BOUNDARY_SNAP_TOLERANCE_SEC: ${RENDER_BOUNDARY_SNAP_TOLERANCE_SEC}
-      QA_ENABLED: ${QA_ENABLED}
-      AUTO_REVIEW_ENABLED: ${AUTO_REVIEW_ENABLED}
-      AUTO_REVIEW_READY_SCORE_THRESHOLD: ${AUTO_REVIEW_READY_SCORE_THRESHOLD}
-      AUTO_REVIEW_BLOCKED_SCORE_THRESHOLD: ${AUTO_REVIEW_BLOCKED_SCORE_THRESHOLD}
-      AUTO_REVIEW_MAX_REVIEW_CLIPS: ${AUTO_REVIEW_MAX_REVIEW_CLIPS}
-      FINAL_QA_ENABLED: ${FINAL_QA_ENABLED:-true}
-      FINAL_QA_DURATION_TOLERANCE_SEC: ${FINAL_QA_DURATION_TOLERANCE_SEC:-1.5}
-      FINAL_QA_MAX_SILENCE_SEC: ${FINAL_QA_MAX_SILENCE_SEC:-8}
-      FINAL_QA_BLACK_RATIO: ${FINAL_QA_BLACK_RATIO:-0.60}
-      FINAL_QA_MAX_FREEZE_SEC: ${FINAL_QA_MAX_FREEZE_SEC:-4}
-      FINAL_QA_DECODE_TIMEOUT_SEC: ${FINAL_QA_DECODE_TIMEOUT_SEC:-900}
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
-      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
-      TELEGRAM_DISABLE_NOTIFICATIONS: ${TELEGRAM_DISABLE_NOTIFICATIONS}
-      TELEGRAM_TIMEOUT_SEC: ${TELEGRAM_TIMEOUT_SEC}
-      TELEGRAM_UPLOAD_TIMEOUT_SEC: ${TELEGRAM_UPLOAD_TIMEOUT_SEC}
-      MINIO_ENDPOINT: minio:9000
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
-      MINIO_BUCKET: ${MINIO_BUCKET}
-      HF_HOME: /cache
-      TRANSFORMERS_CACHE: /cache
-      HF_HUB_CACHE: /cache/huggingface/hub
-      TORCH_HOME: /cache/torch
-      PYANNOTE_CACHE: /cache/pyannote
-      SPEECHBRAIN_CACHE_DIR: /cache/speechbrain
-      XDG_CACHE_HOME: /tmp/.cache
-      XDG_CONFIG_HOME: /tmp/.config
-      MPLCONFIGDIR: /tmp/matplotlib
-      HOME: /tmp/home
-      CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES}
-      CLIPFLOW_API_ENABLED: ${CLIPFLOW_API_ENABLED}
-      CLIPFLOW_API_BASE_URL: http://clipflow-api:8000
-      CLIPFLOW_API_TIMEOUT_SEC: ${CLIPFLOW_API_TIMEOUT_SEC}
-      CLIPFLOW_API_INTERNAL_TOKEN: ${INTERNAL_API_TOKEN}
-      VOXMIND_REDIS_HOST: redis
-      VOXMIND_REDIS_PORT: 6379
-      VOXMIND_REDIS_QUEUE: ${VOXMIND_REDIS_QUEUE}
+      <<: *worker-env
     volumes:
       - worker_work:/work
       - worker_cache:/cache
       - worker_tmp:/tmp
       - ./worker/assets:/app/assets:ro
     gpus: all
+
+  # The same worker, on a host with no NVIDIA adapter.
+  #
+  # `voxmind-worker` above asks for `gpus: all`. Where the NVIDIA runtime finds no
+  # adapter the container fails to be *created* — so there is no container, no log line,
+  # and no worker claiming jobs. The queue fills and nothing drains it, which looks from
+  # the console exactly like a pipeline stuck in `queued`/`prepare`.
+  #
+  # Same image, deliberately: torch reports CUDA unavailable and continues, and
+  # faster-whisper loads on CPU, so a second image would be a second thing to build and
+  # keep in step for no gain. Only the device settings differ, and they are forced here
+  # rather than read from .env — a CPU worker told to use cuda fails at the first clip.
+  #
+  # Opt in, because it is much slower than the GPU path and must never start by accident
+  # beside it — two workers would both claim from the same queue:
+  #   docker compose --profile cpu up -d voxmind-worker-cpu
+  voxmind-worker-cpu:
+    profiles: ["cpu"]
+    image: ${VOXMIND_WORKER_IMAGE:-clipflow-worker:local}
+    container_name: voxmind-worker-cpu
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      clipflow-api:
+        condition: service_healthy
+    environment:
+      <<: *worker-env
+      ASR_DEVICE: cpu
+      # float16 is a GPU compute type; int8 is what runs on a CPU at a usable speed.
+      ASR_COMPUTE_TYPE: ${ASR_COMPUTE_TYPE_CPU:-int8}
+      DIARIZATION_DEVICE: cpu
+      CUDA_VISIBLE_DEVICES: ""
+    volumes:
+      - worker_work:/work
+      - worker_cache:/cache
+      - worker_tmp:/tmp
+      - ./worker/assets:/app/assets:ro
 
   voxmind-control-plane:
     build:
