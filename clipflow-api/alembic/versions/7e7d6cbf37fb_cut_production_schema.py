@@ -3,17 +3,16 @@
 This replaces sixteen migrations. They are gone rather than superseded because most of what
 they built is gone too: the billing products, the purchases and the credit ledger, the
 seed-URL scheduler, the script jobs, and two tables nothing ever read. A chain that keeps
-creating tables no model maps is not history worth preserving — it is the debris this
-refactor exists to remove, re-created on every fresh install.
+creating tables no model maps is not history worth preserving.
 
 Every table here is on the path a video takes: the operator, the pipelines they configure,
-what those pipelines find, the runs that turn a find into cuts, what the cuts become on the
-channel, and what the channel says about them afterwards.
+the cycles those pipelines execute, what the cycles find, the productions they start, what
+those become on the channel, and what the channel says about them afterwards.
 
-There is no upgrade path from the old chain, deliberately and with the owner's agreement: the
+There is no upgrade path from the old chain, deliberately and with the owner agreement: the
 database is recreated.
 
-Revision ID: 1db6dfbef733
+Revision ID: 7e7d6cbf37fb
 Revises:
 Create Date: 2026-09-15
 
@@ -25,7 +24,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = '1db6dfbef733'
+revision: str = '7e7d6cbf37fb'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -126,6 +125,32 @@ def upgrade() -> None:
     op.create_index(op.f('ix_audit_logs_actor_user_id'), 'audit_logs', ['actor_user_id'], unique=False)
     op.create_index('ix_audit_logs_ip_created', 'audit_logs', ['ip_address', 'created_at'], unique=False)
     op.create_index('ix_audit_logs_target_created', 'audit_logs', ['target_type', 'target_id', 'created_at'], unique=False)
+    op.create_table('automation_runs',
+    sa.Column('pipeline_id', sa.UUID(), nullable=True),
+    sa.Column('trigger', sa.String(length=32), nullable=False),
+    sa.Column('actor', sa.String(length=64), nullable=True),
+    sa.Column('status', sa.String(length=32), nullable=False),
+    sa.Column('skip_reason', sa.String(length=64), nullable=True),
+    sa.Column('production_status', sa.String(length=32), nullable=False),
+    sa.Column('started_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('finished_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('settled_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('duration_ms', sa.Integer(), nullable=False),
+    sa.Column('discovered', sa.Integer(), nullable=False),
+    sa.Column('selected', sa.Integer(), nullable=False),
+    sa.Column('admitted', sa.Integer(), nullable=False),
+    sa.Column('publications_queued', sa.Integer(), nullable=False),
+    sa.Column('published', sa.Integer(), nullable=False),
+    sa.Column('stages_json', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    sa.Column('id', sa.UUID(), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.ForeignKeyConstraint(['pipeline_id'], ['pipelines.id'], ondelete='SET NULL'),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index('ix_automation_runs_open', 'automation_runs', ['production_status'], unique=False)
+    op.create_index(op.f('ix_automation_runs_pipeline_id'), 'automation_runs', ['pipeline_id'], unique=False)
+    op.create_index('ix_automation_runs_pipeline_started', 'automation_runs', ['pipeline_id', 'started_at'], unique=False)
     op.create_table('automation_states',
     sa.Column('pipeline_id', sa.UUID(), nullable=False),
     sa.Column('next_due_at', sa.DateTime(timezone=True), nullable=True),
@@ -189,7 +214,7 @@ def upgrade() -> None:
     op.create_index('ix_clip_jobs_user_status', 'clip_jobs', ['user_id', 'status'], unique=False)
     op.create_table('discovery_sources',
     sa.Column('pipeline_id', sa.UUID(), nullable=False),
-    sa.Column('kind', sa.Enum('YOUTUBE_TRENDING', 'YOUTUBE_SEARCH', 'NEWS', 'RSS', 'MANUAL', name='discovery_source_kind_enum'), nullable=False),
+    sa.Column('kind', sa.Enum('YOUTUBE_SEARCH', 'RSS', 'MANUAL', name='discovery_source_kind_enum'), nullable=False),
     sa.Column('name', sa.String(length=255), nullable=True),
     sa.Column('is_active', sa.Boolean(), nullable=False),
     sa.Column('config_json', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
@@ -354,13 +379,16 @@ def upgrade() -> None:
     sa.Column('finished_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('error_message', sa.Text(), nullable=True),
     sa.Column('metadata_json', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    sa.Column('automation_run_id', sa.UUID(), nullable=True),
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.ForeignKeyConstraint(['automation_run_id'], ['automation_runs.id'], ondelete='SET NULL'),
     sa.ForeignKeyConstraint(['candidate_id'], ['video_candidates.id'], ondelete='SET NULL'),
     sa.ForeignKeyConstraint(['pipeline_id'], ['pipelines.id'], ondelete='SET NULL'),
     sa.PrimaryKeyConstraint('id')
     )
+    op.create_index(op.f('ix_pipeline_jobs_automation_run_id'), 'pipeline_jobs', ['automation_run_id'], unique=False)
     op.create_index('ix_pipeline_jobs_pending_enqueue', 'pipeline_jobs', ['enqueued_at'], unique=False, postgresql_where=sa.text('enqueued_at IS NULL'))
     op.create_index(op.f('ix_pipeline_jobs_pipeline_id'), 'pipeline_jobs', ['pipeline_id'], unique=False)
     op.create_index('ix_pipeline_jobs_pipeline_state', 'pipeline_jobs', ['pipeline_id', 'state'], unique=False)
@@ -505,6 +533,7 @@ def downgrade() -> None:
     op.drop_index('ix_pipeline_jobs_pipeline_state', table_name='pipeline_jobs')
     op.drop_index(op.f('ix_pipeline_jobs_pipeline_id'), table_name='pipeline_jobs')
     op.drop_index('ix_pipeline_jobs_pending_enqueue', table_name='pipeline_jobs', postgresql_where=sa.text('enqueued_at IS NULL'))
+    op.drop_index(op.f('ix_pipeline_jobs_automation_run_id'), table_name='pipeline_jobs')
     op.drop_table('pipeline_jobs')
     op.drop_index('uq_video_candidates_dedup_hash', table_name='video_candidates', postgresql_where=sa.text('dedup_hash IS NOT NULL'))
     op.drop_index('ix_video_candidates_source_status', table_name='video_candidates')
@@ -538,6 +567,10 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_automation_states_pipeline_id'), table_name='automation_states')
     op.drop_index('ix_automation_states_next_due', table_name='automation_states')
     op.drop_table('automation_states')
+    op.drop_index('ix_automation_runs_pipeline_started', table_name='automation_runs')
+    op.drop_index(op.f('ix_automation_runs_pipeline_id'), table_name='automation_runs')
+    op.drop_index('ix_automation_runs_open', table_name='automation_runs')
+    op.drop_table('automation_runs')
     op.drop_index('ix_audit_logs_target_created', table_name='audit_logs')
     op.drop_index('ix_audit_logs_ip_created', table_name='audit_logs')
     op.drop_index(op.f('ix_audit_logs_actor_user_id'), table_name='audit_logs')

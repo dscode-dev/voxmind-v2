@@ -189,6 +189,10 @@ class AutomationRunReport:
     publication: StageResult = field(default_factory=lambda: StageResult("publication"))
     pending_enqueue_recovered: int = 0
     duration_ms: int = 0
+    # The productions this cycle started, so the run can be settled when they finish. Not in
+    # `as_dict` — it is plumbing between the orchestrator and the recorder, not part of the
+    # report an operator reads.
+    admitted_job_ids: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -400,6 +404,11 @@ class AutonomousPipelineService:
         payload = result.as_dict()
         report.admission.status = OK
         report.admission.run_id = result.run_id
+        report.admitted_job_ids = [
+            decision["pipeline_job_id"]
+            for decision in payload.get("admitted") or []
+            if decision.get("pipeline_job_id")
+        ]
         report.admission.counts = {
             **payload["counts"],
             "selected_waiting": payload["selected_waiting"],

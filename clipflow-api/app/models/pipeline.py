@@ -81,3 +81,4 @@ class Pipeline(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         cascade="all, delete-orphan",
     )
     jobs = relationship("PipelineJob", back_populates="pipeline")
+    runs = relationship("AutomationRun", back_populates="pipeline")

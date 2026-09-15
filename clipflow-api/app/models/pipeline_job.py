@@ -86,7 +86,19 @@ class PipelineJob(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 
     metadata_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
+    # Which cycle admitted this production. Null for a studio job, which belongs to no cycle.
+    #
+    # A column rather than a key inside `metadata_json`: the run has to find its productions
+    # to know whether it is finished, and that is a query, not a lookup.
+    automation_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("automation_runs.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
     pipeline = relationship("Pipeline", back_populates="jobs")
+    automation_run = relationship("AutomationRun", back_populates="jobs")
     candidate = relationship("VideoCandidate", back_populates="jobs")
 
     events = relationship(

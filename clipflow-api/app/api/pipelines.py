@@ -26,6 +26,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
+from app.models.automation_run import AutomationRun
 from app.models.automation_state import AutomationState
 from app.models.discovery_source import DiscoverySource
 from app.models.enums import DiscoverySourceKind, PipelineState, VideoCandidateStatus
@@ -40,6 +41,10 @@ from app.services.automation_service import AutomationConfig
 
 router = APIRouter()
 audit_service = AuditService()
+
+# Um teto para a listagem de execuções. Uma página sem limite é uma varredura
+# da tabela esperando para acontecer.
+MAX_PAGE_SIZE = 100
 
 
 class AutomationInput(BaseModel):
@@ -372,6 +377,96 @@ def delete_source(
     db.delete(source)
     db.commit()
     return {"status": "deleted", "id": str(source_id), "candidates_kept": int(found)}
+
+
+# =============================================================================
+# Runs
+# =============================================================================
+
+
+@router.get("/admin/pipelines/{pipeline_id}/runs")
+def list_runs(
+    pipeline_id: uuid.UUID,
+    limit: int = 25,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    """The cycles this pipeline has executed, newest first.
+
+    Every execution appears, including the ones that decided to do nothing. A skipped cycle
+    with its reason is the answer to "why is nothing happening?", and hiding it would leave
+    the operator staring at an empty list with no way to tell the difference between "it never
+    ran" and "it ran and found nothing".
+    """
+    _require(db, pipeline_id)
+    runs = (
+        db.query(AutomationRun)
+        .filter(AutomationRun.pipeline_id == pipeline_id)
+        .order_by(AutomationRun.started_at.desc())
+        .limit(max(1, min(limit, MAX_PAGE_SIZE)))
+        .all()
+    )
+    return [_serialize_run(run) for run in runs]
+
+
+@router.get("/admin/pipelines/{pipeline_id}/runs/{run_id}")
+def get_run(
+    pipeline_id: uuid.UUID,
+    run_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    """One cycle, with the stage-by-stage report and the productions it started."""
+    _require(db, pipeline_id)
+    run = (
+        db.query(AutomationRun)
+        .filter(AutomationRun.id == run_id, AutomationRun.pipeline_id == pipeline_id)
+        .first()
+    )
+    if run is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown run")
+
+    payload = _serialize_run(run)
+    payload["stages"] = run.stages_json or {}
+    payload["productions"] = [
+        {
+            "id": str(job.id),
+            "state": job.state.value if job.state else None,
+            "title": job.source_url,
+        }
+        for job in (
+            db.query(PipelineJob)
+            .filter(PipelineJob.automation_run_id == run.id)
+            .order_by(PipelineJob.created_at.asc())
+            .all()
+        )
+    ]
+    return payload
+
+
+def _serialize_run(run: AutomationRun) -> dict[str, Any]:
+    return {
+        "id": str(run.id),
+        "pipeline_id": str(run.pipeline_id) if run.pipeline_id else None,
+        "trigger": run.trigger,
+        "actor": run.actor,
+        "status": run.status,
+        "skip_reason": run.skip_reason,
+        # Separate from `status` on purpose: a cycle can have completed perfectly and still be
+        # waiting on four renders.
+        "production_status": run.production_status,
+        "started_at": run.started_at,
+        "finished_at": run.finished_at,
+        "settled_at": run.settled_at,
+        "duration_ms": run.duration_ms,
+        "counts": {
+            "discovered": run.discovered,
+            "selected": run.selected,
+            "admitted": run.admitted,
+            "publications_queued": run.publications_queued,
+            "published": run.published,
+        },
+    }
 
 
 # =============================================================================

@@ -40,6 +40,7 @@ from sqlalchemy.orm import Session
 from app.core.settings import settings
 from app.models.automation_state import AutomationState
 from app.models.pipeline import Pipeline
+from app.services.automation_run_service import AutomationRunService
 from app.services.automation_service import (
     FAILED,
     AutomationConfig,
@@ -76,6 +77,7 @@ class TickReport:
     enabled: bool = True
     pipelines_considered: int = 0
     pending_enqueue_recovered: int = 0
+    runs_settled: int = 0
     runs: list[dict[str, Any]] = field(default_factory=list)
     skipped: list[dict[str, Any]] = field(default_factory=list)
     duration_ms: int = 0
@@ -87,6 +89,7 @@ class TickReport:
             "enabled": self.enabled,
             "pipelines_considered": self.pipelines_considered,
             "pending_enqueue_recovered": self.pending_enqueue_recovered,
+            "runs_settled": self.runs_settled,
             "ran": len(self.runs),
             "skipped": len(self.skipped),
             "runs": self.runs,
@@ -112,8 +115,13 @@ def deterministic_jitter_seconds(pipeline_id: Any, spread_seconds: int = 120) ->
 class AutomationScheduler:
     """Finds due pipelines and runs them, one at a time, under lock."""
 
-    def __init__(self, pipeline: AutonomousPipelineService | None = None) -> None:
+    def __init__(
+        self,
+        pipeline: AutonomousPipelineService | None = None,
+        runs: AutomationRunService | None = None,
+    ) -> None:
         self.pipeline = pipeline or AutonomousPipelineService()
+        self.runs = runs or AutomationRunService()
 
     # ------------------------------------------------------------------- tick
 
@@ -138,6 +146,11 @@ class AutomationScheduler:
 
         # Orphans first: work already decided on, stranded before it reached the queue.
         report.pending_enqueue_recovered = self.pipeline.recover_pending_enqueue(db)
+
+        # Then close the cycles whose productions have finished since the last pass. Asked
+        # here rather than reported by the worker: the worker knows one production's state and
+        # not whether it was the last one its cycle was waiting for.
+        report.runs_settled = self.runs.settle_finished(db)
 
         pipelines = (
             db.query(Pipeline)
@@ -172,6 +185,8 @@ class AutomationScheduler:
         pipeline: Pipeline,
         now: datetime | None = None,
         force: bool = False,
+        trigger: str = "tick",
+        actor: str | None = None,
     ) -> AutomationRunReport | dict[str, Any] | None:
         """Run this pipeline if it is due and nothing else is running it.
 
@@ -246,7 +261,7 @@ class AutomationScheduler:
                 report.skip_reason = type(exc).__name__
                 report.finished_at = datetime.now(timezone.utc)
 
-            self._settle(db, state, config, report, now)
+            self._settle(db, state, config, report, now, trigger=trigger, actor=actor)
             return report
 
     # ---------------------------------------------------------------- state
@@ -306,6 +321,8 @@ class AutomationScheduler:
         config: AutomationConfig,
         report: AutomationRunReport,
         now: datetime,
+        trigger: str = "tick",
+        actor: str | None = None,
     ) -> None:
         """Record the outcome and schedule the next run.
 
@@ -317,6 +334,19 @@ class AutomationScheduler:
         state.last_completed_at = report.finished_at or datetime.now(timezone.utc)
         state.last_status = report.status
         state.last_automation_run_id = report.automation_run_id
+
+        # The cycle becomes a row here, where every path — worked, skipped, crashed — already
+        # converges. A cycle that decided to do nothing is a fact worth keeping: it is the
+        # answer to "why is nothing happening?".
+        run = self.runs.record(
+            db,
+            pipeline_id=state.pipeline_id,
+            report=report,
+            trigger=trigger,
+            actor=actor,
+        )
+        if run is not None:
+            self.runs.attach(db, run.id, report.admitted_job_ids)
 
         if report.status == FAILED:
             state.consecutive_failures = (state.consecutive_failures or 0) + 1

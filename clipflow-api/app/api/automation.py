@@ -188,7 +188,16 @@ def run_pipeline_now(
     scheduler = _scheduler()
     # Forced: a manual trigger means "now", so the due check is bypassed — but the lock and
     # the overlap guard are not.
-    outcome = scheduler.run_pipeline_if_due(db, pipeline=pipeline, now=datetime.now(timezone.utc), force=True)
+    outcome = scheduler.run_pipeline_if_due(
+        db,
+        pipeline=pipeline,
+        now=datetime.now(timezone.utc),
+        force=True,
+        # Recorded on the run: "did this happen because I pressed the button, or on its
+        # own?" is the first question asked about a surprising cycle.
+        trigger="manual",
+        actor=str(admin.phone_number),
+    )
 
     audit_service.log(
         db,
