@@ -16,10 +16,12 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.settings import settings
 from app.db.session import get_db
+from app.models.automation_run import AutomationRun
 from app.models.automation_state import AutomationState
 from app.models.pipeline import Pipeline
 from app.models.enums import VideoCandidateStatus
@@ -87,6 +89,8 @@ def automation_status(
         backlog[pipeline_id] = backlog.get(pipeline_id, 0) + 1
 
     runners = AutomationHeartbeat.alive()
+    last_runs = _last_runs(db, [pipeline.id for pipeline in pipelines])
+
     return {
         # The kill switch, and whether this process is the one ticking.
         "enabled": settings.autonomous_pipeline_enabled,
@@ -108,7 +112,12 @@ def automation_status(
         ],
         "poll_interval_sec": settings.automation_poll_interval_sec,
         "pipelines": [
-            _serialize_pipeline_state(pipeline, states.get(pipeline.id), backlog.get(pipeline.id, 0))
+            _serialize_pipeline_state(
+                pipeline,
+                states.get(pipeline.id),
+                backlog.get(pipeline.id, 0),
+                last_runs.get(pipeline.id),
+            )
             for pipeline in pipelines
         ],
     }
@@ -244,7 +253,10 @@ def _runner_state(runners: list[dict]) -> str:
 
 
 def _serialize_pipeline_state(
-    pipeline: Pipeline, state: AutomationState | None, backlog: int
+    pipeline: Pipeline,
+    state: AutomationState | None,
+    backlog: int,
+    last_run: AutomationRun | None = None,
 ) -> dict[str, Any]:
     config = AutomationConfig.from_pipeline(pipeline)
     return {
@@ -260,7 +272,55 @@ def _serialize_pipeline_state(
         "last_automation_run_id": state.last_automation_run_id if state else None,
         "running_since": _iso(state.running_since) if state else None,
         "consecutive_failures": state.consecutive_failures if state else 0,
+        # What the last cycle actually did. `last_status` alone says a run happened and
+        # nothing about it, which leaves a row reading "ran 4 minutes ago" and an operator
+        # opening the pipeline to find out whether it found anything.
+        "last_run": (
+            {
+                "id": str(last_run.id),
+                "trigger": last_run.trigger,
+                "status": last_run.status,
+                "skip_reason": last_run.skip_reason,
+                "production_status": last_run.production_status,
+                "started_at": _iso(last_run.started_at),
+                "duration_ms": last_run.duration_ms,
+                "counts": {
+                    "discovered": last_run.discovered,
+                    "selected": last_run.selected,
+                    "admitted": last_run.admitted,
+                    "publications_queued": last_run.publications_queued,
+                    "published": last_run.published,
+                },
+            }
+            if last_run is not None
+            else None
+        ),
     }
+
+
+def _last_runs(db: Session, pipeline_ids: list) -> dict:
+    """The newest run per pipeline, in one query rather than one per row."""
+    if not pipeline_ids:
+        return {}
+    newest = (
+        db.query(
+            AutomationRun.pipeline_id.label("pipeline_id"),
+            func.max(AutomationRun.started_at).label("started_at"),
+        )
+        .filter(AutomationRun.pipeline_id.in_(pipeline_ids))
+        .group_by(AutomationRun.pipeline_id)
+        .subquery()
+    )
+    rows = (
+        db.query(AutomationRun)
+        .join(
+            newest,
+            (AutomationRun.pipeline_id == newest.c.pipeline_id)
+            & (AutomationRun.started_at == newest.c.started_at),
+        )
+        .all()
+    )
+    return {row.pipeline_id: row for row in rows}
 
 
 def _selected_backlog(db: Session, pipeline: Pipeline) -> int:
