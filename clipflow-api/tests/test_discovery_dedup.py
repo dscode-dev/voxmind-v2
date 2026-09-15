@@ -525,11 +525,14 @@ def test_an_unexpected_provider_crash_does_not_leak_its_message(db, pipeline, so
 
 
 def test_a_source_kind_with_no_provider_is_reported(db, pipeline, no_event_fanout):
-    news = DiscoverySource(pipeline_id=pipeline.id, kind=DiscoverySourceKind.NEWS, config_json={})
-    db.add(news)
+    """MANUAL has no provider by design: a human supplied the URL, so nothing fetches."""
+    manual = DiscoverySource(
+        pipeline_id=pipeline.id, kind=DiscoverySourceKind.MANUAL, config_json={}
+    )
+    db.add(manual)
     db.flush()
 
-    result = DiscoveryService().run_source(db, pipeline=pipeline, source=news, commit=False)
+    result = DiscoveryService().run_source(db, pipeline=pipeline, source=manual, commit=False)
 
     assert result.status == "unsupported"
 

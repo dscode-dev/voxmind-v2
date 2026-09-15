@@ -54,11 +54,10 @@ from app.services import event_bus
 
 logger = logging.getLogger(__name__)
 
-# Which provider serves which source kind. NEWS and MANUAL have no provider: NEWS would need
-# one written, MANUAL means a human supplied the URL.
+# Which provider serves which source kind. MANUAL has none by definition: a human supplied
+# the URL, so there is nothing to fetch.
 _PROVIDER_FOR_KIND = {
     DiscoverySourceKind.YOUTUBE_SEARCH: "youtube",
-    DiscoverySourceKind.YOUTUBE_TRENDING: "youtube",
     DiscoverySourceKind.RSS: "rss",
 }
 

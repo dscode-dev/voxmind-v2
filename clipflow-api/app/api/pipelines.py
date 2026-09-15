@@ -28,7 +28,7 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.models.automation_state import AutomationState
 from app.models.discovery_source import DiscoverySource
-from app.models.enums import PipelineState, VideoCandidateStatus
+from app.models.enums import DiscoverySourceKind, PipelineState, VideoCandidateStatus
 from app.models.pipeline import Pipeline
 from app.models.pipeline_job import PipelineJob
 from app.models.publish_target import PublishTarget
@@ -58,6 +58,21 @@ class AutomationInput(BaseModel):
     failure_backoff_minutes: int | None = Field(default=None, ge=1, le=1440)
     max_consecutive_failures: int | None = Field(default=None, ge=1, le=100)
     publish_target_id: uuid.UUID | None = None
+
+
+class SourceInput(BaseModel):
+    kind: DiscoverySourceKind
+    name: str | None = Field(default=None, max_length=255)
+    is_active: bool = True
+    # Provider-specific. Validated per kind by `_validated_config` rather than by one schema
+    # per kind: the shapes are small, and three near-identical models would drift.
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+class SourceUpdate(BaseModel):
+    name: str | None = Field(default=None, max_length=255)
+    is_active: bool | None = None
+    config: dict[str, Any] | None = None
 
 
 class PipelineInput(BaseModel):
@@ -235,6 +250,131 @@ def delete_pipeline(
 
 
 # =============================================================================
+# Sources
+# =============================================================================
+#
+# Nested under the pipeline because that is where a source exists: "a feed" on its own is not
+# something anyone operates. They used to be a flat `/admin/discovery-sources` pair with no
+# way to edit or remove one, so a mistyped feed URL was permanent unless somebody opened psql.
+
+
+@router.post("/admin/pipelines/{pipeline_id}/sources", status_code=status.HTTP_201_CREATED)
+def create_source(
+    pipeline_id: uuid.UUID,
+    payload: SourceInput,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    pipeline = _require(db, pipeline_id)
+    source = DiscoverySource(
+        pipeline_id=pipeline.id,
+        kind=payload.kind,
+        name=payload.name,
+        is_active=payload.is_active,
+        config_json=_validated_config(payload.kind, payload.config),
+    )
+    db.add(source)
+    audit_service.log(
+        db,
+        action="admin.pipeline.source.create",
+        outcome="success",
+        actor_user=admin,
+        target_type="discovery_source",
+        metadata={"kind": payload.kind.value, "pipeline_id": str(pipeline.id)},
+    )
+    db.commit()
+    db.refresh(source)
+    return _serialize_source(source)
+
+
+@router.get("/admin/pipelines/{pipeline_id}/sources")
+def list_sources(
+    pipeline_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    _require(db, pipeline_id)
+    sources = (
+        db.query(DiscoverySource)
+        .filter(DiscoverySource.pipeline_id == pipeline_id)
+        .order_by(DiscoverySource.created_at.asc())
+        .all()
+    )
+    return [_serialize_source(source) for source in sources]
+
+
+@router.put("/admin/pipelines/{pipeline_id}/sources/{source_id}")
+def update_source(
+    pipeline_id: uuid.UUID,
+    source_id: uuid.UUID,
+    payload: SourceUpdate,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    """Everything except the kind.
+
+    Changing the kind would change which provider reads the config, leaving a source whose
+    settings mean nothing to whatever now fetches it. Replacing it is one more click and says
+    what is really happening.
+    """
+    source = _require_source(db, pipeline_id, source_id)
+    fields = payload.model_dump(exclude_unset=True)
+
+    if fields.get("config") is not None:
+        source.config_json = _validated_config(source.kind, fields["config"])
+    if "name" in fields:
+        source.name = fields["name"]
+    if fields.get("is_active") is not None:
+        source.is_active = fields["is_active"]
+
+    audit_service.log(
+        db,
+        action="admin.pipeline.source.update",
+        outcome="success",
+        actor_user=admin,
+        target_type="discovery_source",
+        target_id=str(source.id),
+        metadata={"changed": sorted(fields)},
+    )
+    db.commit()
+    db.refresh(source)
+    return _serialize_source(source)
+
+
+@router.delete("/admin/pipelines/{pipeline_id}/sources/{source_id}")
+def delete_source(
+    pipeline_id: uuid.UUID,
+    source_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    """Remove the source. The videos it already found stay.
+
+    They are candidates of the *pipeline*, not of the feed — deleting a feed because it went
+    stale must not retract videos that were found, judged, and possibly already produced.
+    """
+    source = _require_source(db, pipeline_id, source_id)
+    found = (
+        db.query(func.count(VideoCandidate.id))
+        .filter(VideoCandidate.source_id == source.id)
+        .scalar()
+    ) or 0
+
+    audit_service.log(
+        db,
+        action="admin.pipeline.source.delete",
+        outcome="success",
+        actor_user=admin,
+        target_type="discovery_source",
+        target_id=str(source.id),
+        metadata={"kind": source.kind.value, "candidates_kept": int(found)},
+    )
+    db.delete(source)
+    db.commit()
+    return {"status": "deleted", "id": str(source_id), "candidates_kept": int(found)}
+
+
+# =============================================================================
 # Helpers
 # =============================================================================
 
@@ -255,6 +395,77 @@ def _reject_duplicate_name(db: Session, name: str) -> None:
             status_code=status.HTTP_409_CONFLICT,
             detail="a pipeline with this name already exists",
         )
+
+
+def _require_source(
+    db: Session, pipeline_id: uuid.UUID, source_id: uuid.UUID
+) -> DiscoverySource:
+    """Scoped to the pipeline in the path, never looked up by id alone.
+
+    Otherwise one pipeline URL could edit another pipeline source, and the audit entry would
+    name the wrong pipeline.
+    """
+    _require(db, pipeline_id)
+    source = (
+        db.query(DiscoverySource)
+        .filter(
+            DiscoverySource.id == source_id,
+            DiscoverySource.pipeline_id == pipeline_id,
+        )
+        .first()
+    )
+    if source is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown source")
+    return source
+
+
+def _validated_config(kind: DiscoverySourceKind, config: dict[str, Any]) -> dict[str, Any]:
+    """What this kind needs, checked now rather than at the next discovery run.
+
+    A feed with no URL is accepted silently today and fails an hour later inside a scheduled
+    run, where the operator who typed it is not watching.
+    """
+    raw = config or {}
+    cleaned = {key: value for key, value in raw.items() if value not in (None, "")}
+
+    if kind == DiscoverySourceKind.RSS:
+        if not str(cleaned.get("feed_url") or "").strip():
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="uma fonte RSS precisa de um feed_url",
+            )
+        cleaned["feed_url"] = str(cleaned["feed_url"]).strip()
+
+    # An explicit empty list is meaningful here — it means "take everything this feed
+    # publishes", and the discovery service reads it that way — so it survives the pruning
+    # above instead of falling back to the pipeline keywords.
+    if "queries" in raw:
+        cleaned["queries"] = [
+            str(item).strip() for item in (raw["queries"] or []) if str(item or "").strip()
+        ]
+
+    for numeric in ("max_results", "freshness_days"):
+        if numeric in cleaned:
+            try:
+                cleaned[numeric] = max(1, int(cleaned[numeric]))
+            except (TypeError, ValueError):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"{numeric} precisa ser um numero inteiro",
+                ) from None
+    return cleaned
+
+
+def _serialize_source(source: DiscoverySource) -> dict[str, Any]:
+    return {
+        "id": str(source.id),
+        "pipeline_id": str(source.pipeline_id),
+        "kind": source.kind.value,
+        "name": source.name,
+        "is_active": source.is_active,
+        "config": source.config_json or {},
+        "created_at": source.created_at,
+    }
 
 
 def _clean(value: str | None) -> str | None:

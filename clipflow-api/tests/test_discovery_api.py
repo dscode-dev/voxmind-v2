@@ -142,20 +142,20 @@ def test_a_pipeline_can_be_created_with_its_queries(client, db):
 
 
 def test_a_source_carries_its_own_query_configuration(client, pipeline):
-    response = client.post("/admin/discovery-sources", json={
-        "pipeline_id": str(pipeline.id),
+    """Sources moved under the pipeline that owns them; see tests/test_sources.py."""
+    response = client.post(f"/admin/pipelines/{pipeline.id}/sources", json={
         "kind": "youtube_search",
         "name": "Buscas de futebol",
         "config": {"queries": ["coletiva pos jogo"], "max_results": 10},
     })
 
-    assert response.status_code == 200
+    assert response.status_code == 201
     assert response.json()["config"]["queries"] == ["coletiva pos jogo"]
 
 
 def test_a_source_for_an_unknown_pipeline_is_rejected(client):
-    response = client.post("/admin/discovery-sources", json={
-        "pipeline_id": str(uuid.uuid4()), "kind": "youtube_search", "config": {},
+    response = client.post(f"/admin/pipelines/{uuid.uuid4()}/sources", json={
+        "kind": "youtube_search", "config": {},
     })
     assert response.status_code == 404
 
@@ -437,7 +437,6 @@ def anonymous_client(db, no_event_fanout):
     [
         ("get", "/admin/video-candidates"),
         ("get", "/admin/pipelines"),
-        ("get", "/admin/discovery-sources"),
         ("post", "/admin/discovery/run"),
     ],
 )

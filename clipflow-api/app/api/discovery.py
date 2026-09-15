@@ -95,16 +95,6 @@ class SelectionRunInput(BaseModel):
     verbose: bool = False
 
 
-class SourceInput(BaseModel):
-    pipeline_id: uuid.UUID
-    kind: DiscoverySourceKind
-    name: str | None = None
-    is_active: bool = True
-    # Provider-specific: `queries`, `language`, `region`, `max_results`, `freshness_days`
-    # for YouTube; `feed_url` for RSS. Never a credential — those live in settings.
-    config: dict[str, Any] = Field(default_factory=dict)
-
-
 class RunInput(BaseModel):
     pipeline_id: uuid.UUID
     source_id: uuid.UUID | None = None
@@ -151,53 +141,6 @@ def serialize_candidate(candidate: VideoCandidate, *, detail: bool = False) -> d
         # Where this candidate ended up, once it was admitted. Added, not replacing anything.
         payload["production"] = metadata.get("production")
     return payload
-
-
-# ---------------------------------------------------------------- sources
-
-
-@router.post("/admin/discovery-sources")
-def create_source(
-    payload: SourceInput,
-    db: Session = Depends(get_db),
-    admin: User = Depends(get_current_admin),
-):
-    pipeline = db.query(Pipeline).filter(Pipeline.id == payload.pipeline_id).first()
-    if pipeline is None:
-        raise HTTPException(status_code=404, detail="unknown pipeline")
-
-    source = DiscoverySource(
-        pipeline_id=pipeline.id,
-        kind=payload.kind,
-        name=payload.name,
-        is_active=payload.is_active,
-        config_json=payload.config,
-    )
-    db.add(source)
-    audit_service.log(
-        db,
-        action="admin.discovery.source.create",
-        outcome="success",
-        actor_user=admin,
-        target_type="discovery_source",
-        metadata={"kind": payload.kind.value, "pipeline_id": str(pipeline.id)},
-    )
-    db.commit()
-    db.refresh(source)
-    return _serialize_source(source)
-
-
-@router.get("/admin/discovery-sources")
-def list_sources(
-    pipeline_id: uuid.UUID | None = None,
-    db: Session = Depends(get_db),
-    admin: User = Depends(get_current_admin),
-):
-    query = db.query(DiscoverySource)
-    if pipeline_id:
-        query = query.filter(DiscoverySource.pipeline_id == pipeline_id)
-    sources = query.order_by(DiscoverySource.created_at.desc()).all()
-    return [_serialize_source(source) for source in sources]
 
 
 # ---------------------------------------------------------------- run
@@ -569,15 +512,4 @@ def select_candidate(
         "candidate": serialize_candidate(candidate, detail=True),
         "admitted": False,
         "note": "selected only; admission is POST /admin/video-candidates/{id}/admit",
-    }
-
-
-def _serialize_source(source: DiscoverySource) -> dict[str, Any]:
-    return {
-        "id": str(source.id),
-        "pipeline_id": str(source.pipeline_id),
-        "kind": source.kind.value,
-        "name": source.name,
-        "is_active": source.is_active,
-        "config": source.config_json or {},
     }

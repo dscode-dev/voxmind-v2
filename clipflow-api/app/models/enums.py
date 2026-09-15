@@ -133,11 +133,20 @@ class VideoCandidateStatus(str, enum.Enum):
 
 
 class DiscoverySourceKind(str, enum.Enum):
-    YOUTUBE_TRENDING = "youtube_trending"
+    """Where a pipeline looks for videos.
+
+    Two kinds fetch, one does not. `YOUTUBE_TRENDING` and `NEWS` used to sit here and were
+    removed rather than implemented: trending was wired to the *search* provider, so it
+    promised one thing and did another, and news had no provider at all. An option that
+    silently does something else is worse than no option.
+    """
+
     YOUTUBE_SEARCH = "youtube_search"
-    NEWS = "news"
     RSS = "rss"
+    # A human supplied the URL. No provider fetches for this kind, by definition.
     MANUAL = "manual"
+
+
 class PublishPlatform(str, enum.Enum):
     TELEGRAM = "telegram"
     YOUTUBE = "youtube"
