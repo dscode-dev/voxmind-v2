@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.content import themes
 from app.db.session import get_db
 from app.models.automation_run import AutomationRun
 from app.models.automation_state import AutomationState
@@ -107,6 +108,23 @@ class PipelineUpdate(BaseModel):
     default_clip_mode: str | None = Field(default=None, max_length=64)
     default_video_ratio: str | None = Field(default=None, max_length=32)
     automation: AutomationInput | None = None
+
+
+# =============================================================================
+# Catálogo de temas
+# =============================================================================
+
+
+@router.get("/admin/pipeline-themes")
+def list_themes(admin: User = Depends(get_current_admin)):
+    """Os temas que o sistema já conhece, com as palavras-chave que os acompanham.
+
+    Uma sugestão, não uma restrição: o `theme` do pipeline é texto livre, e a tela oferece um
+    campo aberto para o que não estiver aqui. O catálogo existe porque digitar o assunto do
+    zero toda vez produz "futebol", "Futebol" e "fut br" — pipelines que deveriam concordar e
+    não concordam.
+    """
+    return {"groups": themes.as_payload()}
 
 
 # =============================================================================

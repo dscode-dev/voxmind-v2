@@ -353,3 +353,47 @@ def test_a_pipeline_with_no_chat_says_nothing_rather_than_borrowing_one(db, no_e
     db.commit()
 
     assert "telegram_chat_id" not in ProductionAdmissionService._payload(run, {"frozen": {}})
+
+
+# ===========================================================================
+# Catálogo de temas
+# ===========================================================================
+
+
+def test_the_theme_catalogue_is_served_with_its_keywords(client):
+    """Escolher o tema e ter de inventar os termos de busca na mão é escolher metade."""
+    groups = client.get("/admin/pipeline-themes").json()["groups"]
+
+    assert len(groups) >= 2
+    items = [item for group in groups for item in group["items"]]
+    assert all(item["id"] and item["label"] and item["keywords"] for item in items)
+    assert any(item["id"] == "serie_a_italiana" for item in items)
+
+
+def test_outros_is_not_a_theme_in_the_catalogue(client):
+    """`Outros` é uma escolha da interface, não um tema.
+
+    Se viesse daqui, um pipeline poderia acabar gravado com o assunto literal "Outros".
+    """
+    groups = client.get("/admin/pipeline-themes").json()["groups"]
+    labels = {item["label"].lower() for group in groups for item in group["items"]}
+
+    assert "outros" not in labels
+
+
+def test_a_theme_typed_by_hand_is_stored_as_written(client):
+    """O catálogo sugere; ele não restringe. O campo continua sendo texto."""
+    body = client.post("/admin/pipelines", json={
+        "name": "Xadrez", "theme": "torneios de xadrez rápido",
+    }).json()
+
+    assert body["theme"] == "torneios de xadrez rápido"
+    assert body["subject"] == "torneios de xadrez rápido"
+
+
+def test_the_theme_catalogue_requires_the_operator(db, no_event_fanout):
+    app = FastAPI()
+    app.include_router(api_router)
+    app.dependency_overrides[get_db] = lambda: db
+    with TestClient(app) as anonymous:
+        assert anonymous.get("/admin/pipeline-themes").status_code in (401, 403)

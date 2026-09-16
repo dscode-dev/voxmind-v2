@@ -273,13 +273,22 @@ def test_selected_candidates_are_not_reloaded(db, pipeline, source, no_event_fan
 
 
 def test_the_daily_cap_counts_earlier_selections(db, pipeline, source, no_event_fanout):
+    """O teto é por dia civil, contado da meia-noite UTC.
+
+    Este é o único teste que depende de que horas são: `NOW - 2h` cai no dia anterior sempre
+    que a suíte roda entre 00:00 e 02:00, e aí a seleção anterior deixa de contar. Ele fixa o
+    próprio `now` no meio do dia — o serviço recebe esse instante e mede tudo contra ele, então
+    nada aqui depende do relógio de quem executa.
+    """
+    midday = NOW.replace(hour=12, minute=0, second=0, microsecond=0)
     pipeline.metadata_json = {"selection": {"max_selections_per_day": 1}}
     make_candidate(db, pipeline, source, "earlier", status=VideoCandidateStatus.SELECTED,
-                   selected_at=ago(hours=2))
-    make_candidate(db, pipeline, source, "now", channel_id="UC_new")
+                   selected_at=midday - timedelta(hours=2))
+    make_candidate(db, pipeline, source, "now", channel_id="UC_new",
+                   published_at=midday - timedelta(hours=4))
     db.flush()
 
-    report = service().run(db, pipeline=pipeline, dry_run=True, now=NOW)
+    report = service().run(db, pipeline=pipeline, dry_run=True, now=midday)
 
     assert report.outcome.selected == []
     assert "daily_cap_reached" in report.outcome.blocked[0].blocked_by
