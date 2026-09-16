@@ -20,6 +20,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.settings import settings
@@ -259,6 +260,55 @@ def update_target(
     db.commit()
     db.refresh(target)
     return PublishTargetService.serialize(target)
+
+
+@router.delete("/admin/publish-targets/{target_id}")
+def delete_target(
+    target_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    """Apagar o canal. Só enquanto ele não publicou nada.
+
+    A chave estrangeira de `publish_attempts` é RESTRICT de propósito: uma publicação tem de
+    continuar apontando para o canal a que foi. Apagar o canal deixaria um vídeo real no
+    YouTube cujo registro não sabe mais onde ele está — e é justamente o registro que responde
+    "de onde veio este vídeo?" quando alguém pergunta meses depois.
+
+    Então um canal que já publicou não é apagado; ele é desconectado, que é a operação que o
+    operador de fato quer nesse caso. A recusa diz quantas publicações o prendem, para a
+    escolha ser informada em vez de ser um erro de banco.
+    """
+    target = PublishTargetService.get(db, target_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="unknown publish target")
+
+    attempts = (
+        db.query(func.count(PublishAttempt.id))
+        .filter(PublishAttempt.target_id == target.id)
+        .scalar()
+    ) or 0
+    if attempts:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"este canal tem {attempts} publicação(ões) no histórico e não pode ser "
+                "removido. Desconecte-o para que nada mais seja publicado nele."
+            ),
+        )
+
+    audit_service.log(
+        db,
+        action="admin.publish_target.deleted",
+        outcome="success",
+        actor_user=admin,
+        target_type="publish_target",
+        target_id=str(target.id),
+        metadata={"name": target.name, "channel_id": target.channel_id},
+    )
+    db.delete(target)
+    db.commit()
+    return {"status": "deleted", "id": str(target_id)}
 
 
 @router.post("/admin/publish-targets/{target_id}/disconnect")

@@ -504,3 +504,80 @@ def test_the_runtime_endpoint_requires_an_admin(db, no_event_fanout):
     app.dependency_overrides[get_db] = lambda: db
     with TestClient(app) as anonymous:
         assert anonymous.get("/admin/publishing/runtime").status_code in (401, 403)
+
+
+# ===========================================================================
+# Remover um canal
+# ===========================================================================
+
+
+def test_a_channel_that_never_published_can_be_removed(client, db):
+    from app.models.publish_target import PublishTarget
+
+    target = make_target(db, name="Canal de teste")
+    db.commit()
+    target_id = target.id
+
+    response = client.delete(f"/admin/publish-targets/{target_id}")
+
+    assert response.status_code == 200
+    assert db.query(PublishTarget).filter(PublishTarget.id == target_id).first() is None
+
+
+def test_a_channel_that_published_is_refused_and_told_why(client, db):
+    """A chave estrangeira é RESTRICT de propósito.
+
+    Uma publicação precisa continuar apontando para o canal a que foi — é o que responde "de
+    onde veio este vídeo?" meses depois. A recusa diz quantas publicações prendem o canal,
+    para a escolha ser informada em vez de virar um erro de banco.
+    """
+    from app.models.enums import PublishAttemptStatus
+    from app.models.publish_attempt import PublishAttempt
+    from app.models.publish_target import PublishTarget
+
+    target = make_target(db)
+    run = make_publishable_run(db)
+    db.add(
+        PublishAttempt(
+            pipeline_job_id=run.id,
+            target_id=target.id,
+            media_identity="final_clips/final_clip_01.mp4",
+            media_storage_key="jobs/x/final_clips/final_clip_01.mp4",
+            status=PublishAttemptStatus.SUCCEEDED,
+            attempt_no=1,
+            max_attempts=3,
+            initiator="manual",
+            external_id="vid_1",
+        )
+    )
+    db.commit()
+
+    response = client.delete(f"/admin/publish-targets/{target.id}")
+
+    assert response.status_code == 409
+    assert "1 publicação" in response.json()["detail"]
+    assert "Desconecte" in response.json()["detail"]
+    assert db.query(PublishTarget).filter(PublishTarget.id == target.id).first() is not None
+
+
+def test_removing_an_unknown_channel_is_a_404(client):
+    import uuid as _uuid
+
+    assert client.delete(f"/admin/publish-targets/{_uuid.uuid4()}").status_code == 404
+
+
+def test_removing_a_channel_requires_the_operator(db, no_event_fanout):
+    import uuid as _uuid
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api.router import api_router
+    from app.db.session import get_db
+
+    app = FastAPI()
+    app.include_router(api_router)
+    app.dependency_overrides[get_db] = lambda: db
+    with TestClient(app) as anonymous:
+        response = anonymous.delete(f"/admin/publish-targets/{_uuid.uuid4()}")
+        assert response.status_code in (401, 403)
