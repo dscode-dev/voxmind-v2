@@ -146,6 +146,9 @@ def list_pipeline_jobs(
     active: bool = Query(
         default=False, description="Only runs currently moving through production."
     ),
+    pipeline_id: uuid.UUID | None = Query(
+        default=None, description="Only runs belonging to one pipeline."
+    ),
     limit: int = Query(default=25, ge=1, le=MAX_PAGE_SIZE),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
@@ -164,6 +167,13 @@ def list_pipeline_jobs(
         query = query.filter(PipelineJob.state == state)
     elif active:
         query = query.filter(PipelineJob.state.in_(ACTIVE_STATES))
+
+    # Recortar por pipeline aqui, e não no navegador. A tela de detalhe filtrava a própria
+    # página de resultados, então uma produção que não coubesse nas 50 mais recentes do
+    # sistema inteiro sumia da aba do pipeline que a criou — e o cartão ao lado continuava
+    # contando certo, o que deixava a mesma tela afirmando "1 produção" e "nenhuma produção".
+    if pipeline_id is not None:
+        query = query.filter(PipelineJob.pipeline_id == pipeline_id)
 
     total = query.count()
     jobs = (
