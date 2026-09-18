@@ -38,7 +38,6 @@ def _job_config(job: ClipJob) -> dict:
         "render_intent": config.get("render_intent") or metadata.get("render_intent"),
         "clip_mode": str(config.get("clip_mode") or metadata.get("clip_mode") or "short_serie"),
         "video_ratio": str(config.get("video_ratio") or metadata.get("video_ratio") or "portrait"),
-        "build_ia": bool(config.get("build_ia") if config.get("build_ia") is not None else metadata.get("build_ia", False)),
         "language_mode": str(config.get("language_mode") or metadata.get("language_mode") or "auto"),
         "output_language": config.get("output_language") or metadata.get("output_language"),
         "subtitle_language": config.get("subtitle_language") or metadata.get("subtitle_language"),

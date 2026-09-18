@@ -19,7 +19,6 @@ from app.video.final_media_qa import (
 )
 from app.video.final_renderer import FinalVideoRenderer
 from app.video.qa import ClipQA
-from app.video.raw_edit_renderer import RawEditRenderer
 
 from app.pipeline.chunker import Chunker
 from app.pipeline.auto_review import AutoReviewPolicy
@@ -32,12 +31,10 @@ from app.pipeline.soundtrack_selector import SoundtrackSelector
 from app.pipeline.span_catalog_builder import SpanCatalogBuilder
 from app.pipeline.subtitle_builder import SubtitleBuilder
 from app.pipeline.scorer import Scorer
-from app.prompts.manual_prompt_builder import ManualPromptBuilder
 from app.pipeline.hook_detector import HookDetector
 from app.pipeline.render_plan_builder import RenderPlanBuilder
 from app.pipeline.audio_peak_detector import AudioPeakDetector
 from app.pipeline.story_shift_detector import StoryShiftDetector
-from app.prompts.raw_edit_prompt_builder import RawEditPromptBuilder
 from app.prompts.builder import PromptBuilder
 
 from app.ai import events as ai_events
@@ -67,7 +64,6 @@ class Pipeline:
         clip_mode: str = "short_serie",
         video_ratio: str = "portrait",
         job_preset: str | None = None,
-        build_ia: bool = False,
         source_storage_key: str | None = None,
         edit_brief: str | None = None,
         pipeline_job_id: str | None = None,
@@ -92,7 +88,6 @@ class Pipeline:
         self.preset: ClipPreset = resolve_job_preset(job_preset, clip_mode, video_ratio)
         self.clip_mode = self.preset.clip_mode
         self.video_ratio = self.preset.video_ratio
-        self.build_ia = build_ia
         self.language_metadata: dict = {
             "language_mode": settings.language_mode,
             "requested_language": settings.asr_language,
@@ -193,7 +188,6 @@ class Pipeline:
             self.work_dir,
             default_video_ratio=self.preset.video_ratio,
         )
-        self.raw_edit_renderer = RawEditRenderer(self.work_dir)
         # QA reads the SAME duration contract as the preset and the cutter. It previously
         # used QA_MIN_CLIP_DURATION_SEC (25s) while short presets accept internal cuts down
         # to 12s, so QA blocked cuts every upstream stage had validated — the same
@@ -226,11 +220,7 @@ class Pipeline:
         # None for a studio job, which falls back to the deployment default.
         self.telegram = TelegramSender(chat_id=telegram_chat_id)
         self.clipflow_api = ClipFlowApiClient()
-        self.prompt_builder = ManualPromptBuilder()
-        self.raw_edit_prompt_builder = RawEditPromptBuilder()
-
-        # V2 automatic AI path (provider abstraction). Constructed eagerly but only used when
-        # build_ia is true; no network happens at construction time.
+        # O caminho da IA. Construído aqui; nenhuma rede acontece na construção.
         self.prompt_builder_v2 = PromptBuilder()
         self.provider_router = ProviderRouter(emitter=self._emit_ai_event)
 
@@ -273,26 +263,14 @@ class Pipeline:
             },
         )
 
-        try:
-            self.telegram.send_message(
-                f"""
-🧠 VOXMIND PIPELINE
-
-JOB_ID: {self.job_id}
-
-{message}
-"""
+        # Best-effort, e com o traceback fora do caminho: isto roda dezenas de vezes por
+        # job, e um destino mal configurado enchia o log de stack traces idênticos enquanto
+        # cobrava o backoff de cada um.
+        self.telegram.send_message_safe(
+            "\n".join(
+                ["🧠 VOXMIND PIPELINE", "", f"JOB_ID: {self.job_id}", "", message]
             )
-        except Exception:
-            self.logger.exception(
-                "Telegram notification failed",
-                extra={
-                    "job_id": self.job_id,
-                    "pipeline_stage": settings.pipeline_stage,
-                    "step": "telegram_notify",
-                    "status": "failed",
-                },
-            )
+        )
 
     def _mark_step(self, step: str, status: str, **details):
         self.runtime.mark(settings.pipeline_stage, step, status, **details)
@@ -461,13 +439,6 @@ ERROR:
                 segments=segments,
             )
 
-        if self.preset.is_raw_edit:
-            return self._prepare_raw_edit_prompt(
-                video_path=video_path,
-                raw_segments=raw_segments,
-                segments=segments,
-            )
-
         self._log("✂️ Generating chunks...")
         self._mark_step("chunk", "started")
 
@@ -523,19 +494,6 @@ ERROR:
         self._log("📝 Building LLM prompt...")
         self._mark_step("prompt_build", "started")
 
-        prompt = self.prompt_builder.build(
-            transcript=segments,
-            candidates=ranked,
-            span_catalog=span_catalog,
-            hook_candidates=hook_candidates,
-            job_id=self.job_id,
-            clip_mode=self.clip_mode,
-            video_ratio=self.video_ratio,
-            job_preset=self.preset.preset_id,
-            content_language=str(self.language_metadata.get("output_language") or self.language_metadata.get("source_language") or "pt"),
-        )
-        self._mark_step("prompt_build", "completed", prompt_chars=len(prompt))
-
         transcript_path = self._write_json_artifact(
             "transcript.json",
             raw_segments,
@@ -566,14 +524,8 @@ ERROR:
             self.language_metadata,
             "language_detection",
         )
-        prompt_path = self._write_text_artifact(
-            "prompt.txt",
-            prompt,
-            "prompt",
-        )
-
         prepare_result = {
-            "status": "awaiting_manual_llm",
+            "status": "prepare_complete",
             "job_id": self.job_id,
             "transcript_path": str(transcript_path),
             "transcript_with_speakers_path": str(transcript_with_speakers_path),
@@ -581,64 +533,23 @@ ERROR:
             "span_catalog_path": str(span_catalog_path),
             "hook_candidates_path": str(hook_candidates_path),
             "language_detection_path": str(language_detection_path),
-            "prompt_path": str(prompt_path),
             "runtime_status_path": str(self.runtime.runtime_path),
             "artifacts_manifest_path": str(self.artifacts.manifest_path),
         }
 
-        # Automatic mode: call the AI provider router and auto-continue to finalize. The manual
-        # Telegram flow below is preserved as a fallback/debug mode (build_ia = false).
-        if self.build_ia:
-            self._run_automatic_ai_and_enqueue(
-                prepare_result,
-                segments=segments,
-                ranked=ranked,
-                span_catalog=span_catalog,
-                hook_candidates=hook_candidates,
-            )
-            self._mark_step("prepare", "completed")
-            return prepare_result
-
-        self._log("📤 Sending prompt to Telegram...")
-        self._mark_step("send_prompt", "started")
-
-        self.telegram.send_document_safe(
-            str(prompt_path),
-            caption=f"""
-🧠 VOXMIND — PROMPT GERADO
-
-JOB_ID: {self.job_id}
-
-1️⃣ Copie o conteúdo do arquivo PROMPT
-
-2️⃣ Cole no ChatGPT / Claude / Gemini
-
-3️⃣ Gere o JSON
-
-4️⃣ Salve como:
-
-response.json
-
-5️⃣ Envie o arquivo aqui para continuar o pipeline.
-""",
-        )
-        self._mark_step("send_prompt", "completed")
-
-        self.telegram.send_message_safe(
-            f"""
-📊 PIPELINE PRONTO
-
-JOB_ID: {self.job_id}
-
-Envie o arquivo **response.json** retornado pela IA
-para continuar o processamento.
-"""
+        # A IA decide os cortes e o finalize é enfileirado aqui mesmo. Não existe outro
+        # caminho: prepare que termina sem uma resposta da IA é prepare que falhou.
+        self._run_ai_and_enqueue(
+            prepare_result,
+            segments=segments,
+            ranked=ranked,
+            span_catalog=span_catalog,
+            hook_candidates=hook_candidates,
         )
         self._mark_step("prepare", "completed")
-
         return prepare_result
 
-    def _run_automatic_ai_and_enqueue(
+    def _run_ai_and_enqueue(
         self,
         prepare_result: dict,
         *,
@@ -647,11 +558,11 @@ para continuar o processamento.
         span_catalog: list[dict],
         hook_candidates: list[dict],
     ) -> None:
-        """Automatic AI section: build prompt → provider router → validate → enqueue finalize.
+        """Monta o prompt, chama o provedor, valida, e enfileira o finalize.
 
-        Replaces only the AI step. The follow-up finalize job is attached to ``prepare_result``
-        as ``auto_finalize_job`` and enqueued by ``main.run_pipeline`` after prepare artifacts
-        are uploaded, so the existing finalize stage runs unchanged."""
+        O job de finalize é anexado a ``prepare_result`` como ``auto_finalize_job`` e
+        enfileirado por ``main.run_pipeline`` depois que os artefatos do prepare subiram —
+        um finalize que começasse antes disso leria artefato que ainda não existe."""
         self._log("🤖 Generating cuts with AI provider...")
         self._mark_step("ai_request", "started")
 
@@ -666,12 +577,20 @@ para continuar o processamento.
             job_preset=self.preset.preset_id,
         )
 
+        prompt_path = self._write_text_artifact(
+            "prompt.txt",
+            "\n".join(
+                ["=== SYSTEM ===", system_prompt, "", "=== USER ===", user_prompt]
+            ),
+            "prompt",
+        )
+        prepare_result["prompt_path"] = str(prompt_path)
+
         # Bounded repair: one corrective round-trip at most, never a loop.
         ai_response, ai_stats = generate_validated_cuts(
             lambda sp, up: self.provider_router.generate_json(sp, up, schema),
             system_prompt,
             user_prompt,
-            is_raw_edit=self.preset.is_raw_edit,
             emit=self._emit_ai_event,
         )
         ai_response.setdefault("job_id", self.job_id)
@@ -719,6 +638,10 @@ para continuar o processamento.
 
         prepare_result["auto_finalize_job"] = {
             "job_id": self.job_id,
+            # A run é a mesma dos dois lados. Sem este campo o finalize rodava órfão: nenhum
+            # relatório de etapa, nenhum relatório de conclusão, e a run ficava parada no
+            # último estado que o prepare escreveu — enquanto os cortes existiam no storage.
+            "pipeline_job_id": self.pipeline_job_id,
             "pipeline_stage": "finalize",
             "manual_response": ai_response,
             "video_url": self.video_url,
@@ -726,7 +649,7 @@ para continuar o processamento.
             "job_preset": self.preset.preset_id,
             "clip_mode": self.clip_mode,
             "video_ratio": self.video_ratio,
-            "build_ia": True,
+            "telegram_chat_id": self.telegram_chat_id,
         }
 
     def _emit_ai_event(
@@ -920,88 +843,6 @@ para continuar o processamento.
             "speaker_turns",
         )
 
-    def _prepare_raw_edit_prompt(
-        self,
-        *,
-        video_path: Path,
-        raw_segments: list[dict],
-        segments: list[dict],
-    ) -> dict:
-        self._log("🧠 Building authorial edit prompt...")
-        self._mark_step("raw_edit_prompt_build", "started")
-
-        speaker_turns_path = self.work_dir / "speaker_turns.json"
-        speaker_turns = self._load_json_file(speaker_turns_path) if speaker_turns_path.exists() else []
-        prompt = self.raw_edit_prompt_builder.build(
-            job_id=self.job_id,
-            transcript=segments,
-            speaker_turns=speaker_turns if isinstance(speaker_turns, list) else [],
-            language=str(
-                self.language_metadata.get("output_language")
-                or self.language_metadata.get("source_language")
-                or "auto"
-            ),
-            edit_brief=self.edit_brief,
-            video_ratio=self.video_ratio,
-        )
-        self._mark_step("raw_edit_prompt_build", "completed", prompt_chars=len(prompt))
-
-        transcript_path = self._write_json_artifact(
-            "transcript.json",
-            raw_segments,
-            "transcript",
-        )
-        transcript_with_speakers_path = self._write_json_artifact(
-            "transcript_with_speakers.json",
-            segments,
-            "transcript_with_speakers",
-        )
-        language_detection_path = self._write_json_artifact(
-            "language_detection.json",
-            self.language_metadata,
-            "language_detection",
-        )
-        prompt_path = self._write_text_artifact(
-            "prompt.txt",
-            prompt,
-            "prompt",
-        )
-
-        self.telegram.send_document_safe(
-            str(prompt_path),
-            caption=f"""
-🎬 VOXMIND — PROMPT DE EDIÇÃO AUTORAL
-
-JOB_ID: {self.job_id}
-
-Use este prompt para gerar o JSON com roteiro e plano de edição do vídeo bruto.
-""",
-        )
-        self.telegram.send_message_safe(
-            f"""
-📊 ANÁLISE DO VÍDEO BRUTO PRONTA
-
-JOB_ID: {self.job_id}
-
-Envie o JSON de roteiro/plano de edição para registrar a decisão editorial.
-"""
-        )
-        self._mark_step("prepare", "completed")
-
-        return {
-            "status": "awaiting_manual_llm",
-            "job_id": self.job_id,
-            "transcript_path": str(transcript_path),
-            "transcript_with_speakers_path": str(transcript_with_speakers_path),
-            "candidates_path": None,
-            "span_catalog_path": None,
-            "hook_candidates_path": None,
-            "language_detection_path": str(language_detection_path),
-            "prompt_path": str(prompt_path),
-            "runtime_status_path": str(self.runtime.runtime_path),
-            "artifacts_manifest_path": str(self.artifacts.manifest_path),
-        }
-
     def _merge_candidate_sources(self, primary: list[dict], secondary: list[dict]) -> list[dict]:
         if not secondary:
             return primary
@@ -1179,17 +1020,10 @@ Envie o JSON de roteiro/plano de edição para registrar a decisão editorial.
         # One structural contract for both paths. A manual response used to reach the
         # normalizer having only been parsed as JSON.
         try:
-            self.manual_response = validate_cuts_response(
-                self.manual_response,
-                is_raw_edit=self.preset.is_raw_edit,
-            )
+            self.manual_response = validate_cuts_response(self.manual_response)
         except AIResponseValidationError as exc:
             self._mark_step("validate_ai_response", "failed", error=str(exc))
             raise
-
-        if self.preset.is_raw_edit:
-            self._mark_step("validate_ai_response", "completed")
-            return self._finalize_raw_edit_response()
 
         transcript_segments = self._load_finalize_transcript()
         known_speakers = {
@@ -1427,134 +1261,6 @@ Envie o JSON de roteiro/plano de edição para registrar a decisão editorial.
             # from storage. Computed fail-closed by PR-QA-01: absent means not eligible.
             "publication_eligibility": (automation_report or {}).get("publication_eligibility"),
             "render_plan_path": str(render_plan_path),
-            "delivery_package_path": str(delivery_package_path),
-            "publish_package_path": str(publish_package_path),
-            "runtime_status_path": str(self.runtime.runtime_path),
-            "artifacts_manifest_path": str(self.artifacts.manifest_path),
-        }
-
-    def _finalize_raw_edit_response(self) -> dict:
-        self._mark_step("raw_edit_decision", "started")
-        response = dict(self.manual_response or {})
-        response.setdefault("job_id", self.job_id)
-        response.setdefault("workflow", "raw_authorial_edit")
-
-        self._log("⬇️ Downloading raw source video from storage...")
-        self._mark_step("download_video", "started")
-        video_path = self.work_dir / "video.mp4"
-        self.storage.download(
-            f"jobs/{self.job_id}/video.mp4",
-            str(video_path),
-        )
-        if not video_path.exists():
-            raise RuntimeError("Video not found in storage")
-        self._mark_step("download_video", "completed", video_path=str(video_path))
-
-        self._log("🎬 Rendering authorial edit...")
-        self._mark_step("raw_edit_render", "started")
-        final_video_path, rendered_timeline = self.raw_edit_renderer.render(
-            source_video=video_path,
-            edit_response=response,
-            output_path=self.work_dir / "raw_edit_final.mp4",
-        )
-        self._mark_step(
-            "raw_edit_render",
-            "completed",
-            timeline_blocks=len(rendered_timeline),
-            output_path=str(final_video_path),
-        )
-
-        rendered_duration = sum(
-            float(item.get("rendered_duration_sec") or 0.0)
-            for item in rendered_timeline
-        )
-        response.setdefault("final_video_plan", {})
-        if isinstance(response["final_video_plan"], dict):
-            response["final_video_plan"]["rendered_timeline"] = rendered_timeline
-            response["final_video_plan"]["rendered_duration_sec"] = round(rendered_duration, 3)
-
-        delivery_package = {
-            "job_id": self.job_id,
-            "status": "completed",
-            "pipeline_stage": "finalize",
-            "preset_id": self.preset.preset_id,
-            "render_intent": self.preset.render_intent,
-            "raw_authorial_edit": response,
-            "post": response.get("post") or {},
-            "videos": [
-                {
-                    "video_index": 1,
-                    "clip_count": len(rendered_timeline),
-                    "final_file_name": final_video_path.name,
-                    "final_local_path": str(final_video_path),
-                    "post": response.get("post") or {},
-                    "render_intent": self.preset.render_intent,
-                }
-            ],
-            "clips": [],
-            "final_assets": {
-                "final_clips": [
-                    {
-                        "clip_index": 1,
-                        "status": "ready",
-                        "file_name": final_video_path.name,
-                        "local_path": str(final_video_path),
-                    }
-                ],
-                "final_reel": {
-                    "status": "ready",
-                    "file_name": final_video_path.name,
-                    "local_path": str(final_video_path),
-                },
-                "subtitles": None,
-            },
-        }
-        publish_package = {
-            "job_id": self.job_id,
-            "workflow": "raw_authorial_edit",
-            "post": response.get("post") or {},
-            "editorial_strategy": response.get("editorial_strategy") or {},
-            "final_video_plan": response.get("final_video_plan") or {},
-            "style_guide": response.get("style_guide") or {},
-        }
-        qa_report = {
-            "decision": "editorial_plan_ready",
-            "summary": {
-                "workflow": "raw_authorial_edit",
-                "rendered_video": True,
-                "timeline_blocks": len(rendered_timeline),
-                "rendered_duration_sec": round(rendered_duration, 3),
-            },
-            "warnings": [],
-        }
-
-        delivery_package_path = self._write_json_artifact(
-            "delivery_package.json",
-            delivery_package,
-            "delivery_package",
-        )
-        publish_package_path = self._write_json_artifact(
-            "publish_package.json",
-            publish_package,
-            "publish_package",
-        )
-        qa_report_path = self._write_json_artifact(
-            "qa_report.json",
-            qa_report,
-            "qa_report",
-        )
-        self._mark_step("raw_edit_decision", "completed")
-        self._mark_step("finalize", "completed")
-
-        return {
-            "status": "success",
-            "job_id": self.job_id,
-            "cut_files": [],
-            "final_clip_files": [str(final_video_path)],
-            "final_reel_path": str(final_video_path),
-            "subtitle_path": None,
-            "qa_report_path": str(qa_report_path),
-            "render_plan_path": None,
             "delivery_package_path": str(delivery_package_path),
             "publish_package_path": str(publish_package_path),
             "runtime_status_path": str(self.runtime.runtime_path),

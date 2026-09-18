@@ -203,7 +203,7 @@ def test_the_payload_stays_small(db, pipeline, source, service, queue, no_event_
     payload = queue.published[0]
     assert set(payload) == {
         "job_id", "pipeline_job_id", "video_url", "pipeline_stage",
-        "clip_mode", "video_ratio", "build_ia", "manual_response", "origin",
+        "clip_mode", "video_ratio", "manual_response", "origin",
     }
 
 
@@ -658,7 +658,7 @@ def test_the_snapshot_is_compact(db, pipeline, source, service, no_event_fanout)
 
     frozen = db.query(PipelineJob).one().metadata_json["snapshot"]
     assert set(frozen) == {
-        "source_url", "clip_mode", "video_ratio", "build_ia", "topic_name", "frozen_at"
+        "source_url", "clip_mode", "video_ratio", "topic_name", "frozen_at"
     }
 
 

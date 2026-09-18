@@ -17,7 +17,7 @@ class JobStatus(str, enum.Enum):
     PENDING_PAYMENT = "pending_payment"
     QUEUED = "queued"
     PREPARING = "preparing"
-    AWAITING_MANUAL_LLM = "awaiting_manual_llm"
+    PROCESSING_AI = "processing_ai"
     FINALIZING = "finalizing"
     COMPLETED = "completed"
     FAILED = "failed"

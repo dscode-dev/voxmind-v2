@@ -18,7 +18,7 @@ EDITORIAL validity — not here
 from __future__ import annotations
 
 import math
-from typing import Any, List, Literal, Optional
+from typing import Any, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -194,14 +194,6 @@ class CutsResponseModel(BaseModel):
             if cut.span_id:
                 referenced.add(cut.span_id)
         return referenced
-
-
-class RawEditResponseModel(BaseModel):
-    """Raw authorial edit uses a different shape; only the root is constrained here."""
-
-    model_config = ConfigDict(extra="allow")
-
-    job_id: Optional[str] = None
 
 
 def json_schema() -> dict[str, Any]:

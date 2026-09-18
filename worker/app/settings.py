@@ -48,19 +48,6 @@ class Settings(BaseSettings):
     # LLM Configuration
     # ======================================
 
-    llm_mode: str = Field(
-        default="mock",
-        alias="LLM_MODE"
-    )
-
-    # AI execution mode for the worker: "automatic" calls the AI provider router and
-    # auto-continues to finalize; "manual" keeps the legacy Telegram prompt/response flow.
-    # A per-job `build_ia` flag overrides this default.
-    ai_mode: str = Field(
-        default="automatic",
-        alias="AI_MODE"
-    )
-
     openai_api_key: str | None = Field(
         default=None,
         alias="OPENAI_API_KEY"

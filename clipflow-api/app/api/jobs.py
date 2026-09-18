@@ -55,16 +55,11 @@ class CreateJobInput(BaseModel):
     job_preset: str | None = Field(default=None)
     clip_mode: str = Field(default="short_serie")
     video_ratio: str = Field(default="portrait")
-    build_ia: bool = Field(default=False)
     language_mode: str = Field(default="auto")
     output_language: str | None = None
     subtitle_language: str | None = None
     prompt_mode: str = Field(default="manual")
     edit_brief: str | None = None
-
-
-class SubmitAiResponseInput(BaseModel):
-    response_json: dict
 
 
 def _expected_artifact_keys(job_id: str) -> dict[str, str]:
@@ -96,7 +91,6 @@ def _job_config(job: ClipJob) -> dict:
         "render_intent": config.get("render_intent") or metadata.get("render_intent"),
         "clip_mode": str(config.get("clip_mode") or metadata.get("clip_mode") or "short_serie"),
         "video_ratio": str(config.get("video_ratio") or metadata.get("video_ratio") or "portrait"),
-        "build_ia": bool(config.get("build_ia") if config.get("build_ia") is not None else metadata.get("build_ia", False)),
         "language_mode": str(config.get("language_mode") or metadata.get("language_mode") or "auto"),
         "output_language": config.get("output_language") or metadata.get("output_language"),
         "subtitle_language": config.get("subtitle_language") or metadata.get("subtitle_language"),
@@ -113,27 +107,6 @@ def _resolve_job_preset_config(
 ) -> dict:
     requested = str(job_preset or "").strip().lower().replace("-", "_")
     mapping = {
-        "raw_edit": {
-            "job_preset": "raw_edit",
-            "preset_id": "raw_edit_landscape",
-            "clip_mode": "raw_edit",
-            "video_ratio": "landscape",
-            "render_intent": "authorial_video_edit",
-        },
-        "raw_edit_landscape": {
-            "job_preset": "raw_edit",
-            "preset_id": "raw_edit_landscape",
-            "clip_mode": "raw_edit",
-            "video_ratio": "landscape",
-            "render_intent": "authorial_video_edit",
-        },
-        "authorial_edit": {
-            "job_preset": "raw_edit",
-            "preset_id": "raw_edit_landscape",
-            "clip_mode": "raw_edit",
-            "video_ratio": "landscape",
-            "render_intent": "authorial_video_edit",
-        },
         "short_individual": {
             "job_preset": "short_individual",
             "preset_id": "short_individual_portrait",
@@ -188,8 +161,6 @@ def _resolve_job_preset_config(
         return mapping["long_single"]
     if normalized_mode in {"long_series", "long_serie"}:
         return mapping["long_series"]
-    if normalized_mode in {"raw_edit", "authorial_edit", "video_edit"}:
-        return mapping["raw_edit"]
     return {**mapping["short_series"], "video_ratio": normalized_ratio}
 
 
@@ -254,8 +225,33 @@ def _publish_job(
         "preset_id": config.get("preset_id"),
         "clip_mode": config.get("clip_mode", "short_serie"),
         "video_ratio": config.get("video_ratio", "portrait"),
-        "build_ia": bool(config.get("build_ia", False)),
         "edit_brief": config.get("edit_brief"),
+    }
+    _worker_queue().lpush(settings.voxmind_redis_queue, json.dumps(payload))
+
+
+def republish_run(db: Session, run) -> None:
+    """Devolve ao worker uma run que já existe.
+
+    Diferente de `_publish_job`: aquele cria a run e depois enfileira. Aqui a run é a mesma
+    — foi resgatada, não recomeçada — então criar outra duplicaria o histórico e perderia a
+    contagem de tentativas que decide quando desistir.
+
+    O estágio é o que a run já estava fazendo: uma run que travou no finalize não precisa
+    baixar e transcrever de novo, e mandá-la para o prepare jogaria fora esse trabalho.
+    """
+    payload = {
+        "video_url": run.source_url,
+        "job_id": str(run.worker_job_id or run.id),
+        "pipeline_job_id": str(run.id),
+        "pipeline_stage": run.pipeline_stage or "prepare",
+        "manual_response": (run.metadata_json or {}).get("ai_response"),
+        "source_type": "youtube_url" if run.source_url else "direct_upload",
+        "source_storage_key": run.source_storage_key,
+        "job_preset": run.preset_id,
+        "preset_id": run.preset_id,
+        "clip_mode": run.clip_mode,
+        "video_ratio": run.video_ratio,
     }
     _worker_queue().lpush(settings.voxmind_redis_queue, json.dumps(payload))
 
@@ -426,7 +422,6 @@ def create_job(
                 "render_intent": preset_config["render_intent"],
                 "clip_mode": preset_config["clip_mode"],
                 "video_ratio": preset_config["video_ratio"],
-                "build_ia": payload.build_ia,
                 "language_mode": payload.language_mode,
                 "output_language": payload.output_language,
                 "subtitle_language": payload.subtitle_language,
@@ -450,7 +445,6 @@ def create_job(
                 "preset_id": preset_config["preset_id"],
                 "clip_mode": preset_config["clip_mode"],
                 "video_ratio": preset_config["video_ratio"],
-                "build_ia": payload.build_ia,
                 "source_type": JobSourceType.DIRECT_UPLOAD.value if payload.source_storage_key else JobSourceType.YOUTUBE_URL.value,
                 "source_storage_key": payload.source_storage_key,
             },
@@ -593,44 +587,6 @@ def job_assets(
         _serialize_asset(a)
         for a in assets
     ]
-
-
-@router.get("/jobs/{job_id}/prompt/download")
-def download_job_prompt(
-    job_id: str,
-    db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
-):
-    job = (
-        scope_job_query(db.query(ClipJob), user, ClipJob)
-        .filter(ClipJob.id == job_id)
-        .first()
-    )
-
-    if not job:
-        raise HTTPException(status_code=404)
-
-    _refresh_job_from_artifacts(db, job)
-
-    storage_key = job.prompt_storage_key or _expected_artifact_keys(str(job.id))["prompt"]
-    response = None
-    try:
-        response = artifact_storage_client.get_object(settings.worker_artifacts_bucket, storage_key)
-        content = response.read()
-    except Exception as exc:
-        raise HTTPException(status_code=404, detail="Prompt not available") from exc
-    finally:
-        if response is not None:
-            response.close()
-            response.release_conn()
-
-    return Response(
-        content=content,
-        media_type="text/plain; charset=utf-8",
-        headers={
-            "Content-Disposition": f'attachment; filename="job-{job.id}-prompt.txt"',
-        },
-    )
 
 
 @router.get("/jobs/{job_id}/final-videos/{video_index}/download")
@@ -804,97 +760,6 @@ def job_delivery_package(
             for asset in clips
         ],
         "metadata": job.metadata_json,
-    }
-
-
-@router.post("/jobs/{job_id}/submit-ai-response")
-def submit_ai_response(
-    job_id: str,
-    payload: SubmitAiResponseInput,
-    db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
-):
-    job = (
-        scope_job_query(db.query(ClipJob), user, ClipJob)
-        .filter(ClipJob.id == job_id)
-        .first()
-    )
-
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-
-    storage_key = _expected_artifact_keys(str(job.id))["ai_response"]
-    content = json.dumps(payload.response_json, ensure_ascii=False, indent=2).encode("utf-8")
-    artifact_storage_client.put_object(
-        settings.worker_artifacts_bucket,
-        storage_key,
-        io.BytesIO(content),
-        len(content),
-        content_type="application/json",
-    )
-
-    job.ai_response_storage_key = storage_key
-    job.pipeline_stage = "finalize"
-    job.status = JobStatus.QUEUED
-    job.error_message = None
-
-    metadata = dict(job.metadata_json or {})
-    metadata["manual_finalize"] = {
-        "submitted_at": datetime.now(timezone.utc).isoformat(),
-        "submitted_by_user_id": str(user.id),
-    }
-    job.metadata_json = metadata
-    db.add(job)
-
-    audit_service.log(
-        db,
-        action="job.submit_ai_response",
-        outcome="success",
-        actor_user=user,
-        target_type="clip_job",
-        target_id=str(job.id),
-        metadata={
-            "storage_key": storage_key,
-            "pipeline_stage": "finalize",
-        },
-    )
-
-    db.commit()
-    db.refresh(job)
-    try:
-        _publish_job(
-            job,
-            pipeline_stage="finalize",
-            manual_response=payload.response_json,
-            db=db,
-        )
-    except RedisError as exc:
-        job.status = JobStatus.FAILED
-        db.add(
-            JobEvent(
-                job_id=job.id,
-                event_type=JobEventType.JOB_FAILED,
-                stage="finalize",
-                message="Falha ao enfileirar finalize manual para o worker",
-                payload_json={
-                    "error": str(exc),
-                    "redis_host": settings.voxmind_redis_host,
-                    "redis_port": settings.voxmind_redis_port,
-                    "redis_queue": settings.voxmind_redis_queue,
-                },
-            )
-        )
-        db.commit()
-        raise HTTPException(
-            status_code=503,
-            detail="Falha ao conectar na fila do worker para o finalize manual.",
-        ) from exc
-
-    return {
-        "status": "queued",
-        "job_id": str(job.id),
-        "pipeline_stage": job.pipeline_stage,
-        "artifact_key": storage_key,
     }
 
 

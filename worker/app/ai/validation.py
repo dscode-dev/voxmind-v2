@@ -20,7 +20,7 @@ from typing import Any, Callable
 
 from pydantic import ValidationError
 
-from app.ai.schemas import CutsResponseModel, RawEditResponseModel
+from app.ai.schemas import CutsResponseModel
 from app.observability import get_logger
 
 logger = get_logger(__name__)
@@ -49,7 +49,7 @@ def format_validation_errors(error: ValidationError, limit: int = 8) -> str:
     return "\n".join(lines)
 
 
-def validate_cuts_response(data: Any, *, is_raw_edit: bool = False) -> dict[str, Any]:
+def validate_cuts_response(data: Any) -> dict[str, Any]:
     """Validate structurally and return the normalized dict.
 
     Raises AIResponseValidationError when the payload cannot be used.
@@ -57,7 +57,7 @@ def validate_cuts_response(data: Any, *, is_raw_edit: bool = False) -> dict[str,
     if not isinstance(data, dict):
         raise AIResponseValidationError("AI response must be a JSON object")
 
-    model_cls = RawEditResponseModel if is_raw_edit else CutsResponseModel
+    model_cls = CutsResponseModel
 
     try:
         model = model_cls.model_validate(data)
@@ -110,7 +110,6 @@ def generate_validated_cuts(
     system_prompt: str,
     user_prompt: str,
     *,
-    is_raw_edit: bool = False,
     emit: Callable[..., None] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Call the provider, validate, and repair once if needed.
@@ -139,7 +138,7 @@ def generate_validated_cuts(
     raw = generate(system_prompt, user_prompt)
 
     try:
-        validated = validate_cuts_response(raw, is_raw_edit=is_raw_edit)
+        validated = validate_cuts_response(raw)
         stats["valid"] = True
         return validated, stats
     except AIResponseValidationError as exc:
@@ -160,7 +159,7 @@ def generate_validated_cuts(
     repaired_raw = generate(system_prompt, repair_prompt)
 
     try:
-        validated = validate_cuts_response(repaired_raw, is_raw_edit=is_raw_edit)
+        validated = validate_cuts_response(repaired_raw)
     except AIResponseValidationError as second_error:
         stats["errors"].append(str(second_error))
         logger.error(

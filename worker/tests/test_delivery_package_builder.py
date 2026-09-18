@@ -23,8 +23,14 @@ def test_delivery_package_builder_generates_studio_friendly_manifest():
             }
         ],
         cut_files=[Path("/tmp/cut_01.mp4")],
+        final_clip_files=[Path("/tmp/cut_01.mp4")],
+        final_reel_path=None,
+        subtitle_path=None,
+        post_payload=None,
         long_video_script={"title": "Longo"},
         qa_report={"decision": "needs_review"},
+        automation_report=None,
+        render_plan=None,
         artifacts_manifest={"artifacts": {"cut_01": {"storage_object": "jobs/job-123/cuts/cut_01.mp4"}}},
     )
 

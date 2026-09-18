@@ -260,7 +260,9 @@ def test_no_publisher_is_claimed_to_exist():
     result = AutoReviewPolicy().evaluate(
         qa_report=qa_report(), final_media_report=final_media("auto_ready")
     )
-    assert result["auto_publish_eligible"] is False
+    # `auto_publish_eligible` era False fixo nos três ramos e ninguém o lia: um campo com
+    # nome de portão que não era portão de nada. Quem decide é `publication_eligibility`.
+    assert "auto_publish_eligible" not in result
     assert result["publication_eligibility"]["publisher_available"] is False
 
 

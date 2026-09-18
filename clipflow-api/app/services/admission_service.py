@@ -667,10 +667,6 @@ class ProductionAdmissionService:
                 "source_url": candidate.url,
                 "clip_mode": (pipeline.default_clip_mode if pipeline else "short_serie"),
                 "video_ratio": (pipeline.default_video_ratio if pipeline else "portrait"),
-                "build_ia": bool(
-                    ((pipeline.metadata_json or {}).get("admission") or {}).get("build_ia", True)
-                    if pipeline else True
-                ),
                 "topic_name": pipeline.name if pipeline else None,
                 "frozen_at": now.isoformat(),
             },
@@ -704,7 +700,6 @@ class ProductionAdmissionService:
             "pipeline_stage": "prepare",
             "clip_mode": frozen.get("clip_mode") or run.clip_mode,
             "video_ratio": frozen.get("video_ratio") or run.video_ratio,
-            "build_ia": bool(frozen.get("build_ia", True)),
             "manual_response": None,
             "origin": "admission",
         }

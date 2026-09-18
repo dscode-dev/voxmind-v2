@@ -34,7 +34,7 @@ class ClipJob(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     input_mode: Mapped[JobInputMode] = mapped_column(
         Enum(JobInputMode, name="job_input_mode_enum"),
         nullable=False,
-        default=JobInputMode.MANUAL_PROMPT,
+        default=JobInputMode.DIRECT_AGENT,
     )
 
     source_type: Mapped[JobSourceType] = mapped_column(
