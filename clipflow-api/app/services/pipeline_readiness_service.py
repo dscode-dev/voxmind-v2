@@ -90,7 +90,9 @@ class Readiness:
 class PipelineReadinessService:
     """Responde, para um pipeline, o que falta para ele funcionar."""
 
-    def evaluate(self, db: Session, pipeline: Pipeline, *, shared: dict | None = None) -> Readiness:
+    def evaluate(
+        self, db: Session, pipeline: Pipeline, *, shared: dict | None = None
+    ) -> Readiness:
         """`shared` carrega o que é global — interruptor, processos, chave — para uma lista de
         pipelines não perguntar o mesmo ao Redis uma vez por linha."""
         facts = shared if shared is not None else self.shared_facts()
@@ -105,9 +107,13 @@ class PipelineReadinessService:
                 detail=(
                     "Ligado: os pipelines podem rodar sozinhos."
                     if facts["autonomous_enabled"]
-                    else "Desligado no servidor. Nenhum pipeline roda sozinho enquanto estiver assim."
+                    else "Desligado no servidor. Nenhum pipeline roda sozinho "
+                         "enquanto estiver assim."
                 ),
-                action=None if facts["autonomous_enabled"] else "AUTONOMOUS_PIPELINE_ENABLED=true no .env, e reiniciar a API",
+                action=(
+                    None if facts["autonomous_enabled"]
+                    else "AUTONOMOUS_PIPELINE_ENABLED=true no .env, e reiniciar a API"
+                ),
             ),
             Check(
                 code="scheduler_alive",
@@ -130,9 +136,13 @@ class PipelineReadinessService:
                     "Ligada."
                     if pipeline.is_active and automation.get("enabled") is True
                     else "Pausado." if not pipeline.is_active
-                    else "O pipeline está ativo, mas a automação dele está desligada — ele só roda quando alguém aperta Executar agora."
+                    else "O pipeline está ativo, mas a automação dele está desligada — "
+                         "ele só roda quando alguém aperta Executar agora."
                 ),
-                action=None if (pipeline.is_active and automation.get("enabled") is True) else "Editar o pipeline e ligar a automação",
+                action=(
+                    None if (pipeline.is_active and automation.get("enabled") is True)
+                    else "Editar o pipeline e ligar a automação"
+                ),
                 href=f"/pipelines/{pipeline.id}",
             ),
             self._sources(db, pipeline, automation),
@@ -144,9 +154,13 @@ class PipelineReadinessService:
                 detail=(
                     "Configurada."
                     if facts["discovery_configured"]
-                    else "Ausente. A busca não consegue consultar o YouTube, então nenhum vídeo será encontrado."
+                    else "Ausente. A busca não consegue consultar o YouTube, então "
+                         "nenhum vídeo será encontrado."
                 ),
-                action=None if facts["discovery_configured"] else "YOUTUBE_API_KEY no .env, e reiniciar a API",
+                action=(
+                    None if facts["discovery_configured"]
+                    else "YOUTUBE_API_KEY no .env, e reiniciar a API"
+                ),
             ),
             Check(
                 code="production_worker",
@@ -156,9 +170,13 @@ class PipelineReadinessService:
                 detail=(
                     f"{facts['workers_alive']} worker(s) prontos para cortar."
                     if facts["workers_alive"]
-                    else "Nenhum worker vivo. Os vídeos admitidos vão para a fila e ficam lá."
+                    else "Nenhum worker vivo. Os vídeos admitidos vão para a fila e "
+                         "ficam lá."
                 ),
-                action=None if facts["workers_alive"] else "COMPOSE_PROFILES=cpu (ou gpu) no .env, e docker compose up -d",
+                action=(
+                    None if facts["workers_alive"]
+                    else "COMPOSE_PROFILES=cpu (ou gpu) no .env, e docker compose up -d"
+                ),
             ),
             self._channel(db, automation),
         ]
@@ -183,7 +201,10 @@ class PipelineReadinessService:
                 ok=True,
                 severity=BLOCKER,
                 title="Fontes de busca",
-                detail="A busca está desligada neste pipeline; ele produz o que você admitir à mão.",
+                detail=(
+                    "A busca está desligada neste pipeline; "
+                    "ele produz o que você admitir à mão."
+                ),
             )
         return Check(
             code="sources",
@@ -219,7 +240,8 @@ class PipelineReadinessService:
             detail=(
                 f"Publica em {target.channel_title or target.name}."
                 if publishable
-                else "Sem canal publicável. Os cortes ficam prontos e esperam alguém publicá-los."
+                else "Sem canal publicável. Os cortes ficam prontos e esperam alguém "
+                     "publicá-los."
             ),
             action=None if publishable else "Conectar um canal em Publicação",
             href=None if publishable else "/publicacao",
