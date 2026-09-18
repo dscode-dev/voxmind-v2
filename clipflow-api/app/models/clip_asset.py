@@ -2,7 +2,17 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import CheckConstraint, Enum, ForeignKey, Index, Integer, Numeric, String, Text
+from sqlalchemy import (
+    CheckConstraint,
+    Enum,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -13,6 +23,12 @@ from app.models.enums import AssetStatus, ClipAssetType
 class ClipAsset(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "clip_assets"
     __table_args__ = (
+        # Um objeto no storage é um artefato. A sincronização procurava a linha antes de
+        # criar, mas sem esta restrição duas sincronizações simultâneas — o cliente que
+        # expirou e a retentativa dele — passavam as duas pela procura e inseriam as duas.
+        # Foi o que aconteceu: `final_clip_01.mp4` ficou duplicado com 22 segundos de
+        # diferença.
+        UniqueConstraint("job_id", "storage_key", name="uq_clip_assets_job_storage_key"),
         Index("ix_clip_assets_job_type", "job_id", "asset_type"),
         Index("ix_clip_assets_job", "job_id"),
         CheckConstraint("start_sec >= 0", name="clip_assets_start_non_negative"),

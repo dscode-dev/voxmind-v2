@@ -397,6 +397,21 @@ class Settings(BaseSettings):
     # cannot be evaluated is a gate that did not pass.
     # =====================================
 
+    # Quanto tempo uma run pode ficar sem dar sinal antes de ser considerada travada. O
+    # relógio conta desde o último evento dela, não desde o início: transcrever um vídeo
+    # longo em CPU é lento e legítimo, e cortar por duração mataria os jobs mais caros.
+    # Declarada em vez de descoberta. Assinar uma URL é local; procurar a região não é, e
+    # a busca sai pelo endpoint público, que de dentro do contêiner não responde.
+    minio_region: str = Field(default="us-east-1", alias="MINIO_REGION")
+
+    stalled_run_timeout_minutes: int = Field(
+        default=45, alias="STALLED_RUN_TIMEOUT_MINUTES"
+    )
+
+    # Quantas vezes uma run travada volta para a fila antes de ser declarada falha. Sem um
+    # teto, uma run que trava sempre no mesmo ponto recircula para sempre.
+    stalled_run_max_attempts: int = Field(default=3, alias="STALLED_RUN_MAX_ATTEMPTS")
+
     autopublish_enabled: bool = Field(default=False, alias="AUTOPUBLISH_ENABLED")
 
     # A third switch, because "publish automatically" and "publish automatically to the whole

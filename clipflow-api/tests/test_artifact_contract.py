@@ -224,14 +224,22 @@ def test_clip_metadata_is_preserved(service):
     assert first.hashtags_json == ["#a"]
 
 
-def test_package_without_final_file_name_falls_back_to_the_cut_name(service):
-    """Delivery packages written before final_file_name existed still produce a key."""
+def test_a_cut_without_a_final_file_produces_no_row(service):
+    """A queda para o nome do corte fabricava um caminho que não existia.
+
+    Este teste afirmava o contrário — que um pacote sem `final_file_name` ainda "produz uma
+    chave". Produzia: `final_clips/cut_01.mp4`, um objeto que o worker nunca envia. Numa
+    execução real o pacote listou quatro cortes e só dois viraram arquivo, e as duas linhas
+    extras viraram botões de download respondendo 404.
+
+    Um corte sem arquivo final não foi renderizado. Não ter linha é a descrição correta.
+    """
     db = FakeSession()
-    legacy_package = {"clips": [{"clip_index": 1, "file_name": "cut_01.mp4"}]}
+    unrendered = {"clips": [{"clip_index": 1, "file_name": "cut_01.mp4"}]}
 
-    service._sync_clip_assets(db, make_job(), legacy_package, None)
+    service._sync_clip_assets(db, make_job(), unrendered, None)
 
-    assert db.added[0].storage_key == f"jobs/{JOB_ID}/final_clips/cut_01.mp4"
+    assert db.added == []
 
 
 def test_clip_without_any_name_is_skipped(service):

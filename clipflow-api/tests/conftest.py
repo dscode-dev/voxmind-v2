@@ -113,3 +113,33 @@ def make_run(db, **overrides):
     db.add(job)
     db.flush()
     return job
+
+def make_clip_job(db, **overrides):
+    """Um ClipJob — o job que o worker executa, distinto da PipelineJob que o governa."""
+    from app.models.clip_job import ClipJob
+    from app.models.enums import JobSourceType, JobStatus, UserRole, UserStatus
+    from app.models.user import User
+
+    user = db.query(User).first()
+    if user is None:
+        user = User(
+            phone_number=f"+55119{_uuid.uuid4().int % 100000000:08d}",
+            full_name="Dono",
+            role=UserRole.ADMIN,
+            status=UserStatus.ACTIVE,
+        )
+        db.add(user)
+        db.flush()
+
+    fields = {
+        "user_id": user.id,
+        "status": JobStatus.QUEUED,
+        "source_type": JobSourceType.YOUTUBE_URL,
+        "source_url": "https://example.invalid/video",
+        "pipeline_stage": "prepare",
+    }
+    fields.update(overrides)
+    job = ClipJob(**fields)
+    db.add(job)
+    db.flush()
+    return job

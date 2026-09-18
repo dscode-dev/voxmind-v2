@@ -216,8 +216,13 @@ class JobArtifactSyncService:
             # to no object and whose signed URL 404'd. The QA report is still keyed by the
             # raw cut name, so that lookup keeps using it.
             raw_file_name = clip.get("file_name")
-            final_file_name = clip.get("final_file_name") or raw_file_name
+            final_file_name = clip.get("final_file_name")
             if not final_file_name:
+                # Um corte sem arquivo final não foi renderizado — na maioria das vezes
+                # porque foi absorvido por um dos vídeos finais. Cair para `file_name` aqui
+                # criava uma linha apontando para `final_clips/cut_03.mp4`, que não existe:
+                # um botão de download que responde 404. Um clipe sem artefato não é um
+                # artefato.
                 continue
 
             storage_key = f"jobs/{job.id}/final_clips/{final_file_name}"
@@ -360,7 +365,7 @@ class JobArtifactSyncService:
                 event_type=JobEventType.TRANSCRIPTION_FINISHED,
                 stage="prepare",
                 message="prepare_artifacts_ready",
-                payload_json={"awaiting_manual_llm": True},
+                payload_json={"processing_ai": True},
             )
 
         if "ai_response_storage_key" in found_artifacts:
@@ -370,7 +375,7 @@ class JobArtifactSyncService:
                 existing_events,
                 event_type=JobEventType.LLM_REQUEST_FINISHED,
                 stage="finalize",
-                message="manual_llm_response_synced",
+                message="ai_response_synced",
             )
 
         if qa_report:
@@ -467,7 +472,7 @@ class JobArtifactSyncService:
         if "ai_response_storage_key" in found_artifacts or job.pipeline_stage == "finalize":
             return JobStatus.FINALIZING
         if "prompt_storage_key" in found_artifacts:
-            return JobStatus.AWAITING_MANUAL_LLM
+            return JobStatus.PROCESSING_AI
         if found_artifacts:
             return JobStatus.PREPARING
         return None
