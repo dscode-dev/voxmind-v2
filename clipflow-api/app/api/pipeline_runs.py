@@ -165,7 +165,11 @@ def report_stage(
     if job is None:
         raise HTTPException(status_code=404, detail="unknown pipeline job")
 
-    target = state_for_stage(payload.stage)
+    # Um passo só move o ciclo de vida quando *começa*. O fim dele é informação para a
+    # linha do tempo — quanto levou, se falhou — e não um estado: tentar transicionar de
+    # novo para o mesmo alvo seria ruído, e um passo cujo estado já ficou para trás teria o
+    # fim recusado como relatório atrasado. Registrado sem transição, nunca se perde.
+    target = state_for_stage(payload.stage) if payload.status == "started" else None
     if target is None:
         # A real step that simply does not move the lifecycle (a cache probe, an artifact
         # write). Worth recording, not worth a transition.
@@ -197,6 +201,23 @@ def report_stage(
         payload=_stage_payload(payload),
         worker_id=payload.worker_id,
     )
+    if outcome.event is None:
+        # A transição não valeu — o passo alveja o estado em que a run já está, ou um que
+        # ela já passou. Para o ciclo de vida isso é um não-evento, mas o passo *aconteceu*
+        # e a linha do tempo o lê daqui. Sem este registro, o primeiro passo depois de cada
+        # transição some: `download_video` começava logo após o claim já ter movido a run
+        # para DOWNLOADING, então seu início nunca era gravado e ele aparecia na tela sem
+        # quanto tempo levou.
+        event_bus.publish_event(
+            db,
+            service="worker",
+            event_type=PipelineEventType.INFO,
+            pipeline_job_id=job.id,
+            stage=payload.stage,
+            message=f"{payload.stage}:{payload.status}",
+            payload=_stage_payload(payload),
+            worker_id=payload.worker_id,
+        )
     db.commit()
     return {"status": "ok", **outcome.as_dict()}
 

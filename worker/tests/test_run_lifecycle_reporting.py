@@ -108,8 +108,17 @@ def test_the_worker_never_sends_a_state(tmp_path, monkeypatch):
     assert set(call) <= {"pipeline_job_id", "stage", "status", "worker_id", "attempt", "metadata"}
 
 
-def test_completion_of_a_step_is_not_a_transition(tmp_path, monkeypatch):
-    """`started` moves the lifecycle; `completed` would only re-report the same state."""
+def test_the_end_of_a_step_is_reported_too(tmp_path, monkeypatch):
+    """Antes só o início saía daqui: para o ciclo de vida bastava, porque o começo do passo
+    seguinte implica o fim do anterior.
+
+    Mas a tela de acompanhamento lê estes eventos, e sem o fim toda etapa ficava
+    "executando" para sempre — inclusive numa run já concluída, que aparecia com as sete
+    fases girando. O fim é também o que diz quanto cada passo levou.
+
+    Quem recusa mover o estado num `completed` é a API, não este lado: o worker relata
+    fatos e nunca decide transição.
+    """
     from app.settings import settings
 
     monkeypatch.setattr(settings, "work_dir", str(tmp_path))
@@ -119,7 +128,11 @@ def test_completion_of_a_step_is_not_a_transition(tmp_path, monkeypatch):
     pipeline._mark_step("transcribe", "started")
     pipeline._mark_step("transcribe", "completed")
 
-    assert client.stages() == ["transcribe"]
+    assert client.stages() == ["transcribe", "transcribe"]
+    assert [c[1]["status"] for c in client.calls if c[0] == "stage"] == [
+        "started",
+        "completed",
+    ]
 
 
 def test_a_legacy_payload_reports_nothing_and_still_runs(tmp_path, monkeypatch):

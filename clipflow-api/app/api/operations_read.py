@@ -18,25 +18,44 @@ provider response body.
 """
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from minio import Minio
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.settings import settings
 from app.db.session import get_db
 from app.models.ai_execution import AIExecution
-from app.models.enums import AIExecutionStatus, PipelineState
+from app.models.enums import AIExecutionStatus, ClipAssetType, PipelineState
+from app.models.clip_asset import ClipAsset
 from app.models.pipeline_job import PipelineJob
 from app.models.publish_attempt import PublishAttempt
 from app.models.user import User
+from app.services.asset_url_service import AssetUrlService
+from app.services.run_timeline_service import RunTimelineService
 from app.models.video_candidate import VideoCandidate
 from app.security.auth_middleware import get_current_admin
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
+
+asset_url_service = AssetUrlService()
+run_timeline_service = RunTimelineService()
+
+# Para listar o que foi renderizado. O endpoint *interno*, porque quem lista é a API;
+# a URL assinada é que aponta para o endereço que o navegador alcança.
+artifact_storage_client = Minio(
+    settings.minio_endpoint,
+    access_key=settings.minio_access_key,
+    secret_key=settings.minio_secret_key,
+    secure=settings.minio_secure,
+)
 
 MAX_PAGE_SIZE = 100
 
@@ -194,6 +213,116 @@ def list_pipeline_jobs(
             _serialize_job(job, counts.get(job.id, {})) for job in jobs
         ],
     }
+
+
+@router.get("/admin/pipeline-jobs/{job_id}/timeline")
+def get_pipeline_job_timeline(
+    job_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    """Os passos desta run, e os arquivos que ela produziu.
+
+    A tela mostrava um componente de etapas que ficava todo apagado — e ficava porque não
+    havia o que acender: o detalhe da run devolvia só o estado atual. Os passos sempre
+    estiveram em `pipeline_events`, com início, fim e payload; faltava lê-los.
+    """
+    job = db.query(PipelineJob).filter(PipelineJob.id == job_id).first()
+    if job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="unknown pipeline job"
+        )
+
+    payload = run_timeline_service.timeline(db, job)
+    payload["outputs"] = _run_outputs(db, job)
+    return payload
+
+
+
+def _as_uuid(value: Any) -> uuid.UUID | None:
+    if isinstance(value, uuid.UUID):
+        return value
+    try:
+        return uuid.UUID(str(value))
+    except (TypeError, ValueError):
+        return None
+
+def _run_outputs(db: Session, job: PipelineJob) -> list[dict[str, Any]]:
+    """Os cortes prontos, com link para baixar.
+
+    O vídeo é o resultado do trabalho todo; ficava só no storage, alcançável por quem
+    soubesse montar a URL. A run aponta para o job do worker, e é nele que os arquivos
+    renderizados estão registrados.
+    """
+    # `worker_job_id` é texto na run e UUID na coluna do asset. Sem a coerção o SQLAlchemy
+    # quebra no bind em vez de não encontrar nada — e um erro de tipo ao abrir a tela é bem
+    # pior do que uma lista vazia.
+    worker_job_id = _as_uuid(job.worker_job_id)
+    if worker_job_id is None:
+        return []
+    assets = (
+        db.query(ClipAsset)
+        .filter(
+            ClipAsset.job_id == worker_job_id,
+            ClipAsset.asset_type == ClipAssetType.SHORT_CLIP,
+        )
+        .order_by(ClipAsset.order_index.asc())
+        .all()
+    )
+    if assets:
+        return [
+            {
+                "id": str(asset.id),
+                "name": (asset.storage_key or "").rsplit("/", 1)[-1],
+                "title": asset.title,
+                "order": asset.order_index,
+                "duration_sec": (
+                    float(asset.duration_sec) if asset.duration_sec else None
+                ),
+                "status": asset.status.value if asset.status else None,
+                "url": asset_url_service.build_signed_url(asset.storage_key),
+            }
+            for asset in assets
+        ]
+
+    # Uma run criada pela automação não passa por `clip_jobs`, então não há linha de asset
+    # para ela — mas os arquivos renderizados estão no storage do mesmo jeito. Sem esta
+    # queda, justamente as produções autônomas (que é o que o produto faz sozinho) seriam as
+    # únicas sem link para baixar.
+    return _outputs_from_storage(str(job.worker_job_id))
+
+
+def _outputs_from_storage(worker_job_id: str) -> list[dict[str, Any]]:
+    prefix = f"jobs/{worker_job_id}/final_clips/"
+    try:
+        objects = list(
+            artifact_storage_client.list_objects(
+                settings.worker_artifacts_bucket, prefix=prefix, recursive=True
+            )
+        )
+    except Exception:  # noqa: BLE001
+        # A tela inteira não pode cair porque o storage piscou.
+        logger.warning("run_outputs_listing_failed", exc_info=True)
+        return []
+
+    out = []
+    for index, obj in enumerate(sorted(objects, key=lambda o: o.object_name), start=1):
+        name = obj.object_name.rsplit("/", 1)[-1]
+        if not name.lower().endswith(".mp4"):
+            continue
+        out.append(
+            {
+                "id": obj.object_name,
+                "name": name,
+                "title": None,
+                "order": index,
+                "duration_sec": None,
+                "size_bytes": obj.size,
+                "status": "ready",
+                "url": asset_url_service.build_signed_url(obj.object_name),
+            }
+        )
+    return out
 
 
 @router.get("/admin/pipeline-jobs/{job_id}")

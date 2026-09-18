@@ -294,7 +294,11 @@ class Pipeline:
         # The single point where worker progress reaches the authoritative lifecycle. One
         # call site, not dozens scattered through the pipeline: every step already flows
         # through here, and the API decides which of them move the state.
-        if self.pipeline_job_id and status == "started":
+        # Antes só o início era reportado: para o ciclo de vida bastava, porque o começo do
+        # passo seguinte já implica o fim do anterior. Mas a tela de acompanhamento lê estes
+        # eventos, e sem o fim toda etapa ficava "executando" para sempre — inclusive numa
+        # run já concluída. O fim é o que diz quanto cada passo levou.
+        if self.pipeline_job_id:
             self.clipflow_api.report_stage_safe(
                 self.pipeline_job_id,
                 stage=step,
