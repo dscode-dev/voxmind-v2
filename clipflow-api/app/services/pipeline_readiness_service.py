@@ -178,7 +178,7 @@ class PipelineReadinessService:
                     else "COMPOSE_PROFILES=cpu (ou gpu) no .env, e docker compose up -d"
                 ),
             ),
-            self._channel(db, automation),
+            self._channel(db, automation, pipeline.id),
         ]
         return Readiness(checks=checks)
 
@@ -220,7 +220,7 @@ class PipelineReadinessService:
             href=f"/pipelines/{pipeline.id}",
         )
 
-    def _channel(self, db: Session, automation: dict) -> Check:
+    def _channel(self, db: Session, automation: dict, pipeline_id=None) -> Check:
         # O id vem do JSON como texto, e a coluna é UUID. Sem a coerção o SQLAlchemy quebra
         # no bind em vez de não encontrar nada — e um diagnóstico que estoura é pior do que
         # o problema que ele existe para reportar.
@@ -230,23 +230,57 @@ class PipelineReadinessService:
             target = db.query(PublishTarget).filter(PublishTarget.id == target_id).first()
 
         publishable = bool(target and target.is_publishable)
+
+        # Três situações diferentes que viravam a mesma frase. "Conectar um canal em
+        # Publicação" foi mostrado a um operador que já tinha conectado o canal e o
+        # escolhido no pipeline — a tela dizia "CANAL: VoxMind" no cartão ao lado. O que
+        # faltava era retomá-lo, e nada dizia isso.
+        name = (target.channel_title or target.name) if target else None
+        if publishable:
+            detail = f"Publica em {name}."
+            action = None
+            href = None
+        elif target is None:
+            detail = (
+                "Nenhum canal escolhido para este pipeline. Os cortes ficam prontos e "
+                "esperam alguém publicá-los."
+            )
+            action = "Escolher um canal ao editar o pipeline"
+            href = f"/pipelines/{pipeline_id}" if pipeline_id else "/publicacao"
+        elif not target.is_active:
+            detail = (
+                f"O canal {name} está conectado, mas pausado. Enquanto estiver assim, "
+                "nada é publicado nele."
+            )
+            action = f"Retomar o canal {name} na tela de Publicação"
+            href = "/publicacao"
+        elif not target.refresh_token_encrypted:
+            detail = (
+                f"O canal {name} perdeu a credencial. É preciso conectá-lo de novo para "
+                "publicar."
+            )
+            action = "Reconectar o canal em Publicação"
+            href = "/publicacao"
+        else:
+            detail = (
+                f"O canal {name} está desconectado ({target.connection_status.value}). "
+                "Os cortes ficam prontos e esperam alguém publicá-los."
+            )
+            action = "Reconectar o canal em Publicação"
+            href = "/publicacao"
+
         return Check(
             code="channel",
             ok=publishable,
-            # Aviso, não bloqueio: sem canal o pipeline encontra, escolhe e corta. Ele só não
-            # publica. Tratar isso como quebra faria um pipeline que produz parecer parado.
+            # Aviso, não bloqueio: sem canal o pipeline encontra, escolhe e corta. Ele só
+            # não publica. Tratar isso como quebra faria um pipeline que produz parecer
+            # parado.
             severity=WARNING,
             title="Canal de publicação",
-            detail=(
-                f"Publica em {target.channel_title or target.name}."
-                if publishable
-                else "Sem canal publicável. Os cortes ficam prontos e esperam alguém "
-                     "publicá-los."
-            ),
-            action=None if publishable else "Conectar um canal em Publicação",
-            href=None if publishable else "/publicacao",
+            detail=detail,
+            action=action,
+            href=href,
         )
-
     # ------------------------------------------------------------------ global
 
     def shared_facts(self) -> dict[str, Any]:
