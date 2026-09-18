@@ -279,3 +279,26 @@ def test_the_dashboard_requires_the_operator(db, no_event_fanout):
     app.dependency_overrides[get_db] = lambda: db
     with TestClient(app) as anonymous:
         assert anonymous.get("/admin/dashboard").status_code in (401, 403)
+
+def test_publications_the_queue_gave_up_on_are_reported(client, db, monkeypatch):
+    """Havia 44 numa instalação real, só no Redis, invisíveis em qualquer tela. Um corte
+    que existe e não chegou ao canal é o oposto do resultado."""
+    from app.api import dashboard
+
+    monkeypatch.setattr(dashboard, "_dead_letters", lambda: 7)
+
+    attention = client.get("/admin/dashboard").json()["attention"]
+
+    assert attention["dead_letters"] == 7
+
+
+def test_a_blind_redis_does_not_take_the_panel_down(client, db, monkeypatch):
+    from app.api import dashboard
+
+    class _Broken:
+        def depths(self):
+            raise RuntimeError("redis fora")
+
+    monkeypatch.setattr(dashboard, "PublishQueue", _Broken)
+
+    assert client.get("/admin/dashboard").status_code == 200

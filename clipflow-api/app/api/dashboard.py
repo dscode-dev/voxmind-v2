@@ -32,6 +32,7 @@ from app.models.enums import PipelineState, PublishAttemptStatus
 from app.models.pipeline import Pipeline
 from app.models.pipeline_job import PipelineJob
 from app.models.publish_attempt import PublishAttempt
+from app.publishing.publish_queue import PublishQueue
 from app.models.user import User
 from app.models.video_candidate import VideoCandidate
 from app.models.video_performance_snapshot import VideoPerformanceSnapshot
@@ -260,8 +261,23 @@ def _attention(db: Session) -> dict[str, Any]:
     return {
         "blocked_pipelines": blocked,
         "unresolved_publications": int(unresolved),
+        "dead_letters": _dead_letters(),
         "pipelines_total": len(pipelines),
     }
+
+
+def _dead_letters() -> int:
+    """Publicações que a fila desistiu de entregar.
+
+    Ficavam só no Redis, invisíveis em qualquer tela: havia 44 nesta instalação e ninguém
+    tinha como saber. Um vídeo que não chega ao canal é o oposto do resultado, e um número
+    que só existe num `redis-cli` não é observabilidade.
+    """
+    try:
+        return int(PublishQueue().depths().get("dead", 0))
+    except Exception:  # noqa: BLE001
+        # O painel inteiro não pode cair porque o Redis piscou.
+        return 0
 
 
 # =============================================================================
