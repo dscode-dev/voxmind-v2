@@ -397,3 +397,85 @@ def test_the_theme_catalogue_requires_the_operator(db, no_event_fanout):
     app.dependency_overrides[get_db] = lambda: db
     with TestClient(app) as anonymous:
         assert anonymous.get("/admin/pipeline-themes").status_code in (401, 403)
+
+
+# ===========================================================================
+# Prontidão: por que este pipeline não produz
+# ===========================================================================
+
+
+def test_readiness_names_what_is_missing_and_what_to_do(client, db):
+    """A resposta para "por que nada acontece?".
+
+    Cada bloqueio traz o que fazer. Um diagnóstico que aponta o problema e não aponta a saída
+    só move o trabalho para o operador.
+    """
+    make(db)
+    db.commit()
+
+    readiness = client.get("/admin/pipelines").json()[0]["readiness"]
+
+    assert readiness["ready"] is False
+    blockers = [c for c in readiness["checks"] if not c["ok"] and c["severity"] == "blocker"]
+    assert blockers, "um pipeline sem fonte não pode estar pronto"
+    assert all(c["action"] for c in blockers), "todo bloqueio precisa dizer o que fazer"
+    assert any(c["code"] == "sources" for c in blockers)
+
+
+def test_a_missing_channel_is_a_warning_not_a_blocker(client, db):
+    """Sem canal o pipeline encontra, escolhe e corta — ele só não publica.
+
+    Tratar isso como quebra faria um pipeline que produz parecer parado.
+    """
+    make(db)
+    db.commit()
+
+    checks = client.get("/admin/pipelines").json()[0]["readiness"]["checks"]
+    channel = next(c for c in checks if c["code"] == "channel")
+
+    assert channel["ok"] is False
+    assert channel["severity"] == "warning"
+
+
+def test_a_pipeline_with_discovery_off_is_not_asked_for_sources(client, db):
+    """Ele vive de admissão manual; cobrar fonte seria apontar um problema que ele não tem."""
+    pipeline = make(db, metadata_json={"automation": {"enabled": True,
+                                                      "discovery_enabled": False}})
+    db.commit()
+
+    checks = client.get(f"/admin/pipelines/{pipeline.id}").json()["readiness"]["checks"]
+    sources = next(c for c in checks if c["code"] == "sources")
+
+    assert sources["ok"] is True
+
+
+def test_a_malformed_channel_id_is_no_channel_not_a_crash(client, db):
+    """O id vem do JSON como texto e a coluna é UUID.
+
+    Sem coerção o SQLAlchemy quebra no bind — e um diagnóstico que estoura é pior do que o
+    problema que ele existe para reportar.
+    """
+    pipeline = make(db, metadata_json={"automation": {"publish_target_id": "não é um uuid"}})
+    db.commit()
+
+    response = client.get(f"/admin/pipelines/{pipeline.id}")
+
+    assert response.status_code == 200
+    channel = next(
+        c for c in response.json()["readiness"]["checks"] if c["code"] == "channel"
+    )
+    assert channel["ok"] is False
+
+
+def test_the_checks_come_in_the_order_that_stops_the_work(client, db):
+    """Não adianta ter fonte se o interruptor geral está desligado.
+
+    A tela mostra nesta ordem e diz "resolva a primeira"; se a ordem mudar, a instrução mente.
+    """
+    make(db)
+    db.commit()
+
+    codes = [c["code"] for c in client.get("/admin/pipelines").json()[0]["readiness"]["checks"]]
+
+    assert codes.index("global_switch") < codes.index("sources")
+    assert codes.index("sources") < codes.index("channel")

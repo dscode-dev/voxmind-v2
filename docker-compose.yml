@@ -13,14 +13,17 @@
 # worker/Dockerfile (CPU-only, no CUDA) is a development/CI convenience and is NOT the
 # production path. It is not referenced here.
 #
-# `voxmind-worker` requires the NVIDIA runtime. On a host without an NVIDIA adapter it cannot
-# start at all — and it fails at container *creation*, so there is no container and no log to
-# look at; the job queue simply fills and nothing drains it. `voxmind-worker-cpu` (profile
-# `cpu`) runs the same image with the devices forced to cpu, for exactly that host:
+# UM worker tem de subir, e qual deles é escolha do host. Os dois estão atrás de profiles, e
+# `COMPOSE_PROFILES` no .env decide:
 #
-#   docker compose --profile cpu up -d voxmind-worker-cpu
+#   COMPOSE_PROFILES=cpu   -> voxmind-worker-cpu  (qualquer máquina; lento)
+#   COMPOSE_PROFILES=gpu   -> voxmind-worker      (exige runtime NVIDIA)
 #
-# Run one or the other, never both: they claim from the same queue.
+# Nunca os dois: eles reivindicam da mesma fila.
+#
+# O de GPU falha na *criação* do container onde não há adaptador NVIDIA — sem container, sem
+# log, sem linha em `docker compose ps`. A fila enche e nada a esvazia, o que da tela é
+# indistinguível de um pipeline travado. Por isso o default não pode ser "nenhum worker".
 
 x-worker-env: &worker-env
     WORKER_MODE: queue
@@ -435,6 +438,10 @@ services:
     restart: "no"
 
   voxmind-worker:
+    # Atrás de um profile como o de CPU: qual dos dois sobe é escolha de `COMPOSE_PROFILES`,
+    # e o .env define uma. Antes este era o default e o de CPU o opcional — numa máquina sem
+    # adaptador NVIDIA isso significava subir a stack inteira sem ninguém para processar.
+    profiles: ["gpu"]
     build:
       context: ./worker
       dockerfile: Dockerfile.gpu
@@ -473,9 +480,8 @@ services:
   # keep in step for no gain. Only the device settings differ, and they are forced here
   # rather than read from .env — a CPU worker told to use cuda fails at the first clip.
   #
-  # Opt in, because it is much slower than the GPU path and must never start by accident
-  # beside it — two workers would both claim from the same queue:
-  #   docker compose --profile cpu up -d voxmind-worker-cpu
+  # Escolhido por `COMPOSE_PROFILES=cpu`. Nunca junto com o de GPU: os dois reivindicam da
+  # mesma fila.
   voxmind-worker-cpu:
     profiles: ["cpu"]
     image: ${VOXMIND_WORKER_IMAGE:-clipflow-worker:local}

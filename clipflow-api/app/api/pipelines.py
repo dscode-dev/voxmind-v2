@@ -39,9 +39,11 @@ from app.models.video_candidate import VideoCandidate
 from app.security.auth_middleware import get_current_admin
 from app.services.audit_service import AuditService
 from app.services.automation_service import AutomationConfig
+from app.services.pipeline_readiness_service import PipelineReadinessService
 
 router = APIRouter()
 audit_service = AuditService()
+readiness_service = PipelineReadinessService()
 
 # Um teto para a listagem de execuções. Uma página sem limite é uma varredura
 # da tabela esperando para acontecer.
@@ -180,8 +182,17 @@ def list_pipelines(
     ids = [pipeline.id for pipeline in pipelines]
     counts = _counts(db, ids)
     states = _automation_states(db, ids)
+    # Interruptor, processos e credencial valem para todos. Buscados uma vez, não uma por
+    # linha: são leituras de Redis e de settings, e vinte pipelines fariam sessenta.
+    shared = readiness_service.shared_facts()
     return [
-        _serialize(db, pipeline, counts=counts.get(pipeline.id), state=states.get(pipeline.id))
+        _serialize(
+            db,
+            pipeline,
+            counts=counts.get(pipeline.id),
+            state=states.get(pipeline.id),
+            shared=shared,
+        )
         for pipeline in pipelines
     ]
 
@@ -703,6 +714,7 @@ def _serialize(
     counts: dict[str, int] | None = None,
     state: AutomationState | None = None,
     detail: bool = False,
+    shared: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     automation = AutomationConfig.from_pipeline(pipeline).as_dict()
     payload: dict[str, Any] = {
@@ -721,6 +733,10 @@ def _serialize(
         "last_run_at": pipeline.last_run_at,
         "automation": automation,
         "counts": counts or {},
+        # Por que este pipeline não está produzindo. Vem junto porque é a primeira coisa que
+        # alguém quer saber ao abrir a tela, e uma segunda chamada só para descobrir que falta
+        # uma fonte seria um round-trip a mais para a pergunta mais comum.
+        "readiness": readiness_service.evaluate(db, pipeline, shared=shared).as_dict(),
         "created_at": pipeline.created_at,
     }
 
