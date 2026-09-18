@@ -41,6 +41,7 @@ from app.core.settings import settings
 from app.models.automation_state import AutomationState
 from app.models.pipeline import Pipeline
 from app.services.automation_run_service import AutomationRunService
+from app.services.stalled_run_service import StalledRunService
 from app.services.automation_service import (
     FAILED,
     AutomationConfig,
@@ -78,6 +79,7 @@ class TickReport:
     pipelines_considered: int = 0
     pending_enqueue_recovered: int = 0
     runs_settled: int = 0
+    stalled_rescued: list[dict[str, Any]] = field(default_factory=list)
     runs: list[dict[str, Any]] = field(default_factory=list)
     skipped: list[dict[str, Any]] = field(default_factory=list)
     duration_ms: int = 0
@@ -90,6 +92,7 @@ class TickReport:
             "pipelines_considered": self.pipelines_considered,
             "pending_enqueue_recovered": self.pending_enqueue_recovered,
             "runs_settled": self.runs_settled,
+            "stalled_rescued": self.stalled_rescued,
             "ran": len(self.runs),
             "skipped": len(self.skipped),
             "runs": self.runs,
@@ -112,6 +115,17 @@ def deterministic_jitter_seconds(pipeline_id: Any, spread_seconds: int = 120) ->
     return int.from_bytes(digest[:4], "big") % spread_seconds
 
 
+
+def _republish_run(db: Session, job: Any) -> None:
+    """Devolve a run à fila do worker pelo mesmo caminho que a API usa.
+
+    Importado aqui dentro porque `app.api.jobs` importa serviços: no topo do módulo isso
+    fecharia um ciclo de import.
+    """
+    from app.api.jobs import republish_run
+
+    republish_run(db, job)
+
 class AutomationScheduler:
     """Finds due pipelines and runs them, one at a time, under lock."""
 
@@ -119,9 +133,11 @@ class AutomationScheduler:
         self,
         pipeline: AutonomousPipelineService | None = None,
         runs: AutomationRunService | None = None,
+        stalled: StalledRunService | None = None,
     ) -> None:
         self.pipeline = pipeline or AutonomousPipelineService()
         self.runs = runs or AutomationRunService()
+        self.stalled = stalled or StalledRunService(republish=_republish_run)
 
     # ------------------------------------------------------------------- tick
 
@@ -143,6 +159,11 @@ class AutomationScheduler:
             report.skipped.append({"reason": GLOBAL_DISABLED})
             logger.debug("automation_tick_disabled", extra={"tick_id": report.tick_id})
             return report
+
+        # Antes de tudo, as runs que pararam de andar. Uma run travada não se resolve
+        # sozinha e não aparece em lugar nenhum: ela só ocupa a fila de "em andamento" e
+        # some da vista. Primeiro porque é trabalho já pago, como os órfãos abaixo.
+        report.stalled_rescued = [r.as_dict() for r in self.stalled.rescue(db, now=now)]
 
         # Orphans first: work already decided on, stranded before it reached the queue.
         report.pending_enqueue_recovered = self.pipeline.recover_pending_enqueue(db)
