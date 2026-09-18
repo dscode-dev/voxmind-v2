@@ -23,7 +23,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.core.settings import settings
+from app.core.settings import (
+    AUTOPUBLISH_CEILING_PER_DAY,
+    VALID_AUTOPUBLISH_PRIVACY,
+    settings,
+)
 from app.db.session import get_db
 from app.models.enums import PublishAttemptStatus, PublishPlatform
 from app.models.pipeline import Pipeline
@@ -33,6 +37,7 @@ from app.models.publish_target import PublishTarget
 from app.models.user import User
 from app.publishing.contracts import ProviderNotConfiguredError
 from app.security.auth_middleware import get_current_admin
+from app.services import autonomy_preferences
 from app.security.secret_box import secret_box
 from app.services.audit_service import AuditService
 from app.services.autopublish_service import AutonomousPublicationService
@@ -505,6 +510,65 @@ def autopublish_status(
 ):
     """Whether the system may publish on its own, and what is standing in the way."""
     return _autopublish().status(db)
+
+
+class AutonomyPreferencesInput(BaseModel):
+    """O que o dono pode decidir. Ausente significa "não mexa nisto"."""
+
+    autopublish_enabled: bool | None = None
+    autopublish_public_enabled: bool | None = None
+    default_privacy: str | None = Field(default=None, max_length=16)
+    max_per_day: int | None = Field(default=None, ge=0, le=AUTOPUBLISH_CEILING_PER_DAY)
+    metrics_collection_enabled: bool | None = None
+
+
+@router.get("/admin/autonomy/preferences")
+def read_autonomy_preferences(
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    """Os interruptores em vigor, e o teto que o ambiente impõe a cada um."""
+    autonomy = autonomy_preferences.load(db)
+    db.commit()
+    return autonomy.as_dict()
+
+
+@router.patch("/admin/autonomy/preferences")
+def update_autonomy_preferences(
+    payload: AutonomyPreferencesInput,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    """Grava a intenção do dono.
+
+    Só os campos enviados mudam: um PATCH que omite um interruptor não deve reinterpretar
+    o silêncio como "desligue".
+    """
+    changes = payload.model_dump(exclude_unset=True)
+    if not changes:
+        return autonomy_preferences.load(db).as_dict()
+
+    privacy = changes.get("default_privacy")
+    if privacy is not None and privacy.strip().lower() not in VALID_AUTOPUBLISH_PRIVACY:
+        raise HTTPException(
+            status_code=422,
+            detail=f"privacidade invalida; use uma de {list(VALID_AUTOPUBLISH_PRIVACY)}",
+        )
+
+    autonomy = autonomy_preferences.update(db, changes)
+    # Ligar a publicação automática é a decisão mais consequente do painel. Fica no registro
+    # com quem a tomou.
+    audit_service.log(
+        db,
+        action="admin.autonomy.preferences.update",
+        outcome="success",
+        actor_user=admin,
+        target_type="autonomy_preferences",
+        target_id="singleton",
+        metadata={"changes": changes, "effective": autonomy.as_dict()},
+    )
+    db.commit()
+    return autonomy.as_dict()
 
 
 @router.get("/admin/publishing/runtime")

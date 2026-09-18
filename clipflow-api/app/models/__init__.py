@@ -15,6 +15,7 @@ from app.models.audit_log import AuditLog
 
 # The autonomous flow: find → select → produce → publish → measure.
 from app.models.automation_run import AutomationRun
+from app.models.autonomy_preference import AutonomyPreference
 from app.models.automation_state import AutomationState
 from app.models.oauth_state import OAuthState
 from app.models.pipeline import Pipeline
@@ -37,6 +38,7 @@ __all__ = [
     "JobQueue",
     "AuditLog",
     "AutomationRun",
+    "AutonomyPreference",
     "AutomationState",
     "OAuthState",
     "Pipeline",

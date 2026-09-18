@@ -28,6 +28,7 @@ import logging
 import time
 
 from app.core.settings import settings
+from app.services import autonomy_preferences
 from app.db.session import SessionLocal
 from app.publishing.identity import AutomationHeartbeat, resolve_runner_id
 from app.services.automation_scheduler import AutomationScheduler
@@ -161,8 +162,6 @@ class AutomationRunner:
         indistinguishable from "nothing was due", which is the normal case and would hide
         the fault for as long as anyone cared to look.
         """
-        if not settings.metrics_collection_enabled:
-            return
         now = time.monotonic()
         if now < self._metrics_next_at:
             return
@@ -176,7 +175,7 @@ class AutomationRunner:
             logger.exception("metrics_collection_failed")
             return
 
-        if report.snapshots_created:
+        if report is not None and report.snapshots_created:
             logger.info(
                 "metrics_collection_tick",
                 extra={
@@ -191,6 +190,10 @@ class AutomationRunner:
     def _collect_metrics(self):
         db = SessionLocal()
         try:
+            # A preferência é lida aqui, onde há sessão, e não na corrotina acima: a coleta
+            # deixou de ser uma variável de ambiente para ser algo que o dono liga na tela.
+            if not autonomy_preferences.load(db).metrics_collection_enabled:
+                return None
             return self._metrics.run(db, dry_run=False)
         finally:
             db.close()

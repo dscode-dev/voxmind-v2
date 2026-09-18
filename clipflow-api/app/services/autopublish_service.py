@@ -53,6 +53,7 @@ from app.services.autopublish_budget import (
     BudgetUnavailableError,
     utc_today,
 )
+from app.services import autonomy_preferences
 from app.services.publishing_service import PublishingService
 
 logger = logging.getLogger(__name__)
@@ -247,7 +248,8 @@ class AutonomousPublicationService:
             limit if limit is not None else settings.autopublish_max_per_tick,
             0, AUTOPUBLISH_CEILING_PER_TICK,
         )
-        per_day = _clamp(settings.autopublish_max_per_day, 0, AUTOPUBLISH_CEILING_PER_DAY)
+        autonomy = autonomy_preferences.load(db)
+        per_day = _clamp(autonomy.max_per_day, 0, AUTOPUBLISH_CEILING_PER_DAY)
 
         budget = AutopublishBudget(db, limit=per_day, clock=self.clock)
         report.budget_date = budget.date.isoformat()
@@ -259,7 +261,7 @@ class AutonomousPublicationService:
 
         # Gates that stop the whole run rather than one candidate. Evaluated before any
         # database work, so a disabled installation does no queries at all.
-        blocked_globally = self._global_gates(report, depths)
+        blocked_globally = self._global_gates(report, depths, autonomy)
         if blocked_globally:
             report.status = "blocked"
             report.blocked_reasons = {reason: 1 for reason in blocked_globally}
@@ -276,13 +278,13 @@ class AutonomousPublicationService:
             # A dry run reads the budget and spends none of it, so it takes no lock: holding
             # one would let a preview stall a real allocation for no reason.
             self._evaluate_all(db, candidates, budget=budget, per_tick=per_tick,
-                               dry_run=True, report=report,
+                               dry_run=True, report=report, autonomy=autonomy,
                                automation_run_id=automation_run_id, actor=actor)
         else:
             try:
                 with budget.hold():
                     self._evaluate_all(db, candidates, budget=budget, per_tick=per_tick,
-                                       dry_run=False, report=report,
+                                       dry_run=False, report=report, autonomy=autonomy,
                                        automation_run_id=automation_run_id, actor=actor)
             except BudgetUnavailableError as exc:
                 # Another replica is allocating. Skipping is strictly safer than proceeding
@@ -319,6 +321,7 @@ class AutonomousPublicationService:
         per_tick: int,
         dry_run: bool,
         report: AutopublishReport,
+        autonomy: autonomy_preferences.Autonomy,
         automation_run_id: str | None,
         actor: str | None,
     ) -> None:
@@ -351,7 +354,7 @@ class AutonomousPublicationService:
 
             report.record(
                 self._evaluate(
-                    db, job, dry_run=dry_run, report=report,
+                    db, job, dry_run=dry_run, report=report, autonomy=autonomy,
                     automation_run_id=automation_run_id, actor=actor,
                     allowance=min(tick_left, day_left), budget=budget,
                 )
@@ -359,13 +362,18 @@ class AutonomousPublicationService:
 
     # ------------------------------------------------------------ global gates
 
-    def _global_gates(self, report: AutopublishReport, depths: dict[str, int]) -> list[str]:
+    def _global_gates(
+        self,
+        report: AutopublishReport,
+        depths: dict[str, int],
+        autonomy: autonomy_preferences.Autonomy,
+    ) -> list[str]:
         """Conditions under which nothing may be published automatically at all."""
         blocked: list[str] = []
 
         if not settings.publishing_enabled:
             blocked.append(GLOBAL_PUBLISHING_DISABLED)
-        if not settings.autopublish_enabled:
+        if not autonomy.autopublish_enabled:
             blocked.append(GLOBAL_AUTOPUBLISH_DISABLED)
 
         # No publisher is running. Creating commands now would build a queue nobody drains,
@@ -418,6 +426,7 @@ class AutonomousPublicationService:
         *,
         dry_run: bool,
         report: AutopublishReport,
+        autonomy: autonomy_preferences.Autonomy,
         automation_run_id: str | None,
         actor: str | None,
         allowance: int,
@@ -509,7 +518,7 @@ class AutonomousPublicationService:
         if privacy not in VALID_AUTOPUBLISH_PRIVACY:
             candidate.reasons.append(PRIVACY_INVALID)
             return candidate
-        if privacy == "public" and not settings.autopublish_public_enabled:
+        if privacy == "public" and not autonomy.autopublish_public_enabled:
             # A target default of `public` cannot route around the global guard: this is
             # checked on the resolved value, after the target's preference is applied.
             candidate.reasons.append(PUBLIC_DISABLED)
@@ -732,7 +741,8 @@ class AutonomousPublicationService:
     def status(self, db: Session) -> dict[str, Any]:
         """The read model: what the policy would do right now, and why."""
         depths = self._depths()
-        per_day = _clamp(settings.autopublish_max_per_day, 0, AUTOPUBLISH_CEILING_PER_DAY)
+        autonomy = autonomy_preferences.load(db)
+        per_day = _clamp(autonomy.max_per_day, 0, AUTOPUBLISH_CEILING_PER_DAY)
         # The same object and the same query the enforcement path uses, so the number an
         # operator reads cannot disagree with the number that decides.
         budget = AutopublishBudget(db, limit=per_day, clock=self.clock)
@@ -751,9 +761,9 @@ class AutonomousPublicationService:
 
         return {
             "publishing_enabled": settings.publishing_enabled,
-            "autopublish_enabled": settings.autopublish_enabled,
-            "public_enabled": settings.autopublish_public_enabled,
-            "default_privacy": settings.autopublish_default_privacy,
+            "autopublish_enabled": autonomy.autopublish_enabled,
+            "public_enabled": autonomy.autopublish_public_enabled,
+            "default_privacy": autonomy.default_privacy,
             "policy_version": POLICY_VERSION,
             "max_per_tick": _clamp(
                 settings.autopublish_max_per_tick, 0, AUTOPUBLISH_CEILING_PER_TICK
