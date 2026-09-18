@@ -48,7 +48,6 @@ class AutoReviewPolicy:
                 "fast_track_eligible": False,
                 "suggested_bulk_action": None,
                 "review_required": True,
-                "auto_publish_eligible": False,
                 "publication_eligibility": self._publication_eligibility(
                     "disabled", technical, ["auto_review_disabled"]
                 ),
@@ -74,7 +73,6 @@ class AutoReviewPolicy:
                 "fast_track_eligible": False,
                 "suggested_bulk_action": None,
                 "review_required": True,
-                "auto_publish_eligible": False,
                 "publication_eligibility": self._publication_eligibility(
                     "blocked", technical, ["no_clips_available"]
                 ),
@@ -164,7 +162,6 @@ class AutoReviewPolicy:
             ),
             "suggested_bulk_action": self._suggested_bulk_action(status),
             "review_required": status != "auto_ready",
-            "auto_publish_eligible": False,
             "publication_eligibility": self._publication_eligibility(status, technical, reasons),
             "editorial_status": editorial_status,
             "final_media": technical["summary"],
@@ -297,15 +294,35 @@ class AutoReviewPolicy:
             if warning in warning_codes:
                 reasons.append(warning)
 
+        # O que não foi medido segue sendo dito. Deixar de bloquear o ciclo não é deixar de
+        # contar: o operador continua vendo que a continuidade de fala não pôde ser avaliada
+        # neste corte, e decide se isso importa para o canal dele.
+        if "speaker_continuity_unmeasurable" in warning_codes:
+            reasons.append("speaker_continuity_unmeasurable")
+
         return sorted(set(reasons))
+
+    # Defeitos observados no corte. Cada um é algo que foi medido e saiu errado.
+    #
+    # `speaker_continuity_unmeasurable` saiu desta lista. Ele não descreve um corte ruim:
+    # descreve a diarização não ter conseguido separar as vozes, o que acontece em todo vídeo
+    # de um locutor só. Enquanto contava como defeito estrutural, um vídeo assim produzia
+    # quatro clipes com 94/100, decisão "approved" e zero problemas — e mesmo assim parava
+    # esperando uma pessoa, porque eram mais clipes "em revisão" do que o limite permite.
+    # Com a diarização degradada isso valia para *todos* os ciclos, o que torna a autonomia
+    # impossível por construção. Não ter medido e ter medido mal são fatos diferentes; só o
+    # segundo é sobre o vídeo. O aviso continua no relatório.
+    _STRUCTURAL_WARNINGS = frozenset(
+        {"starts_mid_segment", "ends_mid_segment", "weak_hook"}
+    )
+    _STRUCTURAL_ISSUES = frozenset({"render_duration_mismatch", "too_many_speakers"})
 
     def _has_structural_warning(self, qa_clip: Dict) -> bool:
         warning_codes = set(qa_clip.get("warnings", []))
         issue_codes = {issue.get("code") for issue in qa_clip.get("issues", [])}
         return bool(
-            {"starts_mid_segment", "ends_mid_segment"} & warning_codes
-            or {"speaker_continuity_unmeasurable", "weak_hook"} & warning_codes
-            or {"render_duration_mismatch", "too_many_speakers"} & issue_codes
+            self._STRUCTURAL_WARNINGS & warning_codes
+            or self._STRUCTURAL_ISSUES & issue_codes
         )
 
     def _suggested_bulk_action(self, status: str) -> str | None:
